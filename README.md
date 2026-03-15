@@ -164,6 +164,12 @@ HABBO_DOCKER_SUBNET=172.28.0.0/16
 ### 3. Start the stack
 
 ```bash
+just up
+```
+
+Without `just`:
+
+```bash
 docker compose --env-file .env.registry -f docker-compose.registry.yaml up -d
 ```
 
@@ -177,8 +183,8 @@ First startup can take several minutes:
 Check status:
 
 ```bash
-docker compose -f docker-compose.registry.yaml logs -f arcturus
-docker compose -f docker-compose.registry.yaml logs -f nitro
+just logs-arcturus
+just logs-nitro
 ```
 
 ### 5. Open the hotel
