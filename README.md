@@ -45,7 +45,7 @@ Claude Code is supported, but not required.
 
 ## Visuals
 
-![Habbo Agent Platform Bot Welcome](/Users/tijmendejong/.cursor/projects/Users-tijmendejong-Documents-projects-personal-habbo-agent-platform/assets/Screenshot_2026-03-15_at_19.27.52-583b2086-48fa-4f49-8e9d-fcd7f21712d9.png)
+![Habbo Agent Platform Bot Welcome](docs/images/welcome-bot.png)
 
 ---
 
