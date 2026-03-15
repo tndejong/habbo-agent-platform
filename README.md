@@ -203,12 +203,22 @@ Configure the same `habbo` MCP server values in Cursor MCP settings (command/arg
 
 ## Smoke test (5 minutes)
 
-1. Open the hotel URL and confirm client loads.
-2. In your MCP client, verify the `habbo` server appears.
-3. Run one read tool:
-   - `get_online_players`
-4. Run one write/action tool:
-   - `hotel_alert` with a short test message
+Run the automated smoke suite:
+
+```bash
+bash scripts/smoke-test.sh
+```
+
+What it validates:
+
+1. Core containers are running (`arcturus`, `mysql`, `nitro`).
+2. RCON and MySQL ports are reachable from your MCP host.
+3. Hotel web endpoint responds (`HABBO_BASE_URL` from `habbo-mcp/.env`).
+4. MCP data path works by running `getOnlinePlayers` through `habbo-mcp`.
+
+Optional manual check in your MCP client:
+
+- Run `hotel_alert` with a short test message.
 
 If all four pass, your stack + MCP connection is healthy.
 
