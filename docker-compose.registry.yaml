@@ -7,9 +7,9 @@ services:
     image: ghcr.io/${HABBO_OWNER_OR_ORG}/habbo-arcturus:latest
     entrypoint: ["/bin/sh","/app/scripts/build.sh"]
     ports:
-      - 3000:3000
-      - 127.0.0.1:3001:3001
-      - 2096:2096
+      - ${HABBO_GAME_PORT:-3000}:3000
+      - 127.0.0.1:${HABBO_RCON_PORT:-3001}:3001
+      - ${HABBO_WS_PORT:-2096}:2096
     depends_on:
       - mysql
     networks:
@@ -19,10 +19,16 @@ services:
     container_name: nitro
     image: ghcr.io/${HABBO_OWNER_OR_ORG}/habbo-nitro:latest
     entrypoint: ["/bin/sh","/app/scripts/build.sh"]
+    environment:
+      - HABBO_PUBLIC_HOST=${HABBO_PUBLIC_HOST:-127.0.0.1}
+      - HABBO_PUBLIC_PROTOCOL=${HABBO_PUBLIC_PROTOCOL:-http}
+      - HABBO_WS_PORT=${HABBO_WS_PORT:-2096}
+      - HABBO_ASSETS_PUBLIC_PORT=${HABBO_ASSETS_PUBLIC_PORT:-8080}
+      - HABBO_SWF_PUBLIC_PORT=${HABBO_SWF_PUBLIC_PORT:-8081}
     ports:
-      - 1080:5154
-      - 8080:8080
-      - 8081:8081
+      - ${HABBO_NITRO_PORT:-1080}:5154
+      - ${HABBO_ASSETS_PUBLIC_PORT:-8080}:8080
+      - ${HABBO_SWF_PUBLIC_PORT:-8081}:8081
     networks:
       nitro:
 
@@ -40,7 +46,7 @@ services:
       - ./mysql/conf.d:/etc/mysql/conf.d
       - ./mysql/dumps:/docker-entrypoint-initdb.d
     ports:
-      - 127.0.0.1:13306:3306
+      - 127.0.0.1:${HABBO_DB_PORT:-13306}:3306
     networks:
       nitro:
 

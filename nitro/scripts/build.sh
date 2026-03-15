@@ -35,6 +35,9 @@ cp /app/configuration/nitro-react/public/* /app/nitro-react/public/
 cd /app/nitro-react
 yarn install
 
+# Align public Nitro endpoints with mapped host ports for Portainer/proxy setups.
+node -e "const fs=require('fs');const p='/app/nitro-react/public/renderer-config.json';const c=JSON.parse(fs.readFileSync(p,'utf8'));const host=process.env.HABBO_PUBLIC_HOST||'127.0.0.1';const proto=process.env.HABBO_PUBLIC_PROTOCOL||'http';const wsPort=process.env.HABBO_WS_PORT||'2096';const assetsPort=process.env.HABBO_ASSETS_PUBLIC_PORT||'8080';const swfPort=process.env.HABBO_SWF_PUBLIC_PORT||'8081';c['socket.url']='ws://'+host+':'+wsPort;c['asset.url']=proto+'://'+host+':'+assetsPort;c['image.library.url']=proto+'://'+host+':'+swfPort+'/c_images/';c['hof.furni.url']=proto+'://'+host+':'+swfPort+'/dcr/hof_furni';fs.writeFileSync(p,JSON.stringify(c,null,4));"
+
 # Some Nitro builds reference this file unconditionally during bootstrap.
 if [ ! -f /app/nitro-assets/gamedata/ExternalTextsOverride.json ]; then
   echo "{}" > /app/nitro-assets/gamedata/ExternalTextsOverride.json
