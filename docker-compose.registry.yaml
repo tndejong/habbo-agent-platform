@@ -6,6 +6,10 @@ services:
     container_name: arcturus
     image: ghcr.io/${HABBO_OWNER_OR_ORG}/habbo-arcturus:latest
     entrypoint: ["/bin/sh","/app/scripts/build.sh"]
+    environment:
+      - HABBO_SQL_BASE_URL=${HABBO_SQL_BASE_URL:-https://raw.githubusercontent.com/tndejong/habbo-agent-platform/main/mysql/dumps}
+      - HABBO_SQL_BASE_FILE=${HABBO_SQL_BASE_FILE:-arcturus_3.0.0-stable_base_database--compact.sql}
+      - HABBO_SQL_MIGRATION_FILE=${HABBO_SQL_MIGRATION_FILE:-arcturus_migration_3.0.0_to_3.5.0.sql}
     ports:
       - ${HABBO_GAME_PORT:-3000}:3000
       - 127.0.0.1:${HABBO_RCON_PORT:-3001}:3001
@@ -23,6 +27,9 @@ services:
       - HABBO_PUBLIC_HOST=${HABBO_PUBLIC_HOST:-127.0.0.1}
       - HABBO_PUBLIC_PROTOCOL=${HABBO_PUBLIC_PROTOCOL:-http}
       - HABBO_WS_PORT=${HABBO_WS_PORT:-2096}
+      - HABBO_WS_PUBLIC_HOST=${HABBO_WS_PUBLIC_HOST:-}
+      - HABBO_WS_PUBLIC_PORT=${HABBO_WS_PUBLIC_PORT:-}
+      - HABBO_WS_PUBLIC_PROTOCOL=${HABBO_WS_PUBLIC_PROTOCOL:-}
       - HABBO_ASSETS_PUBLIC_PORT=${HABBO_ASSETS_PUBLIC_PORT:-8080}
       - HABBO_SWF_PUBLIC_PORT=${HABBO_SWF_PUBLIC_PORT:-8081}
     ports:

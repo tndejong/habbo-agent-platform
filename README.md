@@ -162,6 +162,10 @@ For Portainer or local Docker, use `docker-compose.registry.yaml` and set:
 
 - `HABBO_OWNER_OR_ORG` (for example: `tndejong`)
 - Optional: `HABBO_DOCKER_SUBNET` (defaults to `172.28.0.0/16` to avoid common subnet conflicts)
+- Optional SQL bootstrap overrides:
+  - `HABBO_SQL_BASE_URL`
+  - `HABBO_SQL_BASE_FILE`
+  - `HABBO_SQL_MIGRATION_FILE`
 
 Example:
 
@@ -173,6 +177,39 @@ docker compose -f docker-compose.registry.yaml up -d
 > Note: after `docker compose up -d`, containers can show as `Up` before the hotel is actually ready.
 > On first startup (or after a clean reset), Arcturus/Nitro may still download/install/build assets for several minutes.
 > Wait until logs indicate readiness before opening the hotel.
+> If MySQL dumps are not mounted in your environment (common in some Portainer setups), Arcturus now auto-downloads and imports the default SQL dumps from this repository when `emulator_settings` is missing.
+
+### Nginx Proxy Manager + custom domain
+
+If you use Nginx Proxy Manager (NPM), you can serve Nitro on your own domain by connecting this stack to a shared Docker network (for example `proxy_net`) and proxying directly to the `nitro` service.
+
+1. Create (or reuse) a Docker network used by NPM, for example `proxy_net`.
+2. Attach this stack to that external network.
+3. In NPM, create a proxy host for your domain and forward to:
+   - Hostname: `nitro`
+   - Port: `5154`
+4. Enable websocket support in NPM.
+
+Compose network example:
+
+```yaml
+services:
+  nitro:
+    # ...
+    networks:
+      - nitro
+      - proxy_net
+
+networks:
+  nitro:
+    ipam:
+      config:
+        - subnet: ${HABBO_DOCKER_SUBNET:-172.28.0.0/16}
+  proxy_net:
+    external: true
+```
+
+For domain-based URLs, set `HABBO_PUBLIC_HOST` (and `HABBO_PUBLIC_PROTOCOL=https` when using SSL).
 
 ---
 
@@ -257,6 +294,17 @@ Check that the `mcpServers` block is correctly merged into `~/.claude/settings.j
 
 **RCON tools returning errors?**
 Make sure the hotel is fully started (see above). RCON only activates after the "ready" message. Also ensure `./setup.sh` ran successfully — it patches `rcon.allowed` in `config.ini`.
+
+**Arcturus crashes with missing SQL tables (for example `emulator_settings`)?**
+Arcturus startup now auto-bootstraps the database from the repository SQL dumps when seed tables are missing. If you are recovering an existing deployment manually, run:
+
+```bash
+docker exec arcturus supervisorctl stop arcturus-emulator || true
+docker exec mysql sh -lc "mysql -uroot -parcturus_root_pw -e \"DROP DATABASE IF EXISTS arcturus; CREATE DATABASE arcturus; GRANT ALL PRIVILEGES ON arcturus.* TO 'arcturus_user'@'%'; FLUSH PRIVILEGES;\""
+curl -L "https://raw.githubusercontent.com/tndejong/habbo-agent-platform/main/mysql/dumps/arcturus_3.0.0-stable_base_database--compact.sql" | docker exec -i mysql sh -lc "mysql -uarcturus_user -parcturus_pw arcturus"
+curl -L "https://raw.githubusercontent.com/tndejong/habbo-agent-platform/main/mysql/dumps/arcturus_migration_3.0.0_to_3.5.0.sql" | docker exec -i mysql sh -lc "mysql -uarcturus_user -parcturus_pw arcturus"
+docker exec arcturus supervisorctl start arcturus-emulator
+```
 
 **`create_habbo_player` fails with "username taken"?**
 The username already exists in the database. Try a different name.
