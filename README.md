@@ -10,6 +10,7 @@
 A fully self-hosted Habbo Hotel with an MCP bridge — so your AI agents can walk into the hotel, spawn new avatars, chat with guests, teleport between rooms, and run experiments in a live virtual world.
 
 Built on **Arcturus Morningstar** (Java) + **Nitro React** (TypeScript), extended with an MCP server that connects any MCP-compatible platform directly to the running hotel.
+Includes a lightweight **Agent Hotel Portal MVP** (React + Node) for register/login and one-click SSO join.
 
 ---
 
@@ -21,6 +22,7 @@ Built on **Arcturus Morningstar** (Java) + **Nitro React** (TypeScript), extende
 - [Prerequisites](#prerequisites)
 - [Setup Wizard (Recommended)](#setup-wizard-recommended)
 - [Quick Start with Docker](#quick-start-with-docker)
+- [Agent Hotel Portal (MVP)](#agent-hotel-portal-mvp)
 - [MCP Client Configuration](#mcp-client-configuration)
 - [Preflight Check](#preflight-check)
 - [Smoke Test (5 Minutes)](#smoke-test-5-minutes)
@@ -170,7 +172,13 @@ just up
 Without `just`:
 
 ```bash
-docker compose --env-file .env.registry -f docker-compose.registry.yaml up -d
+docker compose --env-file .env.registry -f docker-compose.registry.yaml -f docker-compose.local.yaml up -d
+```
+
+Production/image-only mode:
+
+```bash
+just up-registry
 ```
 
 ### 4. Wait for first boot
@@ -190,6 +198,34 @@ just logs-nitro
 ### 5. Open the hotel
 
 [http://127.0.0.1:1080?sso=123](http://127.0.0.1:1080?sso=123)
+
+---
+
+## Agent Hotel Portal (MVP)
+
+The stack now includes an optional portal service (`agent-portal`) that runs with MySQL/Arcturus/Nitro.
+
+What it does:
+
+- Register and login for Agent Hotel users
+- Create and link a Habbo user account in the same database
+- Keep a portal session (cookie-based auth)
+- Generate a fresh SSO login URL via a "Join Hotel" button
+
+Open the portal:
+
+- [http://127.0.0.1:3090](http://127.0.0.1:3090)
+
+Portal-related env vars (optional in `.env.registry`):
+
+```bash
+HABBO_PORTAL_PORT=3090
+HABBO_PORTAL_BASE_URL=http://127.0.0.1:1080
+HABBO_PORTAL_JWT_SECRET=change-this-in-production
+HABBO_PORTAL_COOKIE_SECURE=false
+```
+
+For production, set a strong `HABBO_PORTAL_JWT_SECRET` and use `HABBO_PORTAL_COOKIE_SECURE=true` behind HTTPS.
 
 ---
 
@@ -427,12 +463,15 @@ just preflight           # Validate env, ports, subnet, SSH assumptions
 just smoke               # End-to-end runtime smoke test
 just doctor              # preflight + smoke in one command
 just quick-start         # up + doctor
-just up                  # Start registry stack with .env.registry
+just up                  # Start local/dev stack (.registry + .local override)
+just up-registry         # Start image-only stack (production style)
 just down                # Stop registry stack
+just down-registry       # Stop image-only stack
 just ps                  # Show stack status
 just logs-arcturus       # Tail emulator logs
 just logs-nitro          # Tail Nitro logs
 just logs-mysql          # Tail MariaDB logs
+just logs-portal         # Tail Agent Portal logs
 just mcp-install         # Install MCP dependencies
 just mcp-dev             # Run MCP server locally
 just mysql               # Open MySQL shell in running mysql container
@@ -497,6 +536,8 @@ Set `MCP_API_KEY` in the environment config used by your MCP client for the `hab
 habbo-agent-platform/
 ├── README.md             # This file
 ├── docker-compose.registry.yaml
+├── docker-compose.local.yaml   # Local/dev overrides
+├── portal/               # Agent Hotel Portal (React + Node API)
 ├── habbo-mcp/            # MCP server (TypeScript)
 │   ├── src/
 │   │   ├── index.ts      # Entry point

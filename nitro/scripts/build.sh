@@ -8,7 +8,8 @@ cp /app/configuration/nitro-converter/configuration.json /app/nitro-converter/co
 cd /app/nitro-converter
 yarn install
 
-ASSET_MARKER="/app/nitro-assets/gamedata/external_variables.txt"
+# Use a converted file that is guaranteed to exist after successful extraction.
+ASSET_MARKER="/app/nitro-assets/gamedata/ExternalTexts.json"
 
 if [ "${NITRO_AUTO_EXTRACT_ASSETS:-true}" = "true" ] && [ ! -f "$ASSET_MARKER" ]; then
   echo "Nitro assets not found, converting assets from SWF (first run can take a while)..."
@@ -60,6 +61,11 @@ NODE
 # Some Nitro builds reference this file unconditionally during bootstrap.
 if [ ! -f /app/nitro-assets/gamedata/ExternalTextsOverride.json ]; then
   echo "{}" > /app/nitro-assets/gamedata/ExternalTextsOverride.json
+fi
+
+# Backward/legacy compatibility for variants seen in some Nitro bundles.
+if [ ! -f /app/nitro-assets/gamedata/Exter_exts_override.json ]; then
+  echo "{}" > /app/nitro-assets/gamedata/Exter_exts_override.json
 fi
 
 supervisorctl start assets-http-server

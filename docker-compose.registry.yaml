@@ -1,11 +1,22 @@
 volumes:
   volume-mysql:
+  volume-nitro-assets:
 
 services:
   arcturus:
     container_name: arcturus
     image: ghcr.io/${HABBO_OWNER_OR_ORG}/habbo-arcturus:latest
-    entrypoint: ["/bin/sh","/app/scripts/build.sh"]
+    entrypoint:
+      - /bin/bash
+      - -lc
+      - |
+        cat > /usr/local/bin/mysqladmin <<'EOF'
+        #!/bin/sh
+        exec /usr/bin/mariadb-admin --ssl=0 "$@"
+        EOF
+        chmod +x /usr/local/bin/mysqladmin
+        export PATH="/usr/local/bin:$PATH"
+        exec /app/scripts/build.sh
     environment:
       - HABBO_SQL_BASE_URL=${HABBO_SQL_BASE_URL:-https://raw.githubusercontent.com/tndejong/habbo-agent-platform/main/mysql/dumps}
       - HABBO_SQL_BASE_FILE=${HABBO_SQL_BASE_FILE:-arcturus_3.0.0-stable_base_database--compact.sql}
@@ -22,7 +33,22 @@ services:
   nitro:
     container_name: nitro
     image: ghcr.io/${HABBO_OWNER_OR_ORG}/habbo-nitro:latest
-    entrypoint: ["/bin/sh","/app/scripts/build.sh"]
+    entrypoint:
+      - /bin/sh
+      - -lc
+      - |
+        /app/scripts/build.sh &
+        pid=$$!
+        while kill -0 "$$pid" >/dev/null 2>&1; do
+          if [ -d /app/nitro-assets/gamedata ]; then
+            [ -f /app/nitro-assets/gamedata/ExternalTextsOverride.json ] || echo '{}' > /app/nitro-assets/gamedata/ExternalTextsOverride.json
+            [ -f /app/nitro-assets/gamedata/Exter_exts_override.json ] || echo '{}' > /app/nitro-assets/gamedata/Exter_exts_override.json
+          fi
+          sleep 2
+        done
+        wait "$$pid"
+    volumes:
+      - volume-nitro-assets:/app/nitro-assets
     environment:
       - HABBO_PUBLIC_HOST=${HABBO_PUBLIC_HOST:-127.0.0.1}
       - HABBO_PUBLIC_PROTOCOL=${HABBO_PUBLIC_PROTOCOL:-http}
@@ -54,6 +80,27 @@ services:
       - ./mysql/dumps:/docker-entrypoint-initdb.d
     ports:
       - 127.0.0.1:${HABBO_DB_PORT:-13306}:3306
+    networks:
+      nitro:
+
+  agent-portal:
+    container_name: agent-portal
+    image: ${HABBO_PORTAL_IMAGE:-ghcr.io/${HABBO_OWNER_OR_ORG}/habbo-agent-portal:latest}
+    environment:
+      - PORT=3000
+      - HABBO_BASE_URL=${HABBO_PORTAL_BASE_URL:-http://127.0.0.1:${HABBO_NITRO_PORT:-1080}}
+      - HABBO_HEALTHCHECK_URL=${HABBO_PORTAL_HEALTHCHECK_URL:-http://nitro:5154}
+      - PORTAL_JWT_SECRET=${HABBO_PORTAL_JWT_SECRET:-change-this-in-production}
+      - PORTAL_COOKIE_SECURE=${HABBO_PORTAL_COOKIE_SECURE:-false}
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_NAME=arcturus
+      - DB_USER=arcturus_user
+      - DB_PASSWORD=arcturus_pw
+    ports:
+      - ${HABBO_PORTAL_PORT:-3090}:3000
+    depends_on:
+      - mysql
     networks:
       nitro:
 

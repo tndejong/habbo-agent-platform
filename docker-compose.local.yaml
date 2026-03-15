@@ -1,0 +1,13 @@
+services:
+  arcturus:
+    volumes:
+      - ./emulator/scripts/build.sh:/app/scripts/build.sh:ro
+
+  nitro:
+    volumes:
+      - ./nitro/scripts/build.sh:/app/scripts/build.sh:ro
+
+  agent-portal:
+    build:
+      context: ./portal
+    image: habbo-agent-platform-agent-portal:local

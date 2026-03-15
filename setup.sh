@@ -113,6 +113,10 @@ write_registry_env() {
   local habbo_rcon_port="$6"
   local habbo_db_port="$7"
   local habbo_docker_subnet="$8"
+  local habbo_portal_port="$9"
+  local habbo_portal_base_url="${10}"
+  local habbo_portal_jwt_secret="${11}"
+  local habbo_portal_cookie_secure="${12}"
 
   cat > "$REGISTRY_ENV_FILE" <<EOF
 HABBO_OWNER_OR_ORG=$habbo_owner_or_org
@@ -123,6 +127,10 @@ HABBO_GAME_PORT=$habbo_game_port
 HABBO_RCON_PORT=$habbo_rcon_port
 HABBO_DB_PORT=$habbo_db_port
 HABBO_DOCKER_SUBNET=$habbo_docker_subnet
+HABBO_PORTAL_PORT=$habbo_portal_port
+HABBO_PORTAL_BASE_URL=$habbo_portal_base_url
+HABBO_PORTAL_JWT_SECRET=$habbo_portal_jwt_secret
+HABBO_PORTAL_COOKIE_SECURE=$habbo_portal_cookie_secure
 EOF
 
   pass "Wrote $REGISTRY_ENV_FILE"
@@ -266,6 +274,10 @@ case "$SETUP_MODE" in
     HABBO_RCON_PORT="$(prompt "Host port for RCON" "${HABBO_RCON_PORT:-3001}")"
     HABBO_DB_PORT="$(prompt "Host port for MySQL" "${HABBO_DB_PORT:-13306}")"
     HABBO_DOCKER_SUBNET="$(prompt "Docker subnet" "${HABBO_DOCKER_SUBNET:-172.28.0.0/16}")"
+    HABBO_PORTAL_PORT="$(prompt "Host port for Agent Portal" "${HABBO_PORTAL_PORT:-3090}")"
+    HABBO_PORTAL_BASE_URL="$(prompt "Portal base hotel URL" "${HABBO_PORTAL_BASE_URL:-http://127.0.0.1:${HABBO_NITRO_PORT}}")"
+    HABBO_PORTAL_JWT_SECRET="$(prompt "Portal JWT secret" "${HABBO_PORTAL_JWT_SECRET:-change-this-in-production}")"
+    HABBO_PORTAL_COOKIE_SECURE="$(prompt "Portal secure cookie (true/false)" "${HABBO_PORTAL_COOKIE_SECURE:-false}")"
 
     write_registry_env_local() {
       write_registry_env \
@@ -276,7 +288,11 @@ case "$SETUP_MODE" in
       "$HABBO_GAME_PORT" \
       "$HABBO_RCON_PORT" \
       "$HABBO_DB_PORT" \
-      "$HABBO_DOCKER_SUBNET"
+      "$HABBO_DOCKER_SUBNET" \
+      "$HABBO_PORTAL_PORT" \
+      "$HABBO_PORTAL_BASE_URL" \
+      "$HABBO_PORTAL_JWT_SECRET" \
+      "$HABBO_PORTAL_COOKIE_SECURE"
     }
     safe_write_file "$REGISTRY_ENV_FILE" write_registry_env_local
 
@@ -361,11 +377,12 @@ if [ "$SETUP_MODE" = "1" ]; then
     printf "  2) just doctor\n"
     printf "  3) (optional) just quick-start  # up + doctor\n"
   else
-    printf "  1) docker compose --env-file .env.registry -f docker-compose.registry.yaml up -d\n"
+    printf "  1) docker compose --env-file .env.registry -f docker-compose.registry.yaml -f docker-compose.local.yaml up -d\n"
     printf "  2) bash scripts/preflight.sh\n"
     printf "  3) bash scripts/smoke-test.sh\n"
   fi
   printf "  4) Open: %s?sso=123\n" "$HABBO_BASE_URL"
+  printf "  5) Portal: http://127.0.0.1:%s\n" "$HABBO_PORTAL_PORT"
 else
   info "MCP connectivity next steps:"
   if [ "$HAS_JUST" = "true" ]; then

@@ -1,4 +1,6 @@
 set windows-powershell := true
+compose_local := "docker compose --env-file .env.registry -f docker-compose.registry.yaml -f docker-compose.local.yaml"
+compose_registry := "docker compose --env-file .env.registry -f docker-compose.registry.yaml"
 
 # Show all available recipes
 default:
@@ -26,31 +28,43 @@ quick-start:
 
 # Start registry stack in background
 up:
-  docker compose --env-file .env.registry -f docker-compose.registry.yaml up -d
+  {{compose_local}} up -d
+
+# Start image-only stack (production style)
+up-registry:
+  {{compose_registry}} up -d
 
 # Stop and remove registry stack
 down:
-  docker compose --env-file .env.registry -f docker-compose.registry.yaml down
+  {{compose_local}} down
+
+# Stop and remove image-only stack
+down-registry:
+  {{compose_registry}} down
 
 # Restart running services
 restart:
-  docker compose --env-file .env.registry -f docker-compose.registry.yaml restart
+  {{compose_local}} restart
 
 # Show current service status
 ps:
-  docker compose --env-file .env.registry -f docker-compose.registry.yaml ps
+  {{compose_local}} ps
 
 # Tail Arcturus logs
 logs-arcturus:
-  docker compose --env-file .env.registry -f docker-compose.registry.yaml logs -f arcturus
+  {{compose_local}} logs -f arcturus
 
 # Tail Nitro logs
 logs-nitro:
-  docker compose --env-file .env.registry -f docker-compose.registry.yaml logs -f nitro
+  {{compose_local}} logs -f nitro
 
 # Tail MySQL logs
 logs-mysql:
-  docker compose --env-file .env.registry -f docker-compose.registry.yaml logs -f mysql
+  {{compose_local}} logs -f mysql
+
+# Tail Agent Portal logs
+logs-portal:
+  {{compose_local}} logs -f agent-portal
 
 # Install MCP server dependencies
 mcp-install:
