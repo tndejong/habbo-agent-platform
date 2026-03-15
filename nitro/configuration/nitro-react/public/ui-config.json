@@ -66,15 +66,18 @@
     "hotelview": {
         "show.avatar": true,
         "widgets": {
-            "slot.1.widget": "promoarticle",
-            "slot.1.conf": {},
-            "slot.2.widget": "widgetcontainer",
-            "slot.2.conf": {
+            "slot.1.widget": "widgetcontainer",
+            "slot.1.conf": {
                 "image": "${image.library.url}web_promo_small/spromo_Canal_Bundle.png",
-                "texts": "2021NitroPromo",
+                "texts": "summer2026promo",
+                "header": "Summer 2026 Is Here!",
+                "body": "Jump into Summer 2026 events, collect daily rewards, and unlock limited seasonal items all month long.",
+                "button": "Open Summer 2026",
                 "btnLink": "https://google.com"
             },
-            "slot.3.widget": "promoarticle",
+            "slot.2.widget": "",
+            "slot.2.conf": {},
+            "slot.3.widget": "",
             "slot.3.conf": {},
             "slot.4.widget": "",
             "slot.4.conf": {},

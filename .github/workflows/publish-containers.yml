@@ -1,0 +1,72 @@
+name: Publish Containers
+
+on:
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_ARCTURUS: ${{ github.repository_owner }}/habbo-arcturus
+  IMAGE_NITRO: ${{ github.repository_owner }}/habbo-nitro
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (arcturus)
+        id: meta_arcturus
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_ARCTURUS }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=tag
+            type=sha
+
+      - name: Build and push arcturus image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./emulator/emulator
+          file: ./emulator/emulator/Dockerfile
+          push: true
+          tags: ${{ steps.meta_arcturus.outputs.tags }}
+          labels: ${{ steps.meta_arcturus.outputs.labels }}
+
+      - name: Extract metadata (nitro)
+        id: meta_nitro
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NITRO }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=tag
+            type=sha
+
+      - name: Build and push nitro image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./emulator/nitro
+          file: ./emulator/nitro/Dockerfile
+          push: true
+          tags: ${{ steps.meta_nitro.outputs.tags }}
+          labels: ${{ steps.meta_nitro.outputs.labels }}

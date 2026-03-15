@@ -1,4 +1,18 @@
-.idea
-**/*.pid
-emulator/logging
-nitro/nitro-assets/*
+# Local secrets / env files
+**/.env
+**/.env.local
+**/.env.*.local
+
+# Node / build artifacts
+**/node_modules/
+**/dist/
+
+# Emulator Nitro generated assets
+emulator/nitro/nitro-assets/
+
+# Logs / backups / OS noise
+*.log
+*.bak
+.DS_Store
+
+**/supervisord.pid

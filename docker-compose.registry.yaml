@@ -2,21 +2,12 @@ version: '3.7'
 
 volumes:
   volume-mysql:
-  volume-arcturus-maven-repo:
-  volume-arcturus-target:
-  volume-nitro-converter-node-modules:
-  volume-nitro-react-node-modules:
 
 services:
   arcturus:
     container_name: arcturus
-    build:
-      context: emulator
+    image: ghcr.io/OWNER_OR_ORG/habbo-arcturus:latest
     entrypoint: ["/bin/sh","/app/scripts/build.sh"]
-    volumes:
-      - ./emulator/:/app/
-      - volume-arcturus-target:/app/arcturus/target
-      - volume-arcturus-maven-repo:/root/.m2
     ports:
       - 3000:3000
       - 127.0.0.1:3001:3001
@@ -28,13 +19,8 @@ services:
 
   nitro:
     container_name: nitro
-    build:
-      context: nitro
+    image: ghcr.io/OWNER_OR_ORG/habbo-nitro:latest
     entrypoint: ["/bin/sh","/app/scripts/build.sh"]
-    volumes:
-      - ./nitro/:/app/
-      - volume-nitro-converter-node-modules:/app/nitro-converter/node_modules
-      - volume-nitro-react-node-modules:/app/nitro-react/node_modules
     ports:
       - 1080:5154
       - 8080:8080
@@ -56,7 +42,7 @@ services:
       - ./mysql/conf.d:/etc/mysql/conf.d
       - ./mysql/dumps:/docker-entrypoint-initdb.d
     ports:
-      - 13306:3306
+      - 127.0.0.1:13306:3306
     networks:
       nitro:
 

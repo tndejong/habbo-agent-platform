@@ -76,6 +76,14 @@ watch-nitro:
   docker exec nitro supervisorctl tail -f nitro-dev-server
 
 
+# Install MCP server dependencies
+mcp-install:
+  cd ../habbo-mcp && npm install
+
+# Test MCP server connection (runs standalone, Ctrl+C to stop)
+mcp-dev:
+  cd ../habbo-mcp && npx tsx src/index.ts
+
 # Extract nitro assets from SWF
 extract-nitro-assets:
   docker exec -it nitro bash -c "cp /app/configuration/nitro-converter/configuration.json /app/nitro-converter/configuration.json"

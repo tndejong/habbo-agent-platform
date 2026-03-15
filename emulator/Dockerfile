@@ -8,3 +8,5 @@ RUN apk add bash
 RUN apk add maven
 RUN apk add mysql-client
 RUN apk add supervisor
+
+COPY . /app

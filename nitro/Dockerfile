@@ -10,4 +10,4 @@ RUN apk add rsync
 
 RUN yarn global add http-server
 
-RUN yarn install
+COPY . /app
