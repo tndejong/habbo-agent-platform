@@ -19,8 +19,10 @@ Built on **Arcturus Morningstar** (Java) + **Nitro React** (TypeScript), extende
 - [Visuals](#visuals)
 - [Features](#features)
 - [Prerequisites](#prerequisites)
+- [Setup Wizard (Recommended)](#setup-wizard-recommended)
 - [Quick Start with Docker](#quick-start-with-docker)
 - [MCP Client Configuration](#mcp-client-configuration)
+- [Preflight Check](#preflight-check)
 - [Smoke Test (5 Minutes)](#smoke-test-5-minutes)
 - [Deploy with Portainer (Easy Mode)](#deploy-with-portainer-easy-mode)
 - [Production Notes](#production-notes)
@@ -86,6 +88,31 @@ Install these before deploying or connecting MCP:
 
 ---
 
+## Setup Wizard (recommended)
+
+If you want the easiest setup path, run the interactive setup wizard:
+
+```bash
+bash setup.sh
+```
+
+The wizard now supports 3 modes:
+
+1. Local Docker hotel + MCP
+2. Remote hotel via SSH tunnel + MCP
+3. MCP only (direct host/port)
+
+What it configures for you:
+
+- `habbo-mcp/.env` (including optional SSH tunnel values)
+- `.env.registry` for Docker registry deploy (local mode)
+- MCP API key generation
+- Safe overwrite prompts for existing env files (default `No`) with automatic `.backup` when overwriting
+- Optional dependency install checks
+- Next-step commands + MCP client config snippet (client-agnostic)
+
+---
+
 ## Quick start with Docker
 
 Use the prebuilt images from this repository's GitHub Container Registry package.
@@ -108,6 +135,8 @@ HABBO_OWNER_OR_ORG=tndejong
 HABBO_PUBLIC_HOST=127.0.0.1
 HABBO_PUBLIC_PROTOCOL=http
 ```
+
+Tip: `bash setup.sh` (mode 1) can generate this file for you automatically.
 
 Optional but useful:
 
@@ -201,6 +230,23 @@ Configure the same `habbo` MCP server values in Cursor MCP settings (command/arg
 
 ---
 
+## Preflight check
+
+Before smoke testing, run a fast environment check:
+
+```bash
+bash scripts/preflight.sh
+```
+
+This validates tools, env files, ports, subnet, and SSH tunnel assumptions.
+It uses color-coded output:
+
+- `PASS` (green): good
+- `WARN` (yellow): potentially fine, but review
+- `FAIL` (red): real blocker
+
+---
+
 ## Smoke test (5 minutes)
 
 Run the automated smoke suite:
@@ -208,6 +254,8 @@ Run the automated smoke suite:
 ```bash
 bash scripts/smoke-test.sh
 ```
+
+`smoke-test.sh` also uses color-coded progress/status output with automatic plain-text fallback on non-color terminals.
 
 What it validates:
 

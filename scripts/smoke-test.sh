@@ -5,10 +5,31 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MCP_DIR="$ROOT_DIR/habbo-mcp"
 MCP_ENV_FILE="${MCP_ENV_FILE:-$MCP_DIR/.env}"
 
-pass() { printf "PASS  %s\n" "$1"; }
-fail() { printf "FAIL  %s\n" "$1"; exit 1; }
-info() { printf "INFO  %s\n" "$1"; }
-note() { printf "....  %s\n" "$1"; }
+ENABLE_COLOR=false
+if [ -t 1 ] && [ "${NO_COLOR:-}" = "" ] && [ "${TERM:-}" != "dumb" ]; then
+  ENABLE_COLOR=true
+fi
+
+if [ "$ENABLE_COLOR" = "true" ]; then
+  C_RESET=$'\033[0m'
+  C_GREEN=$'\033[32m'
+  C_RED=$'\033[31m'
+  C_BLUE=$'\033[34m'
+  C_CYAN=$'\033[36m'
+  C_PURPLE=$'\033[35m'
+else
+  C_RESET=''
+  C_GREEN=''
+  C_RED=''
+  C_BLUE=''
+  C_CYAN=''
+  C_PURPLE=''
+fi
+
+pass() { printf "%sPASS%s  %s\n" "$C_GREEN" "$C_RESET" "$1"; }
+fail() { printf "%sFAIL%s  %s\n" "$C_RED" "$C_RESET" "$1"; exit 1; }
+info() { printf "%sINFO%s  %s\n" "$C_BLUE" "$C_RESET" "$1"; }
+note() { printf "%s....%s  %s\n" "$C_CYAN" "$C_RESET" "$1"; }
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "Missing required command: $1"
@@ -54,7 +75,7 @@ print_progress() {
   filled_bar="$(printf '%*s' "$filled" '' | tr ' ' '=')"
   empty_bar="$(printf '%*s' "$empty" '' | tr ' ' '-')"
   pct=$((CURRENT_STEP * 100 / TOTAL_STEPS))
-  printf "PROG  [%s%s] %3d%% (%d/%d)\n" "$filled_bar" "$empty_bar" "$pct" "$CURRENT_STEP" "$TOTAL_STEPS"
+  printf "%sPROG%s  [%s%s] %3d%% (%d/%d)\n" "$C_PURPLE" "$C_RESET" "$filled_bar" "$empty_bar" "$pct" "$CURRENT_STEP" "$TOTAL_STEPS"
 }
 
 run_step() {
@@ -70,11 +91,12 @@ run_step() {
     print_progress
     pass "$label"
   else
-    printf "PROG  [FAILED%s] %3d%% (%d/%d)\n" \
+    printf "%sPROG%s  [FAILED%s] %3d%% (%d/%d)\n" \
+      "$C_PURPLE" "$C_RESET" \
       "$(printf '%*s' 24 '' | tr ' ' '-')" \
       $((CURRENT_STEP * 100 / TOTAL_STEPS)) \
       "$CURRENT_STEP" "$TOTAL_STEPS"
-    [ -n "$LAST_DEBUG" ] && printf 'INFO  Debug output:\n%s\n' "$LAST_DEBUG"
+    [ -n "$LAST_DEBUG" ] && printf '%sINFO%s  Debug output:\n%s\n' "$C_BLUE" "$C_RESET" "$LAST_DEBUG"
     fail "${LAST_ERROR:-$label failed}"
   fi
 }
@@ -112,9 +134,13 @@ check_hotel_url() {
 }
 
 check_mcp_data_path() {
-  local mcp_output mcp_result
-  mcp_output="$(
-    cd "$MCP_DIR" && run_with_timeout 15 ./node_modules/.bin/tsx -e "
+  local mcp_output mcp_result attempt max_attempts
+  max_attempts=3
+  attempt=1
+
+  while [ "$attempt" -le "$max_attempts" ]; do
+    mcp_output="$(
+      cd "$MCP_DIR" && run_with_timeout 15 ./node_modules/.bin/tsx -e "
 import { getOnlinePlayers } from './src/tools/getOnlinePlayers.ts';
 void (async () => {
   const players = await getOnlinePlayers({ limit: 5 });
@@ -124,14 +150,24 @@ void (async () => {
   process.exit(1);
 });
 " 2>&1 || true
-  )"
+    )"
 
-  mcp_result="$(printf '%s\n' "$mcp_output" | tail -n 1)"
-  if [[ ! "$mcp_result" =~ ^[0-9]+$ ]]; then
+    mcp_result="$(printf '%s\n' "$mcp_output" | tail -n 1)"
+    if [[ "$mcp_result" =~ ^[0-9]+$ ]]; then
+      return 0
+    fi
+
+    # Retry a couple of times for transient MySQL pool pressure.
+    if printf '%s\n' "$mcp_output" | grep -qi 'Too many connections' && [ "$attempt" -lt "$max_attempts" ]; then
+      sleep 1
+      attempt=$((attempt + 1))
+      continue
+    fi
+
     LAST_ERROR="MCP tool call failed (getOnlinePlayers). Check MCP env, DB tunnel, and dependencies."
     LAST_DEBUG="$mcp_output"
     return 1
-  fi
+  done
 }
 
 [ -f "$MCP_ENV_FILE" ] || fail "MCP env file not found: $MCP_ENV_FILE"
