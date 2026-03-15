@@ -8,15 +8,7 @@ services:
     image: ghcr.io/${HABBO_OWNER_OR_ORG}/habbo-arcturus:latest
     entrypoint:
       - /bin/bash
-      - -lc
-      - |
-        cat > /usr/local/bin/mysqladmin <<'EOF'
-        #!/bin/sh
-        exec /usr/bin/mariadb-admin --ssl=0 "$@"
-        EOF
-        chmod +x /usr/local/bin/mysqladmin
-        export PATH="/usr/local/bin:$PATH"
-        exec /app/scripts/build.sh
+      - /app/scripts/build.sh
     environment:
       - HABBO_SQL_BASE_URL=${HABBO_SQL_BASE_URL:-https://raw.githubusercontent.com/tndejong/habbo-agent-platform/main/mysql/dumps}
       - HABBO_SQL_BASE_FILE=${HABBO_SQL_BASE_FILE:-arcturus_3.0.0-stable_base_database--compact.sql}
@@ -37,7 +29,7 @@ services:
       - /bin/sh
       - -lc
       - |
-        /app/scripts/build.sh &
+        /bin/sh /app/scripts/build.sh &
         pid=$$!
         while kill -0 "$$pid" >/dev/null 2>&1; do
           if [ -d /app/nitro-assets/gamedata ]; then
