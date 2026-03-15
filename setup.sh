@@ -349,16 +349,32 @@ else
 fi
 
 printf "\n"
+HAS_JUST=false
+if command -v just >/dev/null 2>&1; then
+  HAS_JUST=true
+fi
+
 if [ "$SETUP_MODE" = "1" ]; then
   info "Local Docker next steps:"
-  printf "  1) docker compose --env-file .env.registry -f docker-compose.registry.yaml up -d\n"
-  printf "  2) bash scripts/preflight.sh\n"
-  printf "  3) bash scripts/smoke-test.sh\n"
+  if [ "$HAS_JUST" = "true" ]; then
+    printf "  1) just up\n"
+    printf "  2) just doctor\n"
+    printf "  3) (optional) just quick-start  # up + doctor\n"
+  else
+    printf "  1) docker compose --env-file .env.registry -f docker-compose.registry.yaml up -d\n"
+    printf "  2) bash scripts/preflight.sh\n"
+    printf "  3) bash scripts/smoke-test.sh\n"
+  fi
   printf "  4) Open: %s?sso=123\n" "$HABBO_BASE_URL"
 else
   info "MCP connectivity next steps:"
-  printf "  1) bash scripts/preflight.sh\n"
-  printf "  2) bash scripts/smoke-test.sh\n"
+  if [ "$HAS_JUST" = "true" ]; then
+    printf "  1) just preflight\n"
+    printf "  2) just smoke\n"
+  else
+    printf "  1) bash scripts/preflight.sh\n"
+    printf "  2) bash scripts/smoke-test.sh\n"
+  fi
 fi
 
 print_client_snippet

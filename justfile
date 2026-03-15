@@ -20,6 +20,10 @@ smoke:
 doctor:
   bash scripts/preflight.sh && bash scripts/smoke-test.sh
 
+# Fast path after setup (start stack + validate)
+quick-start:
+  just up && just doctor
+
 # Start registry stack in background
 up:
   docker compose --env-file .env.registry -f docker-compose.registry.yaml up -d

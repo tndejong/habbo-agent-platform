@@ -29,7 +29,7 @@ Built on **Arcturus Morningstar** (Java) + **Nitro React** (TypeScript), extende
 - [Nginx Proxy Manager + Custom Domain](#nginx-proxy-manager--custom-domain)
 - [Usage Examples](#usage-examples)
 - [Hook Compatibility](#hook-compatibility)
-- [Hotel Management Commands](#hotel-management-commands)
+- [Just Commands](#just-commands)
 - [Architecture](#architecture)
 - [Troubleshooting](#troubleshooting)
 - [Project Structure](#project-structure)
@@ -93,6 +93,12 @@ Install these before deploying or connecting MCP:
 If you want the easiest setup path, run the interactive setup wizard:
 
 ```bash
+just setup
+```
+
+Or without `just`:
+
+```bash
 bash setup.sh
 ```
 
@@ -119,6 +125,13 @@ Use the prebuilt images from this repository's GitHub Container Registry package
 No custom registry setup is required for normal usage.
 For new users, this is the recommended path.
 
+### Fast path (with `just`)
+
+```bash
+just setup
+just quick-start
+```
+
 ### 1. Clone and go to the repo
 
 ```bash
@@ -136,7 +149,7 @@ HABBO_PUBLIC_HOST=127.0.0.1
 HABBO_PUBLIC_PROTOCOL=http
 ```
 
-Tip: `bash setup.sh` (mode 1) can generate this file for you automatically.
+Tip: `just setup` (mode 1) can generate this file for you automatically.
 
 Optional but useful:
 
@@ -235,6 +248,12 @@ Configure the same `habbo` MCP server values in Cursor MCP settings (command/arg
 Before smoke testing, run a fast environment check:
 
 ```bash
+just preflight
+```
+
+Without `just`:
+
+```bash
 bash scripts/preflight.sh
 ```
 
@@ -250,6 +269,12 @@ It uses color-coded output:
 ## Smoke test (5 minutes)
 
 Run the automated smoke suite:
+
+```bash
+just smoke
+```
+
+Without `just`:
 
 ```bash
 bash scripts/smoke-test.sh
@@ -395,6 +420,7 @@ just setup               # Run interactive setup wizard
 just preflight           # Validate env, ports, subnet, SSH assumptions
 just smoke               # End-to-end runtime smoke test
 just doctor              # preflight + smoke in one command
+just quick-start         # up + doctor
 just up                  # Start registry stack with .env.registry
 just down                # Stop registry stack
 just ps                  # Show stack status
