@@ -85,7 +85,9 @@ services:
 
   agent-portal:
     container_name: agent-portal
-    image: ${HABBO_PORTAL_IMAGE:-ghcr.io/${HABBO_OWNER_OR_ORG}/habbo-agent-portal:latest}
+    build:
+      context: ./portal
+    image: habbo-agent-portal:local
     environment:
       - PORT=3000
       - HABBO_BASE_URL=${HABBO_PORTAL_BASE_URL:-http://127.0.0.1:${HABBO_NITRO_PORT:-1080}}
