@@ -462,15 +462,20 @@ If you redeploy/update the stack, your MySQL data stays intact as long as the na
 
 ## Nginx Proxy Manager + custom domain
 
-If you run NPM, you can proxy Nitro by joining this stack to the same external Docker network (for example `proxy_net`) and forwarding to `nitro:5154`.
+If you run NPM, attach the stack to your proxy network so NPM can reach Nitro (and optionally Portal). With the stack already running:
 
-1. Ensure both stacks share the same external network.
-2. In NPM Proxy Host:
+```bash
+just link-proxy
+```
+
+This connects `nitro`, `arcturus`, and `agent-portal` to `proxy_net`. Ensure `proxy_net` exists (e.g. created by your proxy stack).
+
+Then in NPM Proxy Host:
    - Domain: your domain
    - Forward host: `nitro`
    - Forward port: `5154`
    - Enable websocket support
-3. Set:
+Set:
    - `HABBO_PUBLIC_HOST=<your-domain>`
    - `HABBO_PUBLIC_PROTOCOL=https`
    - `HABBO_ASSETS_PUBLIC_PORT=443`
@@ -480,23 +485,7 @@ If you run NPM, you can proxy Nitro by joining this stack to the same external D
 
 When running behind NPM/Traefik/Caddy, keep host bind ports non-443 (for example `HABBO_NITRO_BIND_PORT=11080`, `HABBO_ASSETS_BIND_PORT=18080`, `HABBO_SWF_BIND_PORT=18081`, `HABBO_WS_BIND_PORT=12096`) and keep the public URL ports at `443`.
 
-Compose network example:
-
-```yaml
-services:
-  nitro:
-    networks:
-      - nitro
-      - proxy_net
-
-networks:
-  nitro:
-    ipam:
-      config:
-        - subnet: ${HABBO_DOCKER_SUBNET:-172.28.0.0/16}
-  proxy_net:
-    external: true
-```
+Manual alternative (instead of `just link-proxy`): `docker network connect proxy_net nitro` and same for `arcturus`, `agent-portal`.
 
 ---
 
@@ -562,6 +551,7 @@ just quick-start         # up + doctor
 just up                  # Start stack (GHCR images + registry compose)
 just up-registry         # Start image-only stack (production style)
 just down                # Stop registry stack
+just link-proxy          # Attach nitro/arcturus/portal to proxy_net (stack already running)
 just down-registry       # Stop image-only stack
 just ps                  # Show stack status
 just logs-arcturus       # Tail emulator logs

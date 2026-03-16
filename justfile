@@ -42,6 +42,13 @@ down:
 down-registry:
   {{compose_registry}} down
 
+# Attach running nitro/arcturus/portal to proxy_net (run anytime stack is already up)
+link-proxy:
+  docker network connect proxy_net nitro 2>/dev/null || true
+  docker network connect proxy_net arcturus 2>/dev/null || true
+  docker network connect proxy_net agent-portal 2>/dev/null || true
+  @echo "Done. nitro, arcturus, agent-portal are on proxy_net."
+
 # Restart running services
 restart:
   {{compose_local}} restart
