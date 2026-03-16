@@ -47,6 +47,27 @@ body {
   color: #93a4c9;
 }
 
+.small {
+  font-size: 0.85rem;
+}
+
+.login-help-row {
+  margin-top: 2px;
+}
+
+button.text-link {
+  padding: 0;
+  background: transparent;
+  color: #93a4c9;
+  text-align: left;
+  font-weight: 500;
+  text-decoration: underline;
+}
+
+button.text-link:hover {
+  color: #c7d5f5;
+}
+
 .grid {
   margin-top: 16px;
   display: grid;
@@ -130,4 +151,28 @@ button:disabled {
 a {
   color: #60a5fa;
   word-break: break-all;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(2, 6, 23, 0.7);
+  padding: 16px;
+}
+
+.modal-card {
+  width: 100%;
+  max-width: 440px;
+  background: #111a33;
+  border: 1px solid #2b3a63;
+  border-radius: 14px;
+  padding: 16px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }

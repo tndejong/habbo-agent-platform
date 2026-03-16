@@ -1,8 +1,0 @@
-services:
-  arcturus:
-    volumes:
-      - ./emulator/scripts/build.sh:/app/scripts/build.sh:ro
-
-  nitro:
-    volumes:
-      - ./nitro/scripts/build.sh:/app/scripts/build.sh:ro

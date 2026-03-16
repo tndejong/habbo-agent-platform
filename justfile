@@ -1,5 +1,5 @@
 set windows-powershell := true
-compose_local := "docker compose --env-file .env.registry -f docker-compose.registry.yaml -f docker-compose.local.yaml"
+compose_local := "docker compose --env-file .env.registry -f docker-compose.registry.yaml"
 compose_registry := "docker compose --env-file .env.registry -f docker-compose.registry.yaml"
 
 # Show all available recipes

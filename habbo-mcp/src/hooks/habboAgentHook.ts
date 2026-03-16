@@ -23,9 +23,9 @@ interface HookState {
 
 type ToolFns = NonNullable<Awaited<ReturnType<typeof loadToolFns>>>;
 
-const DEFAULT_OPERATOR = process.env.SYNC_OPERATOR_USERNAME || 'Systemaccount';
-const DEFAULT_BASE_X = Number.parseInt(process.env.SYNC_SPAWN_X || '5', 10);
-const DEFAULT_BASE_Y = Number.parseInt(process.env.SYNC_SPAWN_Y || '5', 10);
+const DEFAULT_OPERATOR = process.env.HABBO_HOOK_OPERATOR_USERNAME || 'Systemaccount';
+const DEFAULT_BASE_X = Number.parseInt(process.env.HABBO_HOOK_SPAWN_X || '5', 10);
+const DEFAULT_BASE_Y = Number.parseInt(process.env.HABBO_HOOK_SPAWN_Y || '5', 10);
 const EVENT_DEDUPE_MS = 8_000;
 const MAX_CHAT_LENGTH = 240;
 const DEFAULT_STATE_FILE = path.join(os.homedir(), '.cursor', 'habbo-agent-hook-state.json');
@@ -47,6 +47,10 @@ const OFFSETS: Array<{ dx: number; dy: number }> = [
 
 async function main(): Promise<void> {
   loadEnvFile();
+
+  if (process.env.HABBO_HOOK_ENABLED !== 'true') {
+    return;
+  }
 
   const event = normalizeEvent(process.argv[2]);
   if (!event) {
@@ -98,7 +102,7 @@ function loadEnvFile(): void {
   const thisFile = fileURLToPath(import.meta.url);
   const hooksDir = path.dirname(thisFile);
   const envPath = process.env.HABBO_HOOK_ENV_PATH || path.resolve(hooksDir, '../../.env');
-  dotenv.config({ path: envPath });
+  dotenv.config({ path: envPath, override: true });
 }
 
 function normalizeEvent(input?: string): HookEvent | null {

@@ -1,5 +1,6 @@
 import path from 'node:path';
 import net from 'node:net';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import cookieParser from 'cookie-parser';
@@ -7,6 +8,7 @@ import dotenv from 'dotenv';
 import mysql from 'mysql2/promise';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import nodemailer from 'nodemailer';
 import { v4 as uuidv4 } from 'uuid';
 
 dotenv.config();
@@ -18,11 +20,19 @@ const PORT = Number.parseInt(process.env.PORT || '3000', 10);
 const HABBO_BASE_URL = process.env.HABBO_BASE_URL || 'http://127.0.0.1:1080';
 const HABBO_HEALTHCHECK_URL = process.env.HABBO_HEALTHCHECK_URL || HABBO_BASE_URL;
 const JWT_SECRET = process.env.PORTAL_JWT_SECRET || 'change-this-in-production';
+const PORTAL_PUBLIC_URL = process.env.PORTAL_PUBLIC_URL || `http://127.0.0.1:${PORT}`;
 const PORTAL_BOOTSTRAP_ENABLED = process.env.PORTAL_BOOTSTRAP_ENABLED === 'true';
 const PORTAL_BOOTSTRAP_EMAIL = (process.env.PORTAL_BOOTSTRAP_EMAIL || 'systemaccount@hotel.local').trim().toLowerCase();
 const PORTAL_BOOTSTRAP_USERNAME = (process.env.PORTAL_BOOTSTRAP_USERNAME || 'Systemaccount').trim();
 const PORTAL_BOOTSTRAP_PASSWORD = process.env.PORTAL_BOOTSTRAP_PASSWORD || '';
 const PORTAL_BOOTSTRAP_HABBO_USERNAME = (process.env.PORTAL_BOOTSTRAP_HABBO_USERNAME || 'Systemaccount').trim();
+const PORTAL_RESET_TOKEN_TTL_MINUTES = Number.parseInt(process.env.PORTAL_RESET_TOKEN_TTL_MINUTES || '30', 10);
+const PORTAL_SMTP_HOST = (process.env.PORTAL_SMTP_HOST || '').trim();
+const PORTAL_SMTP_PORT = Number.parseInt(process.env.PORTAL_SMTP_PORT || '1025', 10);
+const PORTAL_SMTP_SECURE = process.env.PORTAL_SMTP_SECURE === 'true';
+const PORTAL_SMTP_USER = (process.env.PORTAL_SMTP_USER || '').trim();
+const PORTAL_SMTP_PASS = process.env.PORTAL_SMTP_PASS || '';
+const PORTAL_SMTP_FROM = (process.env.PORTAL_SMTP_FROM || 'Agent Hotel <no-reply@hotel.local>').trim();
 
 const db = mysql.createPool({
   host: process.env.DB_HOST || 'mysql',
@@ -33,6 +43,15 @@ const db = mysql.createPool({
   connectionLimit: 8,
   waitForConnections: true
 });
+
+const mailTransport = PORTAL_SMTP_HOST
+  ? nodemailer.createTransport({
+      host: PORTAL_SMTP_HOST,
+      port: PORTAL_SMTP_PORT,
+      secure: PORTAL_SMTP_SECURE,
+      auth: PORTAL_SMTP_USER ? { user: PORTAL_SMTP_USER, pass: PORTAL_SMTP_PASS } : undefined
+    })
+  : null;
 
 function issueAuthCookie(res, payload) {
   const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '14d' });
@@ -112,6 +131,64 @@ async function ensurePortalSchema() {
       UNIQUE KEY uq_portal_habbo_user_id (habbo_user_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS portal_password_resets (
+      id BIGINT NOT NULL AUTO_INCREMENT,
+      portal_user_id INT NOT NULL,
+      token_hash CHAR(64) NOT NULL,
+      expires_at DATETIME NOT NULL,
+      used_at DATETIME NULL,
+      requested_ip VARCHAR(64) NOT NULL DEFAULT '',
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_portal_reset_token_hash (token_hash),
+      KEY idx_portal_reset_user (portal_user_id),
+      KEY idx_portal_reset_expiry (expires_at),
+      CONSTRAINT fk_portal_reset_user
+        FOREIGN KEY (portal_user_id) REFERENCES portal_users(id)
+        ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+}
+
+function sha256(input) {
+  return crypto.createHash('sha256').update(input).digest('hex');
+}
+
+function createPasswordResetToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+async function sendPasswordResetEmail({ toEmail, username, resetUrl }) {
+  if (!mailTransport) {
+    console.warn(`Password reset requested for ${toEmail}, but SMTP is not configured. URL: ${resetUrl}`);
+    return;
+  }
+
+  await mailTransport.sendMail({
+    from: PORTAL_SMTP_FROM,
+    to: toEmail,
+    subject: 'Reset your Agent Hotel Portal password',
+    text: [
+      `Hi ${username},`,
+      '',
+      'A password reset was requested for your Agent Hotel Portal account.',
+      `Use this link to reset your password (valid for ${PORTAL_RESET_TOKEN_TTL_MINUTES} minutes):`,
+      resetUrl,
+      '',
+      'If you did not request this, you can ignore this email.'
+    ].join('\n'),
+    html: `
+      <p>Hi ${username},</p>
+      <p>A password reset was requested for your Agent Hotel Portal account.</p>
+      <p>
+        Use this link to reset your password (valid for ${PORTAL_RESET_TOKEN_TTL_MINUTES} minutes):<br />
+        <a href="${resetUrl}">${resetUrl}</a>
+      </p>
+      <p>If you did not request this, you can ignore this email.</p>
+    `
+  });
 }
 
 async function ensureBootstrapPortalUser() {
@@ -290,6 +367,98 @@ app.post('/api/auth/login', async (req, res) => {
   });
 });
 
+app.post('/api/auth/forgot-password', async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  if (!email) {
+    return res.status(400).json({ error: 'email is required' });
+  }
+
+  const genericResponse = {
+    ok: true,
+    message: 'If an account exists for this email, a reset link has been sent.'
+  };
+
+  try {
+    const [rows] = await db.execute(
+      'SELECT id, email, username FROM portal_users WHERE email = ? LIMIT 1',
+      [email]
+    );
+    const user = rows[0];
+    if (!user) {
+      return res.json(genericResponse);
+    }
+
+    const token = createPasswordResetToken();
+    const tokenHash = sha256(token);
+    const expiresAt = new Date(Date.now() + PORTAL_RESET_TOKEN_TTL_MINUTES * 60 * 1000);
+
+    await db.execute(
+      'INSERT INTO portal_password_resets (portal_user_id, token_hash, expires_at, requested_ip) VALUES (?, ?, ?, ?)',
+      [user.id, tokenHash, expiresAt, req.ip || '']
+    );
+
+    const resetUrl = new URL('/', PORTAL_PUBLIC_URL);
+    resetUrl.searchParams.set('reset', '1');
+    resetUrl.searchParams.set('token', token);
+    resetUrl.searchParams.set('email', user.email);
+
+    await sendPasswordResetEmail({
+      toEmail: user.email,
+      username: user.username,
+      resetUrl: resetUrl.toString()
+    });
+
+    return res.json(genericResponse);
+  } catch (err) {
+    return res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to process reset request' });
+  }
+});
+
+app.post('/api/auth/reset-password', async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const token = String(req.body?.token || '').trim();
+  const password = String(req.body?.password || '');
+
+  if (!email || !token || !password) {
+    return res.status(400).json({ error: 'email, token and password are required' });
+  }
+  if (password.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  }
+
+  try {
+    const [rows] = await db.execute(
+      `SELECT r.id AS reset_id, u.id AS user_id
+       FROM portal_password_resets r
+       INNER JOIN portal_users u ON u.id = r.portal_user_id
+       WHERE u.email = ?
+         AND r.token_hash = ?
+         AND r.used_at IS NULL
+         AND r.expires_at > NOW()
+       ORDER BY r.created_at DESC
+       LIMIT 1`,
+      [email, sha256(token)]
+    );
+    const match = rows[0];
+    if (!match) {
+      return res.status(400).json({ error: 'Invalid or expired reset token' });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+
+    await db.execute('UPDATE portal_users SET password_hash = ? WHERE id = ? LIMIT 1', [passwordHash, match.user_id]);
+    await db.execute('UPDATE portal_password_resets SET used_at = NOW() WHERE id = ? LIMIT 1', [match.reset_id]);
+    await db.execute(
+      'UPDATE portal_password_resets SET used_at = NOW() WHERE portal_user_id = ? AND used_at IS NULL',
+      [match.user_id]
+    );
+
+    return res.json({ ok: true, message: 'Password reset successful. You can now log in with the new password.' });
+  } catch (err) {
+    return res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to reset password' });
+  }
+});
+
 app.post('/api/auth/logout', (_req, res) => {
   res.clearCookie('agent_portal_session');
   res.json({ ok: true });
@@ -322,6 +491,14 @@ app.get('*', (_req, res) => {
 
 ensurePortalSchema()
   .then(ensureBootstrapPortalUser)
+  .then(async () => {
+    if (mailTransport) {
+      await mailTransport.verify();
+      console.log(`portal SMTP ready on ${PORTAL_SMTP_HOST}:${PORTAL_SMTP_PORT}`);
+    } else {
+      console.warn('portal SMTP is disabled (PORTAL_SMTP_HOST not set); password reset emails will not be sent');
+    }
+  })
   .then(() => {
     app.listen(PORT, () => {
       console.log(`agent-hotel-portal listening on :${PORT}`);

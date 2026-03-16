@@ -1,23 +1,34 @@
 import { sendRconCommand } from '../rcon.js';
-import { execute } from '../db.js';
+import { resolveFigureByType } from './figureTypes.js';
 
 export async function deployBot(params: {
   room_id: number;
   name: string;
   figure?: string;
+  figure_type?: string;
   gender?: 'M' | 'F';
   motto?: string;
   x?: number;
   y?: number;
+  freeroam?: boolean;
 }): Promise<{ bot_id: number; name: string; room_id: number }> {
+  const resolvedFigure =
+    params.figure ||
+    (params.figure_type ? await resolveFigureByType(params.figure_type) : await resolveFigureByType('default'));
+  if (!resolvedFigure) {
+    throw new Error(`Unknown figure_type "${params.figure_type}". Use list_figure_types to see available keys.`);
+  }
+
+  const freeroam = params.freeroam ?? true;
   const response = await sendRconCommand('deploybot', {
     room_id: params.room_id,
     name: params.name,
-    figure: params.figure ?? 'hd-180-1.ch-210-66.lg-270-110.sh-300-91',
+    figure: resolvedFigure,
     gender: params.gender ?? 'M',
     motto: params.motto ?? '',
     x: params.x ?? 0,
     y: params.y ?? 0,
+    freeroam,
   });
 
   if (response.status !== 0) {
@@ -25,10 +36,5 @@ export async function deployBot(params: {
   }
 
   const botId = parseInt(response.message, 10);
-  // Keep synced agents in "relax/freeroam" mode so they roam instead of standing still.
-  await execute(
-    "UPDATE bots SET freeroam = '1', chat_random = '1' WHERE id = ? LIMIT 1",
-    [botId]
-  );
   return { bot_id: botId, name: params.name, room_id: params.room_id };
 }

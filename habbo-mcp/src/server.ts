@@ -25,11 +25,12 @@ import { deployBot } from './tools/deployBot.js';
 import { talkBot } from './tools/talkBot.js';
 import { listBots } from './tools/listBots.js';
 import { deleteBot } from './tools/deleteBot.js';
+import { listFigureTypes, registerFigureType, validateFigure } from './tools/figureTypes.js';
 
 // ─── Input schemas ────────────────────────────────────────────────────────────
 
 const CreatePlayerSchema = z.object({
-  api_key: z.string(),
+  api_key: z.string().optional(),
   username: z.string().min(1).max(32),
   figure: z.string().optional(),
   gender: z.enum(['M', 'F']).optional(),
@@ -37,12 +38,12 @@ const CreatePlayerSchema = z.object({
 });
 
 const GenerateSsoTicketSchema = z.object({
-  api_key: z.string(),
+  api_key: z.string().optional(),
   username: z.string().min(1),
 });
 
 const TalkAsPlayerSchema = z.object({
-  api_key: z.string(),
+  api_key: z.string().optional(),
   username: z.string().min(1),
   message: z.string().min(1).max(512),
   type: z.enum(['talk', 'whisper', 'shout']).optional(),
@@ -50,106 +51,126 @@ const TalkAsPlayerSchema = z.object({
 });
 
 const MovePlayerToRoomSchema = z.object({
-  api_key: z.string(),
+  api_key: z.string().optional(),
   username: z.string().min(1),
   room_id: z.number().int().positive(),
 });
 
 const GiveCreditsSchema = z.object({
-  api_key: z.string(),
+  api_key: z.string().optional(),
   username: z.string().min(1),
   amount: z.number().int().min(1).max(1_000_000),
 });
 
 const AlertPlayerSchema = z.object({
-  api_key: z.string(),
+  api_key: z.string().optional(),
   username: z.string().min(1),
   message: z.string().min(1).max(1024),
 });
 
 const SetPlayerMottoSchema = z.object({
-  api_key: z.string(),
+  api_key: z.string().optional(),
   username: z.string().min(1),
   motto: z.string().max(255),
 });
 
 const GetOnlinePlayersSchema = z.object({
-  api_key: z.string(),
+  api_key: z.string().optional(),
   limit: z.number().int().min(1).max(200).optional(),
 });
 
 const GetRoomChatLogSchema = z.object({
-  api_key: z.string(),
+  api_key: z.string().optional(),
   room_id: z.number().int().positive(),
   limit: z.number().int().min(1).max(500).optional(),
 });
 
 const HotelAlertSchema = z.object({
-  api_key: z.string(),
+  api_key: z.string().optional(),
   message: z.string().min(1).max(1024),
   url: z.string().optional(),
 });
 
 const GiveBadgeSchema = z.object({
-  api_key: z.string(),
+  api_key: z.string().optional(),
   username: z.string().min(1),
   badge_code: z.string().min(1).max(12),
 });
 
 const GivePixelsSchema = z.object({
-  api_key: z.string(),
+  api_key: z.string().optional(),
   username: z.string().min(1),
   amount: z.number().int().min(1).max(10_000_000),
 });
 
 const GiveDiamondsSchema = z.object({
-  api_key: z.string(),
+  api_key: z.string().optional(),
   username: z.string().min(1),
   amount: z.number().int().min(1).max(10_000_000),
 });
 
 const KickPlayerSchema = z.object({
-  api_key: z.string(),
+  api_key: z.string().optional(),
   username: z.string().min(1),
 });
 
 const MutePlayerSchema = z.object({
-  api_key: z.string(),
+  api_key: z.string().optional(),
   username: z.string().min(1),
   duration: z.number().int().min(1).max(86400),
 });
 
 const SetRankSchema = z.object({
-  api_key: z.string(),
+  api_key: z.string().optional(),
   username: z.string().min(1),
   rank: z.number().int().min(1).max(9),
 });
 
 const DeployBotSchema = z.object({
-  api_key: z.string(),
+  api_key: z.string().optional(),
   room_id: z.number().int().positive(),
   name: z.string().min(1).max(25),
   figure: z.string().optional(),
+  figure_type: z.string().min(2).max(40).optional(),
   gender: z.enum(['M', 'F']).optional(),
   motto: z.string().max(100).optional(),
   x: z.number().int().min(0).optional(),
   y: z.number().int().min(0).optional(),
+  freeroam: z.boolean().optional(),
 });
 
 const TalkBotSchema = z.object({
-  api_key: z.string(),
+  api_key: z.string().optional(),
   bot_id: z.number().int().positive(),
   message: z.string().min(1).max(512),
   type: z.enum(['talk', 'shout']).optional(),
 });
 
 const ListBotsSchema = z.object({
-  api_key: z.string(),
+  api_key: z.string().optional(),
 });
 
 const DeleteBotSchema = z.object({
-  api_key: z.string(),
+  api_key: z.string().optional(),
   bot_id: z.number().int().positive(),
+});
+
+const ValidateFigureSchema = z.object({
+  api_key: z.string().optional(),
+  figure: z.string().min(1).max(1024),
+  gender: z.enum(['M', 'F']).optional(),
+});
+
+const RegisterFigureTypeSchema = z.object({
+  api_key: z.string().optional(),
+  figure_type: z.string().min(2).max(40),
+  figure: z.string().min(1).max(1024),
+  gender: z.enum(['M', 'F']).optional(),
+  overwrite: z.boolean().optional(),
+});
+
+const ListFigureTypesSchema = z.object({
+  api_key: z.string().optional(),
 });
 
 // ─── Tool definitions ─────────────────────────────────────────────────────────
@@ -162,7 +183,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        api_key: { type: 'string', description: 'MCP API key for authentication' },
+        api_key: { type: 'string', description: 'MCP API key (optional — falls back to MCP_API_KEY env var)' },
         username: { type: 'string', description: 'Unique username for the new player (max 32 chars)' },
         figure: {
           type: 'string',
@@ -175,7 +196,7 @@ const TOOLS = [
         },
         motto: { type: 'string', description: 'Player motto/bio (optional, max 255 chars)' },
       },
-      required: ['api_key', 'username'],
+      required: ['username'],
     },
   },
   {
@@ -185,10 +206,10 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        api_key: { type: 'string', description: 'MCP API key for authentication' },
+        api_key: { type: 'string', description: 'MCP API key (optional — falls back to MCP_API_KEY env var)' },
         username: { type: 'string', description: 'Username of the existing player' },
       },
-      required: ['api_key', 'username'],
+      required: ['username'],
     },
   },
   {
@@ -198,7 +219,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        api_key: { type: 'string', description: 'MCP API key for authentication' },
+        api_key: { type: 'string', description: 'MCP API key (optional — falls back to MCP_API_KEY env var)' },
         username: { type: 'string', description: 'Username of the player to speak' },
         message: { type: 'string', description: 'The message to say (max 512 chars)' },
         type: {
@@ -211,7 +232,7 @@ const TOOLS = [
           description: 'Chat bubble style ID (-1 = default)',
         },
       },
-      required: ['api_key', 'username', 'message'],
+      required: ['username', 'message'],
     },
   },
   {
@@ -221,11 +242,11 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        api_key: { type: 'string', description: 'MCP API key for authentication' },
+        api_key: { type: 'string', description: 'MCP API key (optional — falls back to MCP_API_KEY env var)' },
         username: { type: 'string', description: 'Username of the player to move' },
         room_id: { type: 'number', description: 'Target room ID (positive integer)' },
       },
-      required: ['api_key', 'username', 'room_id'],
+      required: ['username', 'room_id'],
     },
   },
   {
@@ -235,11 +256,11 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        api_key: { type: 'string', description: 'MCP API key for authentication' },
+        api_key: { type: 'string', description: 'MCP API key (optional — falls back to MCP_API_KEY env var)' },
         username: { type: 'string', description: 'Username of the player to receive credits' },
         amount: { type: 'number', description: 'Number of credits to give (1–1,000,000)' },
       },
-      required: ['api_key', 'username', 'amount'],
+      required: ['username', 'amount'],
     },
   },
   {
@@ -249,11 +270,11 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        api_key: { type: 'string', description: 'MCP API key for authentication' },
+        api_key: { type: 'string', description: 'MCP API key (optional — falls back to MCP_API_KEY env var)' },
         username: { type: 'string', description: 'Username of the player to alert' },
         message: { type: 'string', description: 'The alert message to display (max 1024 chars)' },
       },
-      required: ['api_key', 'username', 'message'],
+      required: ['username', 'message'],
     },
   },
   {
@@ -263,11 +284,11 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        api_key: { type: 'string', description: 'MCP API key for authentication' },
+        api_key: { type: 'string', description: 'MCP API key (optional — falls back to MCP_API_KEY env var)' },
         username: { type: 'string', description: 'Username of the player' },
         motto: { type: 'string', description: 'New motto text (max 255 chars)' },
       },
-      required: ['api_key', 'username', 'motto'],
+      required: ['username', 'motto'],
     },
   },
   {
@@ -277,13 +298,13 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        api_key: { type: 'string', description: 'MCP API key for authentication' },
+        api_key: { type: 'string', description: 'MCP API key (optional — falls back to MCP_API_KEY env var)' },
         limit: {
           type: 'number',
           description: 'Maximum number of players to return (1–200, default 50)',
         },
       },
-      required: ['api_key'],
+      required: [],
     },
   },
   {
@@ -293,14 +314,14 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        api_key: { type: 'string', description: 'MCP API key for authentication' },
+        api_key: { type: 'string', description: 'MCP API key (optional — falls back to MCP_API_KEY env var)' },
         room_id: { type: 'number', description: 'Room ID to fetch chat log for' },
         limit: {
           type: 'number',
           description: 'Maximum number of messages to return (1–500, default 100)',
         },
       },
-      required: ['api_key', 'room_id'],
+      required: ['room_id'],
     },
   },
   {
@@ -310,14 +331,14 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        api_key: { type: 'string', description: 'MCP API key for authentication' },
+        api_key: { type: 'string', description: 'MCP API key (optional — falls back to MCP_API_KEY env var)' },
         message: { type: 'string', description: 'The alert message to broadcast (max 1024 chars)' },
         url: {
           type: 'string',
           description: 'Optional URL to include with the alert (clickable link for players)',
         },
       },
-      required: ['api_key', 'message'],
+      required: ['message'],
     },
   },
   {
@@ -327,11 +348,11 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        api_key: { type: 'string', description: 'MCP API key for authentication' },
+        api_key: { type: 'string', description: 'MCP API key (optional — falls back to MCP_API_KEY env var)' },
         username: { type: 'string', description: 'Username of the player to receive the badge' },
         badge_code: { type: 'string', description: 'Badge code to give (e.g. "ADM", "ACH_Login1")' },
       },
-      required: ['api_key', 'username', 'badge_code'],
+      required: ['username', 'badge_code'],
     },
   },
   {
@@ -341,11 +362,11 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        api_key: { type: 'string', description: 'MCP API key for authentication' },
+        api_key: { type: 'string', description: 'MCP API key (optional — falls back to MCP_API_KEY env var)' },
         username: { type: 'string', description: 'Username of the player to receive pixels' },
         amount: { type: 'number', description: 'Number of pixels/duckets to give (1–10,000,000)' },
       },
-      required: ['api_key', 'username', 'amount'],
+      required: ['username', 'amount'],
     },
   },
   {
@@ -355,11 +376,11 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        api_key: { type: 'string', description: 'MCP API key for authentication' },
+        api_key: { type: 'string', description: 'MCP API key (optional — falls back to MCP_API_KEY env var)' },
         username: { type: 'string', description: 'Username of the player to receive diamonds' },
         amount: { type: 'number', description: 'Number of diamonds to give (1–10,000,000)' },
       },
-      required: ['api_key', 'username', 'amount'],
+      required: ['username', 'amount'],
     },
   },
   {
@@ -369,10 +390,10 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        api_key: { type: 'string', description: 'MCP API key for authentication' },
+        api_key: { type: 'string', description: 'MCP API key (optional — falls back to MCP_API_KEY env var)' },
         username: { type: 'string', description: 'Username of the player to kick' },
       },
-      required: ['api_key', 'username'],
+      required: ['username'],
     },
   },
   {
@@ -382,11 +403,11 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        api_key: { type: 'string', description: 'MCP API key for authentication' },
+        api_key: { type: 'string', description: 'MCP API key (optional — falls back to MCP_API_KEY env var)' },
         username: { type: 'string', description: 'Username of the player to mute' },
         duration: { type: 'number', description: 'Mute duration in seconds (1–86400, i.e. up to 24 hours)' },
       },
-      required: ['api_key', 'username', 'duration'],
+      required: ['username', 'duration'],
     },
   },
   {
@@ -396,11 +417,11 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        api_key: { type: 'string', description: 'MCP API key for authentication' },
+        api_key: { type: 'string', description: 'MCP API key (optional — falls back to MCP_API_KEY env var)' },
         username: { type: 'string', description: 'Username of the player' },
         rank: { type: 'number', description: 'Rank level to assign (1–9)' },
       },
-      required: ['api_key', 'username', 'rank'],
+      required: ['username', 'rank'],
     },
   },
   {
@@ -410,16 +431,84 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        api_key: { type: 'string', description: 'MCP API key for authentication' },
+        api_key: { type: 'string', description: 'MCP API key (optional — falls back to MCP_API_KEY env var)' },
         room_id: { type: 'number', description: 'Room ID to place the bot in' },
         name: { type: 'string', description: 'Display name of the bot (max 25 chars)' },
-        figure: { type: 'string', description: 'Habbo figure/look string (optional)' },
+        figure: {
+          type: 'string',
+          description: 'Custom Habbo figure/look string (optional, takes precedence over figure_type)',
+        },
+        figure_type: {
+          type: 'string',
+          description:
+            'Figure type key. Supports builtins (default, citizen, agent) and custom keys created via register_figure_type.',
+        },
         gender: { type: 'string', enum: ['M', 'F'], description: 'Gender of the bot (default M)' },
         motto: { type: 'string', description: 'Bot motto (optional, max 100 chars)' },
         x: { type: 'number', description: 'Tile X position in the room (default 0)' },
         y: { type: 'number', description: 'Tile Y position in the room (default 0)' },
+        freeroam: {
+          type: 'boolean',
+          description: 'Whether the bot should roam around (default true). Set false to keep it in place.',
+        },
       },
-      required: ['api_key', 'room_id', 'name'],
+      required: ['room_id', 'name'],
+    },
+  },
+  {
+    name: 'validate_figure',
+    description:
+      'Validate and normalize a Habbo figure/look string against live figuredata.xml rules used by the emulator. Returns normalized_figure and any adjustments.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        api_key: { type: 'string', description: 'MCP API key (optional — falls back to MCP_API_KEY env var)' },
+        figure: { type: 'string', description: 'Figure/look string to validate' },
+        gender: {
+          type: 'string',
+          enum: ['M', 'F'],
+          description: 'Target gender rules to validate against (default M)',
+        },
+      },
+      required: ['figure'],
+    },
+  },
+  {
+    name: 'register_figure_type',
+    description:
+      'Create or update a custom figure_type key by validating and normalizing a figure string first. The saved key can then be used in deploy_bot.figure_type.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        api_key: { type: 'string', description: 'MCP API key (optional — falls back to MCP_API_KEY env var)' },
+        figure_type: {
+          type: 'string',
+          description: 'Custom key to save (2-40 chars, letters/numbers/_/-)',
+        },
+        figure: { type: 'string', description: 'Figure/look string to validate and store' },
+        gender: {
+          type: 'string',
+          enum: ['M', 'F'],
+          description: 'Validation gender rules (default M)',
+        },
+        overwrite: {
+          type: 'boolean',
+          description: 'Set true to overwrite an existing custom figure_type',
+        },
+      },
+      required: ['figure_type', 'figure'],
+    },
+  },
+  {
+    name: 'list_figure_types',
+    description:
+      'List all available figure_type keys (builtin + custom) and their resolved figure strings.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        api_key: { type: 'string', description: 'MCP API key (optional — falls back to MCP_API_KEY env var)' },
+      },
+      required: [],
     },
   },
   {
@@ -429,12 +518,12 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        api_key: { type: 'string', description: 'MCP API key for authentication' },
+        api_key: { type: 'string', description: 'MCP API key (optional — falls back to MCP_API_KEY env var)' },
         bot_id: { type: 'number', description: 'Bot ID returned by deploy_bot' },
         message: { type: 'string', description: 'Message to say (max 512 chars)' },
         type: { type: 'string', enum: ['talk', 'shout'], description: 'Speech type: talk (default) or shout' },
       },
-      required: ['api_key', 'bot_id', 'message'],
+      required: ['bot_id', 'message'],
     },
   },
   {
@@ -443,9 +532,9 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        api_key: { type: 'string', description: 'MCP API key for authentication' },
+        api_key: { type: 'string', description: 'MCP API key (optional — falls back to MCP_API_KEY env var)' },
       },
-      required: ['api_key'],
+      required: [],
     },
   },
   {
@@ -454,10 +543,10 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        api_key: { type: 'string', description: 'MCP API key for authentication' },
+        api_key: { type: 'string', description: 'MCP API key (optional — falls back to MCP_API_KEY env var)' },
         bot_id: { type: 'number', description: 'Bot ID to delete' },
       },
-      required: ['api_key', 'bot_id'],
+      required: ['bot_id'],
     },
   },
 ] as const;
@@ -746,10 +835,12 @@ export async function startServer(): Promise<void> {
             room_id: input.room_id,
             name: input.name,
             figure: input.figure,
+            figure_type: input.figure_type,
             gender: input.gender,
             motto: input.motto,
             x: input.x,
             y: input.y,
+            freeroam: input.freeroam,
           });
           return {
             content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
@@ -787,6 +878,41 @@ export async function startServer(): Promise<void> {
           const result = await deleteBot(input.bot_id);
           return {
             content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+          };
+        }
+
+        // ── validate_figure ──────────────────────────────────────────────────
+        case 'validate_figure': {
+          const input = ValidateFigureSchema.parse(args);
+          validateApiKey(input.api_key);
+          const result = await validateFigure(input.figure, input.gender);
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+          };
+        }
+
+        // ── register_figure_type ─────────────────────────────────────────────
+        case 'register_figure_type': {
+          const input = RegisterFigureTypeSchema.parse(args);
+          validateApiKey(input.api_key);
+          const result = await registerFigureType({
+            figure_type: input.figure_type,
+            figure: input.figure,
+            gender: input.gender,
+            overwrite: input.overwrite,
+          });
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+          };
+        }
+
+        // ── list_figure_types ────────────────────────────────────────────────
+        case 'list_figure_types': {
+          const input = ListFigureTypesSchema.parse(args);
+          validateApiKey(input.api_key);
+          const types = await listFigureTypes();
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify({ count: types.length, types }, null, 2) }],
           };
         }
 

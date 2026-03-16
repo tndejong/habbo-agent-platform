@@ -12,6 +12,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "dotenv": "^16.0.0",
+    "fast-xml-parser": "^5.5.5",
     "mysql2": "^3.0.0",
     "uuid": "^9.0.0",
     "zod": "^3.0.0"

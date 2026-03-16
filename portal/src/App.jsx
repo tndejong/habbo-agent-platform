@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 
 const emptyRegister = { email: '', username: '', password: '' };
 const emptyLogin = { login: '', password: '' };
+const emptyForgot = { email: '' };
+const emptyReset = { email: '', token: '', password: '' };
 const initialHotelStatus = { loading: true, socket_online: false, reason: '', checked_url: '' };
 
 async function api(path, options = {}) {
@@ -25,11 +27,25 @@ export default function App() {
   const [me, setMe] = useState(null);
   const [registerForm, setRegisterForm] = useState(emptyRegister);
   const [loginForm, setLoginForm] = useState(emptyLogin);
+  const [forgotForm, setForgotForm] = useState(emptyForgot);
+  const [resetForm, setResetForm] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return {
+      ...emptyReset,
+      email: params.get('email') || '',
+      token: params.get('token') || ''
+    };
+  });
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [joinUrl, setJoinUrl] = useState('');
   const [hotelStatus, setHotelStatus] = useState(initialHotelStatus);
+  const [showForgotModal, setShowForgotModal] = useState(false);
+  const [showResetForm, setShowResetForm] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('reset') === '1';
+  });
 
   useEffect(() => {
     api('/api/auth/me')
@@ -154,6 +170,51 @@ export default function App() {
     }
   }
 
+  async function handleForgotPassword(event) {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    setMessage('');
+    try {
+      const data = await api('/api/auth/forgot-password', {
+        method: 'POST',
+        body: JSON.stringify(forgotForm)
+      });
+      setMessage(`${data.message} Check Mailpit at http://127.0.0.1:8025`);
+      setForgotForm(emptyForgot);
+      setShowForgotModal(false);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleResetPassword(event) {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    setMessage('');
+    try {
+      const data = await api('/api/auth/reset-password', {
+        method: 'POST',
+        body: JSON.stringify(resetForm)
+      });
+      setMessage(data.message || 'Password reset successful.');
+      setShowResetForm(false);
+      setResetForm(emptyReset);
+      const url = new URL(window.location.href);
+      url.searchParams.delete('reset');
+      url.searchParams.delete('token');
+      url.searchParams.delete('email');
+      window.history.replaceState({}, '', url);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <main className="page">
       <section className="card">
@@ -222,7 +283,47 @@ export default function App() {
               <button disabled={busy} type="submit">
                 {busy ? 'Please wait...' : 'Login'}
               </button>
+              <div className="login-help-row">
+                <button
+                  className="text-link"
+                  disabled={busy}
+                  onClick={() => setShowForgotModal(true)}
+                  type="button"
+                >
+                  Forgot password?
+                </button>
+              </div>
             </form>
+
+            {showResetForm && (
+              <form onSubmit={handleResetPassword}>
+                <h2>Reset password</h2>
+                <input
+                  placeholder="Email"
+                  type="email"
+                  required
+                  value={resetForm.email}
+                  onChange={(e) => setResetForm((s) => ({ ...s, email: e.target.value }))}
+                />
+                <input
+                  placeholder="Reset token"
+                  required
+                  value={resetForm.token}
+                  onChange={(e) => setResetForm((s) => ({ ...s, token: e.target.value }))}
+                />
+                <input
+                  placeholder="New password"
+                  type="password"
+                  minLength={8}
+                  required
+                  value={resetForm.password}
+                  onChange={(e) => setResetForm((s) => ({ ...s, password: e.target.value }))}
+                />
+                <button disabled={busy} type="submit">
+                  {busy ? 'Please wait...' : 'Reset password'}
+                </button>
+              </form>
+            )}
           </div>
         ) : (
           <div className="dashboard">
@@ -275,6 +376,32 @@ export default function App() {
           </div>
         )}
       </section>
+
+      {showForgotModal && (
+        <div className="modal-overlay" onClick={() => setShowForgotModal(false)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <h2>Forgot password</h2>
+            <p className="muted small">Enter your account email to receive a reset link (Mailpit).</p>
+            <form onSubmit={handleForgotPassword}>
+              <input
+                placeholder="Email"
+                type="email"
+                required
+                value={forgotForm.email}
+                onChange={(e) => setForgotForm((s) => ({ ...s, email: e.target.value }))}
+              />
+              <div className="modal-actions">
+                <button className="ghost" disabled={busy} onClick={() => setShowForgotModal(false)} type="button">
+                  Cancel
+                </button>
+                <button disabled={busy} type="submit">
+                  {busy ? 'Please wait...' : 'Send reset link'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

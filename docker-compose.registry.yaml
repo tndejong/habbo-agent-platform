@@ -75,6 +75,15 @@ services:
     networks:
       nitro:
 
+  mailpit:
+    container_name: mailpit
+    image: axllent/mailpit:latest
+    ports:
+      - 127.0.0.1:${HABBO_MAILPIT_SMTP_PORT:-1025}:1025
+      - 127.0.0.1:${HABBO_MAILPIT_UI_PORT:-8025}:8025
+    networks:
+      nitro:
+
   agent-portal:
     container_name: agent-portal
     build:
@@ -85,11 +94,17 @@ services:
       - HABBO_HEALTHCHECK_URL=${HABBO_PORTAL_HEALTHCHECK_URL:-http://nitro:5154}
       - PORTAL_JWT_SECRET=${HABBO_PORTAL_JWT_SECRET:-change-this-in-production}
       - PORTAL_COOKIE_SECURE=${HABBO_PORTAL_COOKIE_SECURE:-false}
+      - PORTAL_PUBLIC_URL=${HABBO_PORTAL_PUBLIC_URL:-http://127.0.0.1:${HABBO_PORTAL_PORT:-3090}}
       - PORTAL_BOOTSTRAP_ENABLED=${HABBO_PORTAL_BOOTSTRAP_ENABLED:-true}
       - PORTAL_BOOTSTRAP_EMAIL=${HABBO_PORTAL_BOOTSTRAP_EMAIL:-systemaccount@hotel.local}
       - PORTAL_BOOTSTRAP_USERNAME=${HABBO_PORTAL_BOOTSTRAP_USERNAME:-Systemaccount}
       - PORTAL_BOOTSTRAP_PASSWORD=${HABBO_PORTAL_BOOTSTRAP_PASSWORD:-ChangeMeNow123!}
       - PORTAL_BOOTSTRAP_HABBO_USERNAME=${HABBO_PORTAL_BOOTSTRAP_HABBO_USERNAME:-Systemaccount}
+      - PORTAL_RESET_TOKEN_TTL_MINUTES=${HABBO_PORTAL_RESET_TOKEN_TTL_MINUTES:-30}
+      - PORTAL_SMTP_HOST=${HABBO_PORTAL_SMTP_HOST:-mailpit}
+      - PORTAL_SMTP_PORT=${HABBO_PORTAL_SMTP_PORT:-1025}
+      - PORTAL_SMTP_SECURE=${HABBO_PORTAL_SMTP_SECURE:-false}
+      - PORTAL_SMTP_FROM=${HABBO_PORTAL_SMTP_FROM:-Agent Hotel <no-reply@hotel.local>}
       - DB_HOST=mysql
       - DB_PORT=3306
       - DB_NAME=arcturus
@@ -97,6 +112,25 @@ services:
       - DB_PASSWORD=arcturus_pw
     ports:
       - ${HABBO_PORTAL_PORT:-3090}:3000
+    depends_on:
+      - mysql
+      - mailpit
+    networks:
+      nitro:
+
+  habbo-ai-service:
+    container_name: habbo-ai-service
+    image: ghcr.io/${HABBO_OWNER_OR_ORG}/habbo-ai-service:latest
+    restart: unless-stopped
+    environment:
+      - AI_SERVICE_PORT=3002
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_NAME=arcturus
+      - DB_USER=arcturus_user
+      - DB_PASSWORD=arcturus_pw
+    ports:
+      - "127.0.0.1:${HABBO_AI_SERVICE_PORT:-3002}:3002"
     depends_on:
       - mysql
     networks:

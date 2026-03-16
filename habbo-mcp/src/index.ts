@@ -1,6 +1,5 @@
 import 'dotenv/config';
 import { startServer } from './server.js';
-import { startAgentHotelSync } from './sync/agentHotelSync.js';
 import { startSshTunnelIfEnabled } from './sshTunnel.js';
 
 async function bootstrap(): Promise<void> {
@@ -22,7 +21,6 @@ async function bootstrap(): Promise<void> {
     process.exit(0);
   });
 
-  startAgentHotelSync();
   await startServer();
 }
 

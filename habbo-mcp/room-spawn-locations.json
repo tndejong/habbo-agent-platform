@@ -1,0 +1,33 @@
+{
+  "rooms": {
+    "201": {
+      "name": "Kantoor",
+      "spawn_points": {
+        "main_seat": {
+          "x": 6,
+          "y": 14,
+          "label": "Main seat",
+          "figure_type": "agent-v2",
+          "freeroam": false,
+          "canwalk": false
+        },
+        "desk_seat_1": {
+          "x": 9,
+          "y": 8,
+          "label": "Desk seat 1",
+          "figure_type": "agent-v2",
+          "freeroam": false,
+          "canwalk": false
+        },
+        "desk_seat_2": {
+          "x": 9,
+          "y": 2,
+          "label": "Desk seat 2",
+          "figure_type": "agent-v2",
+          "freeroam": false,
+          "canwalk": false
+        }
+      }
+    }
+  }
+}

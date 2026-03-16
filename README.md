@@ -9,6 +9,8 @@
 
 A fully self-hosted Habbo Hotel with an MCP bridge — so your AI agents can walk into the hotel, spawn new avatars, chat with guests, teleport between rooms, and run experiments in a live virtual world.
 
+**Featured package: Hotel → Agent.** The hotel initiates the conversation: in-game users talk to AI bots in rooms; the emulator calls the AI service and streams replies back into the hotel. You can still use **Agent → Hotel** (external MCP clients controlling the hotel) alongside it.
+
 Built on **Arcturus Morningstar** (Java) + **Nitro React** (TypeScript), extended with an MCP server that connects any MCP-compatible platform directly to the running hotel.
 Includes a lightweight **Agent Hotel Portal MVP** (React + Node) for register/login and one-click SSO join.
 
@@ -20,6 +22,9 @@ Includes a lightweight **Agent Hotel Portal MVP** (React + Node) for register/lo
 - [About](#about)
 - [Visuals](#visuals)
 - [Features](#features)
+  - [MCP tools](#mcp-tools-what-your-mcp-client-can-do)
+  - [Figure types](#figure-types)
+  - [Room spawn locations](#room-spawn-locations)
 - [Prerequisites](#prerequisites)
 - [Setup Wizard (Recommended)](#setup-wizard-recommended)
 - [Quick Start with Docker](#quick-start-with-docker)
@@ -77,6 +82,8 @@ Claude Code is supported, but not required.
 
 ### MCP tools (what your MCP client can do)
 
+All tools accept an optional `api_key` parameter. When omitted, the server falls back to the `MCP_API_KEY` environment variable automatically.
+
 | Tool | What it does | Requires player online? |
 |------|-------------|------------------------|
 | `create_habbo_player` | Spawn a new avatar and get a login URL | No |
@@ -84,11 +91,54 @@ Claude Code is supported, but not required.
 | `talk_as_player` | Make an avatar talk, whisper, or shout | Yes |
 | `move_player_to_room` | Teleport an avatar to any room | Yes |
 | `give_credits` | Hand out in-game currency | Yes |
+| `give_pixels` | Give pixels/duckets to a player | Yes |
+| `give_diamonds` | Give diamonds/points to a player | Yes |
+| `give_badge` | Give a badge to a player by badge code | No |
 | `alert_player` | Send a pop-up message to a player | Yes |
 | `set_player_motto` | Update an avatar's profile tagline | Yes |
+| `set_rank` | Set a player's rank/permission level (1–9) | No |
+| `kick_player` | Disconnect a player from the hotel | Yes |
+| `mute_player` | Mute a player for a given duration | Yes |
 | `get_online_players` | See who's in the hotel right now | No |
 | `get_room_chat_log` | Read recent chat from any room | No |
 | `hotel_alert` | Broadcast a message to everyone online | No |
+| `deploy_bot` | Spawn an NPC bot in a room (supports `freeroam` toggle) | No |
+| `talk_bot` | Make a deployed bot say something | Room must be loaded |
+| `list_bots` | List all NPC bots in the hotel | No |
+| `delete_bot` | Remove an NPC bot by ID | No |
+| `validate_figure` | Validate a figure string against live figuredata | No |
+| `register_figure_type` | Save a validated figure as a reusable type key | No |
+| `list_figure_types` | List all builtin + custom figure type keys | No |
+
+### Figure types
+
+Bots can be deployed with a `figure_type` key instead of a raw figure string. Three builtins are included:
+
+| Key | Description |
+|-----|-------------|
+| `default` | Basic avatar (shirt, pants, shoes) |
+| `citizen` | Default avatar with hat and hair |
+| `agent` | Full agent look with accessories |
+
+Create custom figure types with `register_figure_type`. They are validated against the hotel's `figuredata.xml` and stored in `~/.cursor/habbo-mcp-figure-types.json`. Use `list_figure_types` to see all available keys.
+
+### Room spawn locations
+
+Named spawn positions for bot deployment are stored in `habbo-mcp/room-spawn-locations.json`. Use the `:coords` chat command in-game to find positions, then add them to the file:
+
+```json
+{
+  "rooms": {
+    "201": {
+      "name": "Kantoor",
+      "spawn_points": {
+        "main_seat": { "x": 6, "y": 14, "label": "Main seat", "freeroam": false },
+        "desk_seat_1": { "x": 9, "y": 8, "label": "Desk seat 1", "freeroam": false }
+      }
+    }
+  }
+}
+```
 
 ---
 
@@ -198,7 +248,7 @@ just up
 Without `just`:
 
 ```bash
-docker compose --env-file .env.registry -f docker-compose.registry.yaml -f docker-compose.local.yaml up -d
+docker compose --env-file .env.registry -f docker-compose.registry.yaml up -d
 ```
 
 Production/image-only mode:
@@ -237,6 +287,7 @@ What it does:
 - Create and link a Habbo user account in the same database
 - Keep a portal session (cookie-based auth)
 - Generate a fresh SSO login URL via a "Join Hotel" button
+- Forgot password flow with reset link via email token
 
 Open the portal:
 
@@ -249,12 +300,24 @@ HABBO_PORTAL_PORT=3090
 HABBO_PORTAL_BASE_URL=http://127.0.0.1:1080
 HABBO_PORTAL_JWT_SECRET=change-this-in-production
 HABBO_PORTAL_COOKIE_SECURE=false
+HABBO_PORTAL_PUBLIC_URL=http://127.0.0.1:3090
 HABBO_PORTAL_BOOTSTRAP_ENABLED=true
 HABBO_PORTAL_BOOTSTRAP_EMAIL=systemaccount@hotel.local
 HABBO_PORTAL_BOOTSTRAP_USERNAME=Systemaccount
 HABBO_PORTAL_BOOTSTRAP_PASSWORD=ChangeMeNow123!
 HABBO_PORTAL_BOOTSTRAP_HABBO_USERNAME=Systemaccount
+HABBO_PORTAL_RESET_TOKEN_TTL_MINUTES=30
+HABBO_PORTAL_SMTP_HOST=mailpit
+HABBO_PORTAL_SMTP_PORT=1025
+HABBO_PORTAL_SMTP_SECURE=false
+HABBO_PORTAL_SMTP_FROM=Agent Hotel <no-reply@hotel.local>
+HABBO_MAILPIT_SMTP_PORT=1025
+HABBO_MAILPIT_UI_PORT=8025
 ```
+
+Mailpit web UI (local):
+
+- [http://127.0.0.1:8025](http://127.0.0.1:8025)
 
 For production, set a strong `HABBO_PORTAL_JWT_SECRET` and use `HABBO_PORTAL_COOKIE_SECURE=true` behind HTTPS.
 Also change `HABBO_PORTAL_BOOTSTRAP_PASSWORD` after first login.
@@ -470,26 +533,21 @@ The MCP client will call `hotel_alert` with your message.
 
 ## Hook compatibility
 
-Hooks are not limited to Cursor or Claude Code. They can work with any MCP-capable setup that can invoke the hook script and/or provide transcript files.
+Hooks spawn and manage NPC bots in the hotel in response to Cursor agent events (session start/stop, tool calls, subagent lifecycle). They work with any MCP-capable setup that can invoke the hook script.
 
-- Base event hook script: `habbo-mcp/src/hooks/habboAgentHook.ts`
-- Optional transcript sync loop: enabled with `AUTO_AGENT_SYNC=true`
+- Hook script: `habbo-mcp/src/hooks/habboAgentHook.ts`
+- Toggle: `HABBO_HOOK_ENABLED=true` in `habbo-mcp/.env`
 
-Important defaults:
-- Transcript sync defaults to `~/.cursor/projects` (Cursor-style transcript location).
-- If you use a different platform, set `SYNC_TRANSCRIPTS_ROOT` to your transcript root path.
-- You can also override checkpoint/lock files with `SYNC_CHECKPOINT_FILE` and `SYNC_LOCK_FILE`.
+Set `HABBO_HOOK_ENABLED=false` to disable all hook-driven bot spawning.
 
-Example for non-Cursor transcript locations:
+Optional hook env vars:
 
 ```bash
-AUTO_AGENT_SYNC=true
-SYNC_TRANSCRIPTS_ROOT=/path/to/your/transcripts/root
-SYNC_CHECKPOINT_FILE=/path/to/.habbo-sync-checkpoint.json
-SYNC_LOCK_FILE=/path/to/.habbo-sync.lock
+HABBO_HOOK_ENABLED=true
+HABBO_HOOK_OPERATOR_USERNAME=Systemaccount
+HABBO_HOOK_SPAWN_X=5
+HABBO_HOOK_SPAWN_Y=5
 ```
-
-If `AUTO_AGENT_SYNC` is `false` (default), none of these transcript paths are required.
 
 ---
 
@@ -501,7 +559,7 @@ just preflight           # Validate env, ports, subnet, SSH assumptions
 just smoke               # End-to-end runtime smoke test
 just doctor              # preflight + smoke in one command
 just quick-start         # up + doctor
-just up                  # Start local/dev stack (.registry + .local override)
+just up                  # Start stack (GHCR images + registry compose)
 just up-registry         # Start image-only stack (production style)
 just down                # Stop registry stack
 just down-registry       # Stop image-only stack
@@ -519,19 +577,22 @@ just mysql               # Open MySQL shell in running mysql container
 
 ## Architecture
 
+**Hotel → Agent (featured):** In-game users chat in rooms; Arcturus talks to `habbo-ai-service`; AI replies are shown as bot messages in the hotel.
+
+**Agent → Hotel:** External MCP clients use `habbo-mcp` to control the hotel (spawn avatars, deploy bots, etc.).
+
 ```
-You (MCP-compatible client)
-      │
-      │  MCP protocol (stdio)
-      ▼
-habbo-mcp/              (Node.js + TypeScript, runs on host)
-      │
-      ├── RCON TCP :3001 ──► Arcturus Java Server :3000
+You (MCP-compatible client)                    In-game user (browser)
+      │                                                │
+      │  MCP protocol (stdio)                          │  chat in room
+      ▼                                                ▼
+habbo-mcp/              (Node.js + TypeScript)    Nitro React :1080
+      │                                                │
+      ├── RCON TCP :3001 ──► Arcturus Java Server :3000 ◄───┘
       │                            │
-      └── MySQL :13306  ──────────┘
+      └── MySQL :13306  ────────────┤
                                    │
-                            Nitro React :1080
-                         (browser-based client)
+                            habbo-ai-service (Hotel → Agent: in-room AI bots)
 ```
 
 The MCP server is a lightweight Node.js process your MCP client launches (or connects to). It never runs inside Docker — it just connects to the already-mapped ports.
@@ -572,25 +633,31 @@ Set `MCP_API_KEY` in the environment config used by your MCP client for the `hab
 
 ```
 habbo-agent-platform/
-├── README.md             # This file
-├── docker-compose.registry.yaml
-├── docker-compose.local.yaml   # Local/dev overrides
-├── portal/               # Agent Hotel Portal (React + Node API)
-├── habbo-mcp/            # MCP server (TypeScript)
+├── README.md
+├── docker-compose.registry.yaml  # GHCR images (arcturus, nitro, habbo-ai-service)
+├── docker-compose.yaml           # Local build with bind mounts (dev)
+├── portal/                       # Agent Hotel Portal (React + Node API)
+├── habbo-mcp/                    # MCP server (TypeScript)
 │   ├── src/
-│   │   ├── index.ts      # Entry point
-│   │   ├── server.ts     # MCP tool definitions
-│   │   ├── rcon.ts       # RCON TCP client
-│   │   ├── db.ts         # MySQL helpers
-│   │   └── tools/        # One file per MCP tool
-│   ├── .env.example      # Config template
+│   │   ├── index.ts              # Entry point
+│   │   ├── server.ts             # MCP tool definitions + schemas
+│   │   ├── auth.ts               # API key validation (auto-resolves from env)
+│   │   ├── rcon.ts               # RCON TCP client
+│   │   ├── db.ts                 # MySQL helpers
+│   │   ├── tools/                # One file per MCP tool
+│   │   │   ├── deployBot.ts      # Bot deploy (with freeroam support)
+│   │   │   ├── figureTypes.ts    # Figure validation + custom type registry
+│   │   │   └── ...               # Other tools
+│   │   └── hooks/
+│   │       └── habboAgentHook.ts # Event hook (bot spawn on agent events)
+│   ├── room-spawn-locations.json # Named spawn positions per room
+│   ├── .env.example              # Config template
 │   └── package.json
-└── emulator/             # Hotel (source build stack)
-    ├── docker-compose.yaml
-    ├── justfile
-    ├── emulator/         # Arcturus Java server
-    ├── nitro/            # Nitro React client
-    └── mysql/            # MariaDB config + schema dumps
+└── emulator/                     # Hotel (source build stack)
+    ├── config.ini                # Emulator config (RCON allowed IPs, etc.)
+    ├── arcturus/                 # Arcturus Java server (with custom RCON commands)
+    ├── nitro/                    # Nitro React client
+    └── mysql/                    # MariaDB config + schema dumps
 ```
 
 ---

@@ -1,5 +1,3 @@
-version: '3.7'
-
 volumes:
   volume-mysql:
   volume-arcturus-maven-repo:
@@ -18,9 +16,9 @@ services:
       - volume-arcturus-target:/app/arcturus/target
       - volume-arcturus-maven-repo:/root/.m2
     ports:
-      - 3000:3000
-      - 127.0.0.1:3001:3001
-      - 2096:2096
+      - ${HABBO_GAME_PORT:-3000}:3000
+      - 127.0.0.1:${HABBO_RCON_PORT:-3001}:3001
+      - ${HABBO_WS_BIND_PORT:-2096}:2096
     depends_on:
       - mysql
     networks:
@@ -36,9 +34,9 @@ services:
       - volume-nitro-converter-node-modules:/app/nitro-converter/node_modules
       - volume-nitro-react-node-modules:/app/nitro-react/node_modules
     ports:
-      - 1080:5154
-      - 8080:8080
-      - 8081:8081
+      - ${HABBO_NITRO_BIND_PORT:-1080}:5154
+      - ${HABBO_ASSETS_BIND_PORT:-8080}:8080
+      - ${HABBO_SWF_BIND_PORT:-8081}:8081
     networks:
       nitro:
 
@@ -56,7 +54,70 @@ services:
       - ./mysql/conf.d:/etc/mysql/conf.d
       - ./mysql/dumps:/docker-entrypoint-initdb.d
     ports:
-      - 13306:3306
+      - 127.0.0.1:${HABBO_DB_PORT:-13306}:3306
+    networks:
+      nitro:
+
+  mailpit:
+    container_name: mailpit
+    image: axllent/mailpit:latest
+    ports:
+      - 127.0.0.1:${HABBO_MAILPIT_SMTP_PORT:-1025}:1025
+      - 127.0.0.1:${HABBO_MAILPIT_UI_PORT:-8025}:8025
+    networks:
+      nitro:
+
+  agent-portal:
+    container_name: agent-portal
+    build:
+      context: ./portal
+    environment:
+      - PORT=3000
+      - HABBO_BASE_URL=${HABBO_PORTAL_BASE_URL:-http://127.0.0.1:1080}
+      - HABBO_HEALTHCHECK_URL=${HABBO_PORTAL_HEALTHCHECK_URL:-http://nitro:5154}
+      - PORTAL_JWT_SECRET=${HABBO_PORTAL_JWT_SECRET:-change-this-in-production}
+      - PORTAL_COOKIE_SECURE=${HABBO_PORTAL_COOKIE_SECURE:-false}
+      - PORTAL_PUBLIC_URL=${HABBO_PORTAL_PUBLIC_URL:-http://127.0.0.1:3090}
+      - PORTAL_BOOTSTRAP_ENABLED=${HABBO_PORTAL_BOOTSTRAP_ENABLED:-true}
+      - PORTAL_BOOTSTRAP_EMAIL=${HABBO_PORTAL_BOOTSTRAP_EMAIL:-systemaccount@hotel.local}
+      - PORTAL_BOOTSTRAP_USERNAME=${HABBO_PORTAL_BOOTSTRAP_USERNAME:-Systemaccount}
+      - PORTAL_BOOTSTRAP_PASSWORD=${HABBO_PORTAL_BOOTSTRAP_PASSWORD:-ChangeMeNow123!}
+      - PORTAL_BOOTSTRAP_HABBO_USERNAME=${HABBO_PORTAL_BOOTSTRAP_HABBO_USERNAME:-Systemaccount}
+      - PORTAL_RESET_TOKEN_TTL_MINUTES=${HABBO_PORTAL_RESET_TOKEN_TTL_MINUTES:-30}
+      - PORTAL_SMTP_HOST=${HABBO_PORTAL_SMTP_HOST:-mailpit}
+      - PORTAL_SMTP_PORT=${HABBO_PORTAL_SMTP_PORT:-1025}
+      - PORTAL_SMTP_SECURE=${HABBO_PORTAL_SMTP_SECURE:-false}
+      - PORTAL_SMTP_FROM=${HABBO_PORTAL_SMTP_FROM:-Agent Hotel <no-reply@hotel.local>}
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_NAME=arcturus
+      - DB_USER=arcturus_user
+      - DB_PASSWORD=arcturus_pw
+    ports:
+      - ${HABBO_PORTAL_PORT:-3090}:3000
+    depends_on:
+      - mysql
+      - mailpit
+    networks:
+      nitro:
+
+  habbo-ai-service:
+    container_name: habbo-ai-service
+    build:
+      context: ./habbo-ai-service
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - AI_SERVICE_PORT=3002
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_NAME=arcturus
+      - DB_USER=arcturus_user
+      - DB_PASSWORD=arcturus_pw
+    ports:
+      - "127.0.0.1:${HABBO_AI_SERVICE_PORT:-3002}:3002"
+    depends_on:
+      - mysql
     networks:
       nitro:
 
@@ -64,4 +125,4 @@ networks:
   nitro:
     ipam:
       config:
-        - subnet: 172.20.0.0/16
+        - subnet: ${HABBO_DOCKER_SUBNET:-172.20.0.0/16}

@@ -401,7 +401,7 @@ if [ "$SETUP_MODE" = "1" ]; then
     printf "  2) just doctor\n"
     printf "  3) (optional) just quick-start  # up + doctor\n"
   else
-    printf "  1) docker compose --env-file .env.registry -f docker-compose.registry.yaml -f docker-compose.local.yaml up -d\n"
+    printf "  1) docker compose --env-file .env.registry -f docker-compose.registry.yaml up -d\n"
     printf "  2) bash scripts/preflight.sh\n"
     printf "  3) bash scripts/smoke-test.sh\n"
   fi
