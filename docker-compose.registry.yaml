@@ -13,7 +13,7 @@ services:
       - HABBO_SQL_BASE_URL=${HABBO_SQL_BASE_URL:-https://raw.githubusercontent.com/tndejong/habbo-agent-platform/main/mysql/dumps}
       - HABBO_SQL_BASE_FILE=${HABBO_SQL_BASE_FILE:-arcturus_3.0.0-stable_base_database--compact.sql}
       - HABBO_SQL_MIGRATION_FILE=${HABBO_SQL_MIGRATION_FILE:-arcturus_migration_3.0.0_to_3.5.0.sql}
-      - RCON_ALLOWED=${HABBO_RCON_ALLOWED:-127.0.0.1;172.16.0.0/12}
+      - RCON_ALLOWED=${HABBO_RCON_ALLOWED:-127.0.0.1}
     ports:
       - ${HABBO_GAME_PORT:-3000}:3000
       - 127.0.0.1:${HABBO_RCON_PORT:-3001}:3001
