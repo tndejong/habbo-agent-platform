@@ -103,3 +103,25 @@ jobs:
           cache-to: type=gha,mode=max,scope=habbo-ai-service
           tags: ${{ steps.meta_ai_service.outputs.tags }}
           labels: ${{ steps.meta_ai_service.outputs.labels }}
+
+      - name: Extract metadata (habbo-mcp)
+        id: meta_mcp
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/habbo-mcp
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=tag
+            type=sha
+
+      - name: Build and push habbo-mcp image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./habbo-mcp
+          file: ./habbo-mcp/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha,scope=habbo-mcp
+          cache-to: type=gha,mode=max,scope=habbo-mcp
+          tags: ${{ steps.meta_mcp.outputs.tags }}
+          labels: ${{ steps.meta_mcp.outputs.labels }}

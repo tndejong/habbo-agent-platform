@@ -33,6 +33,8 @@ const PORTAL_SMTP_SECURE = process.env.PORTAL_SMTP_SECURE === 'true';
 const PORTAL_SMTP_USER = (process.env.PORTAL_SMTP_USER || '').trim();
 const PORTAL_SMTP_PASS = process.env.PORTAL_SMTP_PASS || '';
 const PORTAL_SMTP_FROM = (process.env.PORTAL_SMTP_FROM || 'Agent Hotel <no-reply@hotel.local>').trim();
+const PORTAL_MCP_TOKEN_TTL_DAYS = Number.parseInt(process.env.PORTAL_MCP_TOKEN_TTL_DAYS || '365', 10);
+const PORTAL_MCP_DEFAULT_TENANT = (process.env.PORTAL_MCP_DEFAULT_TENANT || 'default').trim();
 
 const db = mysql.createPool({
   host: process.env.DB_HOST || 'mysql',
@@ -73,6 +75,17 @@ function authRequired(req, res, next) {
     return next();
   } catch {
     return res.status(401).json({ error: 'Session expired' });
+  }
+}
+
+function getSessionUser(req) {
+  const token = req.cookies.agent_portal_session;
+  if (!token) return null;
+
+  try {
+    return jwt.verify(token, JWT_SECRET);
+  } catch {
+    return null;
   }
 }
 
@@ -150,6 +163,63 @@ async function ensurePortalSchema() {
         ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
+
+  await db.execute(`
+    ALTER TABLE portal_users
+      ADD COLUMN IF NOT EXISTS ai_tier ENUM('basic', 'pro', 'enterprise') NOT NULL DEFAULT 'basic'
+      AFTER habbo_username;
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS portal_mcp_tokens (
+      id BIGINT NOT NULL AUTO_INCREMENT,
+      portal_user_id INT NOT NULL,
+      tenant_id VARCHAR(64) NOT NULL DEFAULT 'default',
+      plan_tier ENUM('pro', 'enterprise') NOT NULL DEFAULT 'pro',
+      scopes_json JSON NULL,
+      token_hash CHAR(64) NOT NULL,
+      token_label VARCHAR(64) NOT NULL DEFAULT '',
+      status ENUM('active', 'revoked') NOT NULL DEFAULT 'active',
+      expires_at DATETIME NOT NULL,
+      last_used_at DATETIME NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_portal_mcp_token_hash (token_hash),
+      KEY idx_portal_mcp_tokens_user (portal_user_id),
+      KEY idx_portal_mcp_tokens_status (status),
+      CONSTRAINT fk_portal_mcp_tokens_user
+        FOREIGN KEY (portal_user_id) REFERENCES portal_users(id)
+        ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS portal_mcp_call_logs (
+      id BIGINT NOT NULL AUTO_INCREMENT,
+      token_id BIGINT NULL,
+      portal_user_id INT NULL,
+      habbo_user_id INT NULL,
+      tenant_id VARCHAR(64) NOT NULL DEFAULT 'default',
+      channel VARCHAR(32) NOT NULL DEFAULT 'unknown',
+      plan_tier VARCHAR(32) NOT NULL DEFAULT 'unknown',
+      tool_name VARCHAR(128) NOT NULL,
+      args_redacted_json JSON NULL,
+      success TINYINT(1) NOT NULL DEFAULT 0,
+      error_code VARCHAR(64) NULL,
+      duration_ms INT NOT NULL DEFAULT 0,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_portal_mcp_calls_user (portal_user_id),
+      KEY idx_portal_mcp_calls_token (token_id),
+      KEY idx_portal_mcp_calls_created (created_at),
+      CONSTRAINT fk_portal_mcp_calls_token
+        FOREIGN KEY (token_id) REFERENCES portal_mcp_tokens(id)
+        ON DELETE SET NULL,
+      CONSTRAINT fk_portal_mcp_calls_user
+        FOREIGN KEY (portal_user_id) REFERENCES portal_users(id)
+        ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
 }
 
 function sha256(input) {
@@ -158,6 +228,23 @@ function sha256(input) {
 
 function createPasswordResetToken() {
   return crypto.randomBytes(32).toString('hex');
+}
+
+function createMcpToken() {
+  return `mcp_${crypto.randomBytes(24).toString('hex')}`;
+}
+
+function maskTokenPreview(token) {
+  if (!token || token.length < 10) return '********';
+  return `${token.slice(0, 8)}...${token.slice(-4)}`;
+}
+
+async function getPortalUserByHabboUserId(habboUserId) {
+  const [rows] = await db.execute(
+    'SELECT id, email, username, habbo_user_id, habbo_username, ai_tier FROM portal_users WHERE habbo_user_id = ? LIMIT 1',
+    [habboUserId]
+  );
+  return rows[0] || null;
 }
 
 async function sendPasswordResetEmail({ toEmail, username, resetUrl }) {
@@ -319,7 +406,7 @@ app.post('/api/auth/register', async (req, res) => {
 
     return res.json({
       ok: true,
-      user: { email, username, habbo_username: habboUser.username }
+      user: { email, username, habbo_username: habboUser.username, ai_tier: 'basic' }
     });
   } catch (err) {
     return res.status(500).json({ error: err instanceof Error ? err.message : 'Registration failed' });
@@ -334,7 +421,7 @@ app.post('/api/auth/login', async (req, res) => {
   }
 
   const [rows] = await db.execute(
-    `SELECT id, email, username, password_hash, habbo_user_id, habbo_username
+    `SELECT id, email, username, password_hash, habbo_user_id, habbo_username, ai_tier
      FROM portal_users
      WHERE email = ? OR username = ?
      LIMIT 1`,
@@ -362,7 +449,8 @@ app.post('/api/auth/login', async (req, res) => {
     user: {
       email: user.email,
       username: user.username,
-      habbo_username: user.habbo_username
+      habbo_username: user.habbo_username,
+      ai_tier: user.ai_tier || 'basic'
     }
   });
 });
@@ -464,14 +552,144 @@ app.post('/api/auth/logout', (_req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/auth/me', authRequired, (req, res) => {
+app.get('/api/auth/me', authRequired, async (req, res) => {
+  const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
+
   res.json({
     ok: true,
     user: {
       email: req.user.email,
       username: req.user.username,
-      habbo_username: req.user.habbo_username
+      habbo_username: req.user.habbo_username,
+      ai_tier: portalUser?.ai_tier || 'basic'
     }
+  });
+});
+
+app.get('/api/mcp/tokens', authRequired, async (req, res) => {
+  const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
+  if (!portalUser) {
+    return res.status(404).json({ error: 'Portal user not found' });
+  }
+
+  const [rows] = await db.execute(
+    `SELECT id, tenant_id, plan_tier, token_label, status, expires_at, last_used_at, created_at
+     FROM portal_mcp_tokens
+     WHERE portal_user_id = ?
+     ORDER BY created_at DESC`,
+    [portalUser.id]
+  );
+
+  return res.json({
+    ok: true,
+    tier: portalUser.ai_tier,
+    tokens: rows.map((row) => ({
+      id: row.id,
+      tenant_id: row.tenant_id,
+      plan_tier: row.plan_tier,
+      token_label: row.token_label || '',
+      status: row.status,
+      expires_at: row.expires_at,
+      last_used_at: row.last_used_at,
+      created_at: row.created_at
+    }))
+  });
+});
+
+app.post('/api/mcp/tokens', authRequired, async (req, res) => {
+  const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
+  if (!portalUser) {
+    return res.status(404).json({ error: 'Portal user not found' });
+  }
+  if (portalUser.ai_tier === 'basic') {
+    return res.status(403).json({ error: 'MCP is available on Pro tier only' });
+  }
+
+  const label = String(req.body?.label || '').trim().slice(0, 64);
+  const ttlDays = Number.parseInt(req.body?.ttl_days || PORTAL_MCP_TOKEN_TTL_DAYS, 10);
+  const safeTtlDays = Number.isFinite(ttlDays) ? Math.max(1, Math.min(3650, ttlDays)) : PORTAL_MCP_TOKEN_TTL_DAYS;
+  const token = createMcpToken();
+  const tokenHash = sha256(token);
+  const expiresAt = new Date(Date.now() + safeTtlDays * 24 * 60 * 60 * 1000);
+  const planTier = portalUser.ai_tier === 'enterprise' ? 'enterprise' : 'pro';
+  const scopes = planTier === 'enterprise' ? ['*'] : [];
+
+  const [result] = await db.execute(
+    `INSERT INTO portal_mcp_tokens
+      (portal_user_id, tenant_id, plan_tier, scopes_json, token_hash, token_label, expires_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      portalUser.id,
+      PORTAL_MCP_DEFAULT_TENANT,
+      planTier,
+      JSON.stringify(scopes),
+      tokenHash,
+      label,
+      expiresAt
+    ]
+  );
+
+  return res.json({
+    ok: true,
+    token: {
+      id: result.insertId,
+      value: token,
+      preview: maskTokenPreview(token),
+      token_label: label,
+      plan_tier: planTier,
+      tenant_id: PORTAL_MCP_DEFAULT_TENANT,
+      expires_at: expiresAt
+    }
+  });
+});
+
+app.delete('/api/mcp/tokens/:id', authRequired, async (req, res) => {
+  const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
+  if (!portalUser) {
+    return res.status(404).json({ error: 'Portal user not found' });
+  }
+
+  const tokenId = Number.parseInt(req.params.id, 10);
+  if (!Number.isFinite(tokenId) || tokenId <= 0) {
+    return res.status(400).json({ error: 'Invalid token ID' });
+  }
+
+  const [result] = await db.execute(
+    `UPDATE portal_mcp_tokens
+     SET status = 'revoked'
+     WHERE id = ? AND portal_user_id = ?
+     LIMIT 1`,
+    [tokenId, portalUser.id]
+  );
+
+  if (!result.affectedRows) {
+    return res.status(404).json({ error: 'Token not found' });
+  }
+
+  return res.json({ ok: true });
+});
+
+app.get('/api/mcp/calls', authRequired, async (req, res) => {
+  const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
+  if (!portalUser) {
+    return res.status(404).json({ error: 'Portal user not found' });
+  }
+
+  const limit = Number.parseInt(req.query.limit || '50', 10);
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(200, limit)) : 50;
+
+  const [rows] = await db.execute(
+    `SELECT id, token_id, tenant_id, channel, plan_tier, tool_name, success, error_code, duration_ms, created_at
+     FROM portal_mcp_call_logs
+     WHERE portal_user_id = ?
+     ORDER BY created_at DESC
+     LIMIT ?`,
+    [portalUser.id, safeLimit]
+  );
+
+  return res.json({
+    ok: true,
+    calls: rows
   });
 });
 
@@ -484,9 +702,33 @@ app.post('/api/hotel/join', authRequired, async (req, res) => {
   });
 });
 
+const indexPath = path.join(__dirname, 'dist/index.html');
+
+app.get('/', (req, res) => {
+  const sessionUser = getSessionUser(req);
+  const suffix = req.originalUrl.includes('?') ? req.originalUrl.slice(req.originalUrl.indexOf('?')) : '';
+  return res.redirect(`${sessionUser ? '/app' : '/login'}${suffix}`);
+});
+
+app.get('/login', (req, res) => {
+  const sessionUser = getSessionUser(req);
+  if (sessionUser) {
+    return res.redirect('/app');
+  }
+  return res.sendFile(indexPath);
+});
+
+app.get('/app', (req, res) => {
+  const sessionUser = getSessionUser(req);
+  if (!sessionUser) {
+    return res.redirect('/login');
+  }
+  return res.sendFile(indexPath);
+});
+
 app.use(express.static(path.join(__dirname, 'dist')));
 app.get('*', (_req, res) => {
-  res.sendFile(path.join(__dirname, 'dist/index.html'));
+  res.redirect('/login');
 });
 
 ensurePortalSchema()

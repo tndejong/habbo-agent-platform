@@ -1,5 +1,6 @@
 import './loadEnv.js';
-import { startServer } from './server.js';
+import { getConfig } from './config.js';
+import { startHttpServer, startStdioServer } from './server.js';
 import { startSshTunnelIfEnabled } from './sshTunnel.js';
 
 async function bootstrap(): Promise<void> {
@@ -21,7 +22,15 @@ async function bootstrap(): Promise<void> {
     process.exit(0);
   });
 
-  await startServer();
+  const cfg = getConfig();
+
+  if ((cfg.transport === 'stdio') || (cfg.transport === 'both')) {
+    await startStdioServer();
+  }
+
+  if ((cfg.transport === 'http') || (cfg.transport === 'both')) {
+    await startHttpServer();
+  }
 }
 
 bootstrap().catch((err) => {

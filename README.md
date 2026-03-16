@@ -127,7 +127,12 @@ In-hotel AI agent commands:
 - `:set_ai_key <api_key> [provider]` — verify and store your AI provider key (defaults to `anthropic`)
 - `:setup_agent <name> [type:<figure_type>] <persona...>` — create an AI agent bot in your current room
 - `:remove_agent <name|all>` — remove one of your AI bots in the room, or all of them
+- `:ai_duet <bot_a> <bot_b> [turns:<2-20>] <topic...>` — start a turn-based conversation between two of your AI bots
+- `:ai_stop` — stop your active bot-to-bot conversation in the current room
 - `:setup_agent` prefers the tile you are facing first (including chairs), then falls back to nearby free tiles
+
+With these commands, you can manage your hotel room using smart bots that behave like regular Habbo bots, but can also talk with you and answer questions. Each agent uses the API key you set with `:set_ai_key` (Anthropic or OpenAI), so the AI usage is tied to your own key.
+You can launch the same flows from the in-hotel AI modal (open with `:ai` or via Mod Tools -> AI Agent Tool), including starting/stopping bot-to-bot conversations.
 
 In-hotel `:setup_agent` supports figure types:
 - `default`, `citizen`, `agent`, `bouncer`, `m-employee`
@@ -141,6 +146,8 @@ Rank 7 admin in-chat examples:
 :setup_agent BouncerBob type:bouncer Keep this room safe, welcome visitors, and answer simple questions
 :remove_agent Aria
 :remove_agent all
+:ai_duet Bob Bas turns:8 Heb een gesprek over muizen en stel elkaar vragen
+:ai_stop
 ```
 
 Chair spawn tip for admins:

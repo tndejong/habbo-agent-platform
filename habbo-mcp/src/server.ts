@@ -1,3 +1,4 @@
+import { createServer, IncomingMessage, ServerResponse } from 'node:http';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -5,7 +6,15 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
-import { validateApiKey } from './auth.js';
+import {
+  assertToolAllowed,
+  extractApiToken,
+  logToolCall,
+  markTokenUsed,
+  resolvePrincipal,
+  validateApiKey,
+} from './auth.js';
+import { getConfig } from './config.js';
 import { createPlayer, generateSsoTicket } from './tools/createPlayer.js';
 import { talkAsPlayer } from './tools/talkAsPlayer.js';
 import { moveToRoom } from './tools/moveToRoom.js';
@@ -553,7 +562,19 @@ const TOOLS = [
 
 // ─── Server factory ───────────────────────────────────────────────────────────
 
-export async function startServer(): Promise<void> {
+type ToolResponse = {
+  content: Array<{ type: 'text'; text: string }>;
+  isError?: boolean;
+};
+
+function toErrorResponse(errorMessage: string): ToolResponse {
+  return {
+    content: [ { type: 'text', text: `Error: ${errorMessage}` } ],
+    isError: true,
+  };
+}
+
+function createMcpServer() {
   const server = new Server(
     { name: 'habbo-mcp', version: '1.0.0' },
     { capabilities: { tools: {} } }
@@ -564,12 +585,34 @@ export async function startServer(): Promise<void> {
     tools: TOOLS,
   }));
 
-  // ── Call tool ───────────────────────────────────────────────────────────────
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name, arguments: args } = request.params;
+  const callTool = async (name: string, args: unknown, channel: string): Promise<ToolResponse> => {
+    const startedAt = Date.now();
+    let principal = null;
 
     try {
-      switch (name) {
+      principal = await resolvePrincipal(extractApiToken(args), channel);
+      assertToolAllowed(principal, name);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const response = toErrorResponse(message);
+      try {
+        await logToolCall({
+          principal,
+          toolName: name,
+          args,
+          success: false,
+          errorCode: 'AUTH_ERROR',
+          durationMs: Date.now() - startedAt,
+        });
+      } catch {
+        // Don't break response flow on audit insert failure.
+      }
+      return response;
+    }
+
+    const result = await (async (): Promise<ToolResponse> => {
+      try {
+        switch (name) {
         // ── create_habbo_player ─────────────────────────────────────────────
         case 'create_habbo_player': {
           const input = CreatePlayerSchema.parse(args);
@@ -927,23 +970,172 @@ export async function startServer(): Promise<void> {
             ],
             isError: true,
           };
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Error: ${message}`,
+            },
+          ],
+          isError: true,
+        };
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: `Error: ${message}`,
-          },
-        ],
-        isError: true,
-      };
+    })();
+
+    try {
+      await markTokenUsed(principal.tokenId);
+      await logToolCall({
+        principal,
+        toolName: name,
+        args,
+        success: !result.isError,
+        errorCode: result.isError ? 'TOOL_ERROR' : null,
+        durationMs: Date.now() - startedAt,
+      });
+    } catch {
+      // Don't break user-facing result on audit failure.
     }
+
+    return result;
+  };
+
+  // ── Call tool ───────────────────────────────────────────────────────────────
+  server.setRequestHandler(CallToolRequestSchema, async (request): Promise<ToolResponse> => {
+    const { name, arguments: args } = request.params;
+    return callTool(name, args, 'stdio');
   });
 
+  return {
+    server,
+    tools: TOOLS,
+    callTool,
+  };
+}
+
+export async function startStdioServer(): Promise<void> {
+  const { server } = createMcpServer();
   // ── Connect transport and run ───────────────────────────────────────────────
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('habbo-mcp server running on stdio');
+}
+
+function readJsonBody(req: IncomingMessage): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    req.on('end', () => {
+      if (chunks.length === 0) return resolve({});
+
+      try {
+        const text = Buffer.concat(chunks).toString('utf-8');
+        resolve(text.trim().length ? JSON.parse(text) : {});
+      } catch (err) {
+        reject(err);
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+function json(res: ServerResponse, status: number, payload: unknown): void {
+  res.statusCode = status;
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'content-type, authorization');
+  res.end(JSON.stringify(payload));
+}
+
+export async function startHttpServer(): Promise<void> {
+  const cfg = getConfig();
+  const { tools, callTool } = createMcpServer();
+
+  const httpServer = createServer(async (req, res) => {
+    const method = (req.method || 'GET').toUpperCase();
+    const url = req.url || '/';
+
+    if (method === 'OPTIONS') {
+      res.statusCode = 204;
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Headers', 'content-type, authorization');
+      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+      res.end();
+      return;
+    }
+
+    if ((method === 'GET') && (url === '/health')) {
+      json(res, 200, { ok: true });
+      return;
+    }
+
+    if ((method === 'GET') && (url === '/.well-known/mcp-server.json')) {
+      json(res, 200, {
+        name: 'habbo-mcp',
+        version: '1.0.0',
+        endpoint: '/mcp',
+        transport: 'http-json',
+      });
+      return;
+    }
+
+    if ((method !== 'POST') || (url !== '/mcp')) {
+      json(res, 404, { error: 'Not found' });
+      return;
+    }
+
+    try {
+      const body = await readJsonBody(req);
+      const authHeader = String(req.headers.authorization || '').trim();
+      const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+      const suppliedToken = extractApiToken(body?.params?.arguments) || bearerToken;
+
+      const methodName = String(body?.method || '');
+      const requestId = body?.id ?? null;
+
+      if (methodName === 'tools/list') {
+        await resolvePrincipal(suppliedToken, 'http');
+        json(res, 200, { jsonrpc: '2.0', id: requestId, result: { tools } });
+        return;
+      }
+
+      if (methodName !== 'tools/call') {
+        json(res, 400, {
+          jsonrpc: '2.0',
+          id: requestId,
+          error: { code: -32601, message: `Unsupported method '${methodName}'` },
+        });
+        return;
+      }
+
+      const toolName = String(body?.params?.name || '');
+      const args = body?.params?.arguments || {};
+      const payload = { ...(args || {}) } as Record<string, unknown>;
+      if (suppliedToken) payload.api_key = suppliedToken;
+      const result = await callTool(toolName, payload, 'http');
+
+      json(res, 200, {
+        jsonrpc: '2.0',
+        id: requestId,
+        result,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      json(res, 400, {
+        jsonrpc: '2.0',
+        id: null,
+        error: {
+          code: -32700,
+          message: `Invalid request: ${message}`,
+        },
+      });
+    }
+  });
+
+  await new Promise<void>((resolve) => {
+    httpServer.listen(cfg.http.port, cfg.http.host, () => resolve());
+  });
+  console.error(`habbo-mcp server running on http://${cfg.http.host}:${cfg.http.port}/mcp`);
 }

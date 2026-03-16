@@ -1,9 +1,3 @@
-// .env is loaded by loadEnv.js (imported first in index.ts)
-if (!process.env.MCP_API_KEY) {
-  console.error('ERROR: MCP_API_KEY environment variable is required');
-  process.exit(1);
-}
-
 export type Config = {
   rcon: { host: string; port: number };
   db: {
@@ -14,6 +8,12 @@ export type Config = {
     password: string;
   };
   apiKey: string;
+  allowStaticApiKeyFallback: boolean;
+  transport: 'stdio' | 'http' | 'both';
+  http: {
+    host: string;
+    port: number;
+  };
   habboBaseUrl: string;
 };
 
@@ -31,7 +31,13 @@ export function getConfig(): Config {
       user: process.env.DB_USER || 'arcturus_user',
       password: process.env.DB_PASSWORD || 'arcturus_pw',
     },
-    apiKey: process.env.MCP_API_KEY!,
+    apiKey: process.env.MCP_API_KEY || '',
+    allowStaticApiKeyFallback: process.env.MCP_ALLOW_STATIC_API_KEY_FALLBACK === 'true',
+    transport: (process.env.MCP_TRANSPORT as Config['transport']) || 'stdio',
+    http: {
+      host: process.env.MCP_HTTP_HOST || '0.0.0.0',
+      port: parseInt(process.env.MCP_HTTP_PORT || '3003', 10),
+    },
     habboBaseUrl: process.env.HABBO_BASE_URL || 'http://127.0.0.1:1080',
   };
 }
