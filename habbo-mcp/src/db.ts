@@ -1,15 +1,23 @@
 import mysql from 'mysql2/promise';
-import { config } from './config.js';
+import { getConfig } from './config.js';
 
-const pool = mysql.createPool({
-  host: config.db.host,
-  port: config.db.port,
-  database: config.db.database,
-  user: config.db.user,
-  password: config.db.password,
-  connectionLimit: 5,
-  waitForConnections: true,
-});
+let pool: mysql.Pool | null = null;
+
+function getPool(): mysql.Pool {
+  if (!pool) {
+    const cfg = getConfig().db;
+    pool = mysql.createPool({
+      host: cfg.host,
+      port: cfg.port,
+      database: cfg.database,
+      user: cfg.user,
+      password: cfg.password,
+      connectionLimit: 5,
+      waitForConnections: true,
+    });
+  }
+  return pool;
+}
 
 // mysql2's execute() accepts ExecuteValues which is not exported from the top-level
 // package. Using `any[]` as the params type is the standard workaround.
@@ -19,7 +27,7 @@ export async function queryOne<T>(
   sql: string,
   params: any[]
 ): Promise<T | null> {
-  const [rows] = await pool.execute(sql, params);
+  const [rows] = await getPool().execute(sql, params);
   const arr = rows as T[];
   return arr.length > 0 ? arr[0] : null;
 }
@@ -28,7 +36,7 @@ export async function queryMany<T>(
   sql: string,
   params: any[]
 ): Promise<T[]> {
-  const [rows] = await pool.execute(sql, params);
+  const [rows] = await getPool().execute(sql, params);
   return rows as T[];
 }
 
@@ -36,7 +44,7 @@ export async function execute(
   sql: string,
   params: any[]
 ): Promise<mysql.ResultSetHeader> {
-  const [result] = await pool.execute(sql, params);
+  const [result] = await getPool().execute(sql, params);
   return result as mysql.ResultSetHeader;
 }
 
@@ -51,5 +59,8 @@ export async function getUserId(username: string): Promise<number | null> {
 }
 
 export async function closePool(): Promise<void> {
-  await pool.end();
+  if (pool) {
+    await pool.end();
+    pool = null;
+  }
 }

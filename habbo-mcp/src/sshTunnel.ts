@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execSync, spawn, type ChildProcess } from 'node:child_process';
 import net from 'node:net';
 
 type TunnelConfig = {
@@ -72,14 +72,75 @@ function applyLocalEnv(cfg: TunnelConfig): void {
   process.env.DB_PORT = String(cfg.localDbPort);
 }
 
+/** Returns true if the port is already in use (e.g. by another tunnel). */
+function isPortInUse(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = net.createServer(() => {});
+    server.once('error', (err: NodeJS.ErrnoException) => {
+      resolve(err.code === 'EADDRINUSE');
+    });
+    server.once('listening', () => {
+      server.close(() => resolve(false));
+    });
+    server.listen(port, '127.0.0.1');
+  });
+}
+
+/** Kill processes listening on the given port (e.g. stale ssh tunnel). No-op if none or on error. */
+function killProcessesOnPort(port: number): void {
+  try {
+    const pids = execSync(`lsof -ti :${port}`, { encoding: 'utf8' })
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+    for (const pid of pids) {
+      try {
+        process.kill(parseInt(pid, 10), 'SIGTERM');
+      } catch {
+        // process may already be gone
+      }
+    }
+    if (pids.length > 0) {
+      process.stderr.write(`[ssh-tunnel] freed port ${port} (killed PID(s): ${pids.join(', ')})\n`);
+    }
+  } catch {
+    // lsof returns non-zero when no process found; ignore
+  }
+}
+
 export async function startSshTunnelIfEnabled(): Promise<ChildProcess | null> {
   if (process.env.SSH_TUNNEL_ENABLED !== 'true') {
     return null;
   }
 
   const cfg = loadConfig();
-  if (!cfg.host || !cfg.user) {
-    throw new Error('SSH_TUNNEL_ENABLED=true requires SSH_TUNNEL_HOST and SSH_TUNNEL_USER');
+  if (!cfg.host?.trim() || !cfg.user?.trim()) {
+    process.stderr.write(
+      '[ssh-tunnel] SSH_TUNNEL_ENABLED=true but SSH_TUNNEL_HOST or SSH_TUNNEL_USER is missing in habbo-mcp/.env. Tunnel disabled; using RCON/DB from .env (local or existing).\n'
+    );
+    return null;
+  }
+
+  let [rconInUse, dbInUse] = await Promise.all([
+    isPortInUse(cfg.localRconPort),
+    isPortInUse(cfg.localDbPort),
+  ]);
+  if (rconInUse || dbInUse) {
+    killProcessesOnPort(cfg.localRconPort);
+    killProcessesOnPort(cfg.localDbPort);
+    await new Promise((r) => setTimeout(r, 500));
+    [rconInUse, dbInUse] = await Promise.all([
+      isPortInUse(cfg.localRconPort),
+      isPortInUse(cfg.localDbPort),
+    ]);
+  }
+  if (rconInUse || dbInUse) {
+    const ports = [rconInUse && cfg.localRconPort, dbInUse && cfg.localDbPort]
+      .filter(Boolean)
+      .join(', ');
+    throw new Error(
+      `SSH tunnel ports still in use (${ports}) after clearing. Set different ports in habbo-mcp/.env: SSH_TUNNEL_LOCAL_RCON_PORT and SSH_TUNNEL_LOCAL_DB_PORT.`
+    );
   }
 
   const args: string[] = [
@@ -104,27 +165,44 @@ export async function startSshTunnelIfEnabled(): Promise<ChildProcess | null> {
 
   const proc = spawn('ssh', args, { stdio: ['ignore', 'pipe', 'pipe'] });
 
+  let stderr = '';
   proc.stdout?.on('data', (chunk) => {
     process.stderr.write(`[ssh-tunnel] ${String(chunk)}`);
   });
   proc.stderr?.on('data', (chunk) => {
-    process.stderr.write(`[ssh-tunnel] ${String(chunk)}`);
-  });
-
-  proc.once('error', (err) => {
-    process.stderr.write(`[ssh-tunnel] failed to start: ${err.message}\n`);
+    const s = String(chunk);
+    stderr += s;
+    process.stderr.write(`[ssh-tunnel] ${s}`);
   });
 
   const timeoutMs = toInt('SSH_TUNNEL_START_TIMEOUT_MS', 30000);
-  await Promise.all([
-    waitForLocalPort(cfg.localRconPort, timeoutMs),
-    waitForLocalPort(cfg.localDbPort, timeoutMs),
-  ]);
 
-  applyLocalEnv(cfg);
-  process.stderr.write(
-    `[ssh-tunnel] ready (RCON 127.0.0.1:${cfg.localRconPort}, DB 127.0.0.1:${cfg.localDbPort})\n`
-  );
+  const tunnelReady = new Promise<ChildProcess>((resolve, reject) => {
+    proc.once('error', (err) => {
+      reject(new Error(`SSH tunnel failed to start: ${err.message}`));
+    });
+    proc.once('exit', (code, signal) => {
+      if (code !== 0 && code !== null) {
+        const hint = /already in use|Address already in use/i.test(stderr)
+          ? ` Port ${cfg.localRconPort} or ${cfg.localDbPort} may be in use. Set SSH_TUNNEL_LOCAL_RCON_PORT / SSH_TUNNEL_LOCAL_DB_PORT in habbo-mcp/.env to free ports, or kill the process using them.`
+          : '';
+        reject(new Error(`SSH tunnel exited with code ${code}.${hint}`));
+      }
+    });
 
-  return proc;
+    Promise.all([
+      waitForLocalPort(cfg.localRconPort, timeoutMs),
+      waitForLocalPort(cfg.localDbPort, timeoutMs),
+    ])
+      .then(() => {
+        applyLocalEnv(cfg);
+        process.stderr.write(
+          `[ssh-tunnel] SSH tunnel active: local 127.0.0.1:${cfg.localRconPort} -> ${cfg.host}:${cfg.remoteRconPort} (RCON), local 127.0.0.1:${cfg.localDbPort} -> ${cfg.host}:${cfg.remoteDbPort} (DB)\n`
+        );
+        resolve(proc);
+      })
+      .catch(reject);
+  });
+
+  return tunnelReady;
 }

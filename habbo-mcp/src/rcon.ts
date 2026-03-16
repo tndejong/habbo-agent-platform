@@ -1,5 +1,5 @@
 import * as net from 'net';
-import { config } from './config.js';
+import { getConfig } from './config.js';
 
 interface RconResponse {
   status: number;
@@ -20,7 +20,8 @@ export async function sendRconCommand(
       reject(new Error('RCON connection timed out'));
     }, 5000);
 
-    client.connect(config.rcon.port, config.rcon.host, () => {
+    const { host, port } = getConfig().rcon;
+    client.connect(port, host, () => {
       client.write(payload);
     });
 

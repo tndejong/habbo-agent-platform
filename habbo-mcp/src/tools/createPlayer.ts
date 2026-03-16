@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { execute, queryOne } from '../db.js';
-import { config } from '../config.js';
+import { getConfig } from '../config.js';
 
 export async function createPlayer(params: {
   username: string;
@@ -39,12 +39,12 @@ export async function createPlayer(params: {
   return {
     user_id: result.insertId,
     username,
-    login_url: `${config.habboBaseUrl}?sso=${ticket}`,
+    login_url: `${getConfig().habboBaseUrl}?sso=${ticket}`,
   };
 }
 
 export async function generateSsoTicket(username: string): Promise<string> {
   const ticket = uuidv4();
   await execute('UPDATE users SET auth_ticket = ? WHERE username = ?', [ticket, username]);
-  return `${config.habboBaseUrl}?sso=${ticket}`;
+  return `${getConfig().habboBaseUrl}?sso=${ticket}`;
 }

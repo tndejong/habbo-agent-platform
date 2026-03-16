@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import './loadEnv.js';
 import { startServer } from './server.js';
 import { startSshTunnelIfEnabled } from './sshTunnel.js';
 
