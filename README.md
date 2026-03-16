@@ -18,7 +18,7 @@ Includes a lightweight **Agent Hotel Portal MVP** (React + Node) for register/lo
 
 ## Table of Contents
 
-- [Whats the plan? 👨‍💻](#whats-the-plan-)
+- [What's the plan? 👨‍💻](#whats-the-plan-)
 - [About](#about)
 - [Visuals](#visuals)
 - [Features](#features)
@@ -45,7 +45,7 @@ Includes a lightweight **Agent Hotel Portal MVP** (React + Node) for register/lo
 
 ---
 
-## Whats the plan? 👨‍💻
+## What's the plan? 👨‍💻
 
 The long-term goal is to turn the hotel into a living multi-agent world where users can buy, manage, and collaborate with in-game agents.
 
@@ -112,13 +112,19 @@ All tools accept an optional `api_key` parameter. When omitted, the server falls
 
 ### Figure types
 
-Bots can be deployed with a `figure_type` key instead of a raw figure string. Three builtins are included:
+`figure_type` support differs slightly between MCP bot deployment and in-hotel AI setup.
+
+MCP `deploy_bot` built-in keys:
 
 | Key | Description |
 |-----|-------------|
 | `default` | Basic avatar (shirt, pants, shoes) |
 | `citizen` | Default avatar with hat and hair |
 | `agent` | Full agent look with accessories |
+
+In-hotel `:setup_agent` supports:
+- `default`, `citizen`, `agent`, `bouncer`, `m-employee`
+- Example: `:setup_agent Aria type:m-employee Friendly office assistant`
 
 Create custom figure types with `register_figure_type`. They are validated against the hotel's `figuredata.xml` and stored in `~/.cursor/habbo-mcp-figure-types.json`. Use `list_figure_types` to see all available keys.
 
@@ -328,26 +334,21 @@ Also change `HABBO_PORTAL_BOOTSTRAP_PASSWORD` after first login.
 
 After the hotel stack is running, connect your MCP client to `habbo-mcp`.
 
-### Required environment values
+### Single source of truth
 
-Use these values in your MCP client config:
+Put SSH/DB/RCON/API settings in **`habbo-mcp/.env`**.
+Do not duplicate them in your MCP client config.
 
-```bash
-MCP_API_KEY=replace-with-your-key
-RCON_HOST=127.0.0.1
-RCON_PORT=3001
-DB_HOST=127.0.0.1
-DB_PORT=13306
-DB_NAME=arcturus
-DB_USER=arcturus_user
-DB_PASSWORD=arcturus_pw
-HABBO_BASE_URL=http://127.0.0.1:1080
-```
-
-You can generate `MCP_API_KEY` with:
+Generate an API key:
 
 ```bash
 openssl rand -hex 16
+```
+
+Then set it in `habbo-mcp/.env`:
+
+```bash
+MCP_API_KEY=replace-with-your-key
 ```
 
 ### Claude Code example (`~/.claude/settings.json`)
@@ -358,17 +359,7 @@ openssl rand -hex 16
     "habbo": {
       "command": "npx",
       "args": ["tsx", "/absolute/path/to/habbo-agent-platform/habbo-mcp/src/index.ts"],
-      "env": {
-        "MCP_API_KEY": "replace-with-your-key",
-        "RCON_HOST": "127.0.0.1",
-        "RCON_PORT": "3001",
-        "DB_HOST": "127.0.0.1",
-        "DB_PORT": "13306",
-        "DB_NAME": "arcturus",
-        "DB_USER": "arcturus_user",
-        "DB_PASSWORD": "arcturus_pw",
-        "HABBO_BASE_URL": "http://127.0.0.1:1080"
-      }
+      "env": {}
     }
   }
 }
@@ -376,7 +367,8 @@ openssl rand -hex 16
 
 ### Cursor example
 
-Configure the same `habbo` MCP server values in Cursor MCP settings (command/args/env). Use absolute paths and restart Cursor after changes.
+Use the same command/args and keep `env` empty (or minimal).  
+`habbo-mcp` loads settings from `habbo-mcp/.env`.
 
 ---
 
@@ -615,7 +607,7 @@ docker exec arcturus supervisorctl start arcturus-emulator
 The username already exists in the database. Try a different name.
 
 **MCP server says `MCP_API_KEY` is required?**
-Set `MCP_API_KEY` in the environment config used by your MCP client for the `habbo` server.
+Set `MCP_API_KEY` in `habbo-mcp/.env`, then restart your MCP client.
 
 ---
 
@@ -627,6 +619,7 @@ habbo-agent-platform/
 ├── docker-compose.registry.yaml  # GHCR images (arcturus, nitro, habbo-ai-service)
 ├── docker-compose.yaml           # Local build with bind mounts (dev)
 ├── portal/                       # Agent Hotel Portal (React + Node API)
+├── habbo-ai-service/             # Hotel → Agent API service
 ├── habbo-mcp/                    # MCP server (TypeScript)
 │   ├── src/
 │   │   ├── index.ts              # Entry point
@@ -643,11 +636,13 @@ habbo-agent-platform/
 │   ├── room-spawn-locations.json # Named spawn positions per room
 │   ├── .env.example              # Config template
 │   └── package.json
-└── emulator/                     # Hotel (source build stack)
-    ├── config.ini                # Emulator config (RCON allowed IPs, etc.)
-    ├── arcturus/                 # Arcturus Java server (with custom RCON commands)
-    ├── nitro/                    # Nitro React client
-    └── mysql/                    # MariaDB config + schema dumps
+├── emulator/                     # Arcturus container build context
+│   ├── config.ini                # Emulator config (RCON allowed IPs, etc.)
+│   └── arcturus/                 # Arcturus Java server (submodule + custom commands)
+├── nitro/                        # Nitro build context + submodules
+│   ├── nitro-react/              # Web client source (submodule)
+│   └── ...
+└── mysql/                        # MariaDB config + schema dumps
 ```
 
 ---
