@@ -127,10 +127,24 @@ In-hotel AI agent commands:
 - `:set_ai_key <api_key> [provider]` — verify and store your AI provider key (defaults to `anthropic`)
 - `:setup_agent <name> [type:<figure_type>] <persona...>` — create an AI agent bot in your current room
 - `:remove_agent <name|all>` — remove one of your AI bots in the room, or all of them
+- `:setup_agent` prefers the tile you are facing first (including chairs), then falls back to nearby free tiles
 
 In-hotel `:setup_agent` supports figure types:
 - `default`, `citizen`, `agent`, `bouncer`, `m-employee`
 - Example: `:setup_agent Aria type:m-employee Friendly office assistant`
+
+Rank 7 admin in-chat examples:
+
+```text
+:set_ai_key sk-ant-your-real-key-here anthropic
+:setup_agent Aria type:agent Friendly office assistant helping guests in this room
+:setup_agent BouncerBob type:bouncer Keep this room safe, welcome visitors, and answer simple questions
+:remove_agent Aria
+:remove_agent all
+```
+
+Chair spawn tip for admins:
+- Stand in front of a chair and face it, then run `:setup_agent ...` to place the bot on that chair tile first.
 
 Create custom figure types with `register_figure_type`. They are validated against the hotel's `figuredata.xml` and stored in `~/.cursor/habbo-mcp-figure-types.json`. Use `list_figure_types` to see all available keys.
 
