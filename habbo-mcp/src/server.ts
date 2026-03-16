@@ -1095,6 +1095,42 @@ export async function startHttpServer(): Promise<void> {
       const methodName = String(body?.method || '');
       const requestId = body?.id ?? null;
 
+      if (methodName === 'initialize') {
+        await resolvePrincipal(suppliedToken, 'http');
+        json(res, 200, {
+          jsonrpc: '2.0',
+          id: requestId,
+          result: {
+            protocolVersion: String(body?.params?.protocolVersion || '2024-11-05'),
+            capabilities: {
+              tools: {},
+            },
+            serverInfo: {
+              name: 'habbo-mcp',
+              version: '1.0.0',
+            },
+          },
+        });
+        return;
+      }
+
+      if (methodName === 'notifications/initialized') {
+        // JSON-RPC notifications should not return a body.
+        res.statusCode = 204;
+        res.end();
+        return;
+      }
+
+      if (methodName === 'ping') {
+        await resolvePrincipal(suppliedToken, 'http');
+        json(res, 200, {
+          jsonrpc: '2.0',
+          id: requestId,
+          result: {},
+        });
+        return;
+      }
+
       if (methodName === 'tools/list') {
         await resolvePrincipal(suppliedToken, 'http');
         json(res, 200, { jsonrpc: '2.0', id: requestId, result: { tools } });
