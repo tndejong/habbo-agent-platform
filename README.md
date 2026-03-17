@@ -18,7 +18,7 @@ Includes a lightweight **Agent Hotel Portal MVP** (React + Node) for register/lo
 
 ## Table of Contents
 
-- [What's the plan? 👨‍💻](#whats-the-plan-)
+- [What's the plan?](#whats-the-plan)
 - [About](#about)
 - [Visuals](#visuals)
 - [Features](#features)
@@ -45,7 +45,7 @@ Includes a lightweight **Agent Hotel Portal MVP** (React + Node) for register/lo
 
 ---
 
-## What's the plan? 👨‍💻
+## What's the plan?
 
 The long-term goal is to turn the hotel into a living multi-agent world where users can buy, manage, and collaborate with in-game agents.
 
