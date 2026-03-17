@@ -22,6 +22,7 @@ import { moveToRoom } from './tools/moveToRoom.js';
 import { giveCredits } from './tools/giveCredits.js';
 import { alertPlayer } from './tools/alertPlayer.js';
 import { setMotto } from './tools/setMotto.js';
+import { getPlayerRoom } from './tools/getPlayerRoom.js';
 import { getOnlinePlayers } from './tools/getOnlinePlayers.js';
 import { getChatLog } from './tools/getChatLog.js';
 import { hotelAlert } from './tools/hotelAlert.js';
@@ -82,6 +83,11 @@ const SetPlayerMottoSchema = z.object({
   api_key: z.string().optional(),
   username: z.string().min(1),
   motto: z.string().max(255),
+});
+
+const GetPlayerRoomSchema = z.object({
+  api_key: z.string().optional(),
+  username: z.string().min(1),
 });
 
 const GetOnlinePlayersSchema = z.object({
@@ -299,6 +305,19 @@ const TOOLS = [
         motto: { type: 'string', description: 'New motto text (max 255 chars)' },
       },
       required: ['username', 'motto'],
+    },
+  },
+  {
+    name: 'get_player_room',
+    description:
+      "Get a player's current room context. Returns online status and current_room_id based on active room logs, with fallback to home_room.",
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        api_key: { type: 'string', description: 'MCP API key (optional — falls back to MCP_API_KEY env var)' },
+        username: { type: 'string', description: 'Username of the player' },
+      },
+      required: ['username'],
     },
   },
   {
@@ -736,6 +755,21 @@ function createMcpServer() {
               {
                 type: 'text' as const,
                 text: JSON.stringify(result, null, 2),
+              },
+            ],
+          };
+        }
+
+        // ── get_player_room ─────────────────────────────────────────────────
+        case 'get_player_room': {
+          const input = GetPlayerRoomSchema.parse(args);
+          validateApiKey(input.api_key);
+          const roomInfo = await getPlayerRoom(input.username);
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify(roomInfo, null, 2),
               },
             ],
           };

@@ -26,6 +26,8 @@ type ToolFns = NonNullable<Awaited<ReturnType<typeof loadToolFns>>>;
 const DEFAULT_OPERATOR = process.env.HABBO_HOOK_OPERATOR_USERNAME || 'Systemaccount';
 const DEFAULT_BASE_X = Number.parseInt(process.env.HABBO_HOOK_SPAWN_X || '5', 10);
 const DEFAULT_BASE_Y = Number.parseInt(process.env.HABBO_HOOK_SPAWN_Y || '5', 10);
+const DEFAULT_ROOM_ID = Number.parseInt(process.env.HABBO_HOOK_ROOM_ID || '0', 10) || null;
+const DEFAULT_HOOK_MCP_BASE_URL = 'https://hotel-mcp.fixdev.nl/';
 const EVENT_DEDUPE_MS = 8_000;
 const MAX_CHAT_LENGTH = 240;
 const DEFAULT_STATE_FILE = path.join(os.homedir(), '.cursor', 'habbo-agent-hook-state.json');
@@ -44,6 +46,17 @@ const OFFSETS: Array<{ dx: number; dy: number }> = [
   { dx: 0, dy: 2 },
   { dx: 0, dy: -2 },
 ];
+
+function normalizeMcpEndpoint(raw?: string): string | null {
+  const value = (raw || '').trim();
+  if (!value) {
+    return null;
+  }
+  if (value.endsWith('/mcp')) {
+    return value;
+  }
+  return `${value.replace(/\/+$/, '')}/mcp`;
+}
 
 async function main(): Promise<void> {
   loadEnvFile();
@@ -175,9 +188,11 @@ async function loadToolFns(): Promise<{
   deleteBot: (botId: number) => Promise<unknown>;
   listBots: () => Promise<Array<{ id: number; room_id: number; x: number; y: number }>>;
 } | null> {
-  if (!process.env.MCP_API_KEY) {
-    console.error('[habbo-hook] MCP_API_KEY missing, skipping hook action');
-    return null;
+  const remoteEndpoint = normalizeMcpEndpoint(
+    process.env.HABBO_HOOK_MCP_BASE_URL || process.env.HABBO_MCP_BASE_URL || DEFAULT_HOOK_MCP_BASE_URL
+  );
+  if (remoteEndpoint) {
+    return loadHttpToolFns(remoteEndpoint, process.env.MCP_API_KEY || '');
   }
 
   const [{ talkAsPlayer }, { talkBot }, { getPlayerRoom }, { deployBot }, { deleteBot }, { listBots }] =
@@ -191,6 +206,102 @@ async function loadToolFns(): Promise<{
     ]);
 
   return { talkAsPlayer, talkBot, getPlayerRoom, deployBot, deleteBot, listBots };
+}
+
+async function loadHttpToolFns(
+  endpoint: string,
+  apiKey: string
+): Promise<{
+  talkAsPlayer: (params: { username: string; message: string; type?: 'talk' | 'whisper' | 'shout' }) => Promise<unknown>;
+  talkBot: (params: { bot_id: number; message: string; type?: 'talk' | 'shout' }) => Promise<unknown>;
+  getPlayerRoom: (username: string) => Promise<{ current_room_id: number | null; online: boolean }>;
+  deployBot: (params: { room_id: number; name: string; x?: number; y?: number }) => Promise<{ bot_id: number }>;
+  deleteBot: (botId: number) => Promise<unknown>;
+  listBots: () => Promise<Array<{ id: number; room_id: number; x: number; y: number }>>;
+}> {
+  const callTool = async <T>(toolName: string, args: Record<string, unknown>): Promise<T> => {
+    const body = {
+      jsonrpc: '2.0',
+      id: `hook-${Date.now()}`,
+      method: 'tools/call',
+      params: {
+        name: toolName,
+        arguments: args,
+      },
+    };
+    const headers: Record<string, string> = {
+      'content-type': 'application/json',
+    };
+    if (apiKey) {
+      headers.authorization = `Bearer ${apiKey}`;
+    }
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    });
+
+    const rawText = await response.text();
+    let payload: any = null;
+    try {
+      payload = rawText ? JSON.parse(rawText) : null;
+    } catch {
+      throw new Error(`[habbo-hook] Invalid JSON from MCP for ${toolName}: ${rawText.slice(0, 200)}`);
+    }
+
+    if (!response.ok) {
+      const message = payload?.error?.message || `HTTP ${response.status}`;
+      throw new Error(`[habbo-hook] MCP HTTP error for ${toolName}: ${message}`);
+    }
+    if (payload?.error) {
+      throw new Error(`[habbo-hook] MCP RPC error for ${toolName}: ${payload.error.message || 'unknown error'}`);
+    }
+
+    const result = payload?.result;
+    if (result?.isError) {
+      const msg = result?.content?.[0]?.text || `tool ${toolName} failed`;
+      throw new Error(`[habbo-hook] MCP tool error for ${toolName}: ${msg}`);
+    }
+
+    const text = result?.content?.[0]?.text;
+    if (typeof text !== 'string') {
+      return result as T;
+    }
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      return result as T;
+    }
+  };
+
+  return {
+    talkAsPlayer: (params) =>
+      callTool('talk_as_player', {
+        username: params.username,
+        message: params.message,
+        type: params.type ?? 'talk',
+      }),
+    talkBot: (params) =>
+      callTool('talk_bot', {
+        bot_id: params.bot_id,
+        message: params.message,
+        type: params.type ?? 'talk',
+      }),
+    getPlayerRoom: (username) =>
+      callTool<{ current_room_id: number | null; online: boolean }>('get_player_room', {
+        username,
+      }),
+    deployBot: (params) =>
+      callTool<{ bot_id: number }>('deploy_bot', {
+        room_id: params.room_id,
+        name: params.name,
+        x: params.x,
+        y: params.y,
+      }),
+    deleteBot: (botId) => callTool('delete_bot', { bot_id: botId }),
+    listBots: () => callTool<Array<{ id: number; room_id: number; x: number; y: number }>>('list_bots', {}),
+  };
 }
 
 async function handleUserPrompt(
@@ -301,15 +412,19 @@ async function ensureConversationBot(
     return existing;
   }
 
-  const room = await tools.getPlayerRoom(DEFAULT_OPERATOR);
-  if (!room.online || !room.current_room_id) {
-    return null;
+  let roomId = DEFAULT_ROOM_ID;
+  if (!roomId) {
+    const room = await tools.getPlayerRoom(DEFAULT_OPERATOR);
+    if (!room.online || !room.current_room_id) {
+      return null;
+    }
+    roomId = room.current_room_id;
   }
 
-  const spawn = await pickSpawnPosition(room.current_room_id, tools.listBots);
+  const spawn = await pickSpawnPosition(roomId, tools.listBots);
   const botName = toBotName(conversationId);
   const deployed = await tools.deployBot({
-    room_id: room.current_room_id,
+    room_id: roomId,
     name: botName,
     x: spawn.x,
     y: spawn.y,

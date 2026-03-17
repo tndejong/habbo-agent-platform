@@ -325,6 +325,9 @@ What it does:
 Open the portal:
 
 - [http://127.0.0.1:3090](http://127.0.0.1:3090)
+- Hosted portal (live): [https://hotel-portal.fixdev.nl](https://hotel-portal.fixdev.nl)
+
+For hosted usage, users can register via the portal and request a **Pro account** to unlock server MCP access with a bearer token.
 
 Portal-related env vars (optional in `.env.registry`):
 
@@ -359,7 +362,41 @@ Also change `HABBO_PORTAL_BOOTSTRAP_PASSWORD` after first login.
 
 ## MCP Client Configuration
 
-After the hotel stack is running, connect your MCP client to `habbo-mcp`.
+You can connect MCP clients in two ways:
+
+1. Hosted server MCP (recommended for instant access)
+2. Self-hosted `habbo-mcp` (your own stack)
+
+### Hosted server MCP (Pro account)
+
+If you want to talk directly to the running hosted hotel on [https://hotel-portal.fixdev.nl](https://hotel-portal.fixdev.nl):
+
+1. Register/login via the portal.
+2. Request a **Pro account**.
+3. Use your issued bearer token in your MCP client config.
+
+Hosted MCP endpoint:
+
+- `https://hotel-mcp.fixdev.nl/mcp`
+
+Cursor example (`~/.cursor/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "hotel-mcp": {
+      "url": "https://hotel-mcp.fixdev.nl/mcp",
+      "headers": {
+        "Authorization": "Bearer <your-pro-token>"
+      }
+    }
+  }
+}
+```
+
+### Self-hosted `habbo-mcp`
+
+After your own hotel stack is running, connect your MCP client to local `habbo-mcp`.
 
 ### Single source of truth
 
@@ -555,6 +592,12 @@ HABBO_HOOK_ENABLED=true
 HABBO_HOOK_OPERATOR_USERNAME=Systemaccount
 HABBO_HOOK_SPAWN_X=5
 HABBO_HOOK_SPAWN_Y=5
+# When Cursor runs outside the hotel host, point hooks to your remote MCP HTTP base URL
+# (script automatically appends /mcp when needed)
+# If omitted, hooks default to https://hotel-mcp.fixdev.nl/
+HABBO_HOOK_MCP_BASE_URL=https://hotel-mcp.fixdev.nl/
+# Optional fallback fixed room ID if operator room lookup is unavailable
+HABBO_HOOK_ROOM_ID=202
 ```
 
 ---
