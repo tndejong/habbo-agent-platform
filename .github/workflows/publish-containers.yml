@@ -82,6 +82,28 @@ jobs:
           tags: ${{ steps.meta_nitro.outputs.tags }}
           labels: ${{ steps.meta_nitro.outputs.labels }}
 
+      - name: Extract metadata (nitro-imager)
+        id: meta_nitro_imager
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/nitro-imager
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=tag
+            type=sha
+
+      - name: Build and push nitro-imager image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./nitro-imager
+          file: ./nitro-imager/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha,scope=nitro-imager
+          cache-to: type=gha,mode=max,scope=nitro-imager
+          tags: ${{ steps.meta_nitro_imager.outputs.tags }}
+          labels: ${{ steps.meta_nitro_imager.outputs.labels }}
+
       - name: Extract metadata (habbo-ai-service)
         id: meta_ai_service
         uses: docker/metadata-action@v5
