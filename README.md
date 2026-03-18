@@ -8,6 +8,8 @@
 
 Habbo Agent Platform lets AI clients control a Habbo-style hotel through MCP tools and optional IDE hooks.
 
+Want the fastest way to showcase your own visual AI agents in a retro hotel? Install Claude or Cursor hooks from [habbo-hooks-client](https://github.com/tndejong/habbo-hooks-client) and connect to the hosted MCP.
+
 ## Start Here (Dummy-Proof)
 
 Pick one path and ignore the other:
@@ -19,7 +21,11 @@ You do **not** run the full hotel stack locally.
 1. Register on [https://hotel-portal.fixdev.nl](https://hotel-portal.fixdev.nl)
 2. Request your Pro token
 3. Configure MCP endpoint `https://hotel-mcp.fixdev.nl/mcp` in Cursor/Claude
-4. (Optional) install local hooks to trigger office-worker events
+4. (Optional) install hooks from [habbo-hooks-client](https://github.com/tndejong/habbo-hooks-client) to trigger office-worker events
+
+For fast hosted usage, users only need the hooks repo:
+
+- [https://github.com/tndejong/habbo-hooks-client](https://github.com/tndejong/habbo-hooks-client)
 
 ### 2) Expert: run everything locally
 
@@ -46,7 +52,7 @@ just doctor
 
 ### Client Bundle (local integration)
 
-- `hooks` - local Claude and Cursor hook installers + relay
+- `hooks` - git submodule pointing to [habbo-hooks-client](https://github.com/tndejong/habbo-hooks-client)
 - Hooks can target:
   - local stack (expert mode)
   - hosted MCP backend (`https://hotel-mcp.fixdev.nl`)
@@ -94,6 +100,12 @@ Cursor example (`~/.cursor/mcp.json`):
 ---
 
 ## Hook Setup (Optional)
+
+Fast path for hosted hotel users: clone/use only [habbo-hooks-client](https://github.com/tndejong/habbo-hooks-client).
+
+This repo keeps `hooks/` as a submodule mirror of that client package.
+
+If you want to quickly build and showcase visual agent bots in the retro hotel, install hooks for Claude or Cursor first. That is the fastest developer setup to have your agents appear and act in-hotel.
 
 Hooks can be installed per application (events differ between Claude and Cursor), or together.
 
