@@ -14,3 +14,7 @@
 	path = nitro/nitro-assets
 	url = https://git.krews.org/nitro/default-assets.git
 	ignore = untracked
+[submodule "hooks"]
+	path = hooks
+	url = https://github.com/tndejong/habbo-hooks-client.git
+	branch = main
