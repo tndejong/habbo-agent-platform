@@ -178,6 +178,31 @@ services:
     networks:
       nitro:
 
+  agent-trigger:
+    container_name: agent-trigger
+    image: ghcr.io/${HABBO_OWNER_OR_ORG}/agent-trigger:latest
+    restart: unless-stopped
+    environment:
+      - HABBO_AGENT_TRIGGER_PORT=3004
+      - HABBO_PROJECT_DIR=/project
+      - HABBO_MCP_URL=${HABBO_MCP_URL:-http://habbo-mcp:3003/mcp}
+      - HABBO_PUBLIC_URL=${HABBO_PUBLIC_URL:-https://trigger.thepixeloffice.ai}
+      - HABBO_ALLOWED_PHONE_NUMBERS=${HABBO_ALLOWED_PHONE_NUMBERS:-}
+      - MCP_API_KEY=${HABBO_MCP_FALLBACK_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN:-}
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID:-}
+      - TWILIO_FROM_NUMBER=${TWILIO_FROM_NUMBER:-}
+      - HABBO_HOOK_ENABLED=false
+    volumes:
+      - .:/project:ro
+    ports:
+      - "127.0.0.1:${HABBO_AGENT_TRIGGER_PORT:-3004}:3004"
+    depends_on:
+      - habbo-mcp
+    networks:
+      nitro:
+
 networks:
   nitro:
     ipam:
