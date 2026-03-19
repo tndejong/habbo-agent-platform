@@ -3,6 +3,7 @@ set -e
 
 MCP_URL="${HABBO_MCP_URL:-http://habbo-mcp:3003/mcp}"
 MCP_KEY="${MCP_API_KEY:-}"
+ATLASSIAN_TOKEN="${ATLASSIAN_API_TOKEN:-}"
 PROJECT_DIR="/tmp/agent-project"
 MCP_JSON="$PROJECT_DIR/.mcp.json"
 
@@ -21,6 +22,13 @@ cat > "$MCP_JSON" << EOF
       "url": "$MCP_URL",
       "headers": {
         "Authorization": "Bearer $MCP_KEY"
+      }
+    },
+    "atlassian": {
+      "type": "http",
+      "url": "https://mcp.atlassian.com/v1/mcp",
+      "headers": {
+        "Authorization": "Basic $ATLASSIAN_TOKEN"
       }
     }
   }

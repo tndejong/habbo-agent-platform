@@ -90,7 +90,8 @@ function runOrchestrator(roomId: number, from: string): Promise<string> {
     // Remove any stale stop signal
     if (existsSync(STOP_FILE)) unlinkSync(STOP_FILE);
 
-    const child = spawn("/opt/homebrew/bin/claude", ["-p", "--dangerously-skip-permissions", "--no-session-persistence", "--output-format", "stream-json", "--verbose"], {
+    const claudeBin = process.env.CLAUDE_BIN ?? "claude";
+    const child = spawn(claudeBin, ["-p", "--dangerously-skip-permissions", "--no-session-persistence", "--output-format", "stream-json", "--verbose"], {
       cwd: PROJECT_DIR,
       env: {
         ...process.env,
