@@ -33,6 +33,24 @@ Groups of agents deployed together. Each team has:
 
 `{{PERSONAS}}` expands to all team members with their capabilities and full instructions. `{{TASKS}}` expands to either a numbered ordered list (sequential) or a `/tmp/hotel-team-tasks.json` write block (shared).
 
+## Local setup — first-time requirements
+
+### Room 202 must exist before triggering a team
+
+When you trigger a team locally, agent-trigger deploys bots to room **202** by default. This room does not exist automatically — you need to create it manually once in the hotel before the first trigger.
+
+**Steps:**
+1. Open the hotel client (`http://127.0.0.1:1080` by default)
+2. Log in with your hotel account
+3. Create a new room — the first room you create will be assigned ID **202**
+4. After the room exists, team triggers will work
+
+If you skip this step the trigger will fail silently — the bots have nowhere to go and the orchestrator prompt receives an invalid room.
+
+> **Tip:** You only need to do this once per fresh database. If you reset the DB volume you'll need to recreate the room.
+
+---
+
 ## Environment variables
 
 | Variable | Description |
