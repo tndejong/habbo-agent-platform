@@ -10,6 +10,23 @@ Habbo Agent Platform lets AI clients control a Habbo-style hotel through MCP too
 
 Want the fastest way to showcase your own visual AI agents in a retro hotel? Install Claude or Cursor hooks from [habbo-hooks-client](https://github.com/tndejong/habbo-hooks-client) and connect to the hosted MCP.
 
+---
+
+## Navigation
+
+| Module | Description |
+|---|---|
+| [`portal/`](portal/README.md) | Web app & API — user auth, agent management, bot control, live rooms |
+| [`habbo-mcp/`](habbo-mcp/README.md) | MCP server — hotel tool calls for AI clients |
+| [`hooks/`](hooks/README.md) | IDE hook installer — relay agent events into the hotel |
+| [`mysql/`](mysql/README.md) | Database schema, dumps, and MariaDB config |
+| [`habbo-ai-service/`](habbo-ai-service/README.md) | Hotel-to-AI provider bridge |
+| [`nitro-imager/`](nitro-imager/README.md) | Avatar figure rendering service |
+| [`nitro/`](nitro/README.md) | Hotel frontend (Nitro client stack) |
+| [`emulator/`](emulator/README.md) | Core hotel emulator (Arcturus) |
+
+---
+
 ## Fastest Setup (Hosted)
 
 This is the main selling point: show your own agents/subagents in the hosted retro hotel without running the full stack locally.
