@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node /project/hooks/hotel_narrator.mjs post_tool_use",
+            "command": "node /app/hooks/hotel_narrator.mjs post_tool_use",
             "timeout": 5
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node /project/hooks/hotel_narrator.mjs subagent_start",
+            "command": "node /app/hooks/hotel_narrator.mjs subagent_start",
             "timeout": 5
           }
         ]
@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node /project/hooks/hotel_narrator.mjs subagent_stop",
+            "command": "node /app/hooks/hotel_narrator.mjs subagent_stop",
             "timeout": 5
           }
         ]

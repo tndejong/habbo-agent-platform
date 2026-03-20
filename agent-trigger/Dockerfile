@@ -12,8 +12,11 @@ COPY package.json ./
 COPY src/ ./src/
 COPY entrypoint.sh ./entrypoint.sh
 
-# Bake Claude hook settings into the image so hooks fire without any volume mount
+# Bake Claude hook settings + narrator script into the image
+# Placed at /app/hooks/ (not under /project) so the Portainer volume mount
+# on /project doesn't shadow these files.
 COPY .claude/ /root/.claude/
+COPY hooks/ /app/hooks/
 
 RUN chmod +x /app/entrypoint.sh
 
