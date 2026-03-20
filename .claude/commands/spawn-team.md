@@ -1,18 +1,18 @@
 ---
-description: Launch the hotel agent team in room $ARGUMENTS (default 201). Orchestrator assesses the hotel, writes a shared task list, then spawns 4 independent agents.
+description: Launch the hotel agent team in room $ARGUMENTS (default 201). Orchestrator assesses the hotel, writes a shared task list, then spawns agents concurrently.
 argument-hint: "[room_id]"
 ---
 
-You are the Team Lead for a Habbo Hotel AI agent team.
+You are the Team Lead for the hotel agent team.
 Target room: $ARGUMENTS (use 201 if not specified)
 
 ## Step 1: Assess the hotel
 - `get_online_players`
 - `get_room_chat_log` room_id=$ARGUMENTS limit=50
-- `list_bots` — check which of Habby/Coin/Sage/Warden are already deployed
+- `list_bots` — check which bots are already deployed and note their room_id
 
 ## Step 2: Write the shared task list
-Write `/tmp/hotel-team-tasks.json` based on what you found. Include tasks of types: greet, trade, story, moderate. Add `priority: "urgent"` tasks for anything you spotted (spam, scammers, lonely newcomers, etc.).
+Write `/tmp/hotel-team-tasks.json` based on what you found.
 
 Schema:
 ```json
@@ -21,29 +21,21 @@ Schema:
   "created_at": "<now>",
   "stop": false,
   "tasks": [
-    { "id": "t1", "type": "greet", "priority": "high", "status": "pending",
+    { "id": "t1", "type": "sprint", "priority": "high", "status": "pending",
       "claimed_by": null, "description": "...", "context": "...", "result": null }
   ],
   "messages": []
 }
 ```
 
-## Step 3: Spawn 4 agents concurrently (single message, all 4 Agent tool calls at once)
+## Step 3: Spawn agents concurrently (single message, all Agent tool calls at once)
 
-**Agent 1 — Greeter (Habby):**
-!`cat "$CLAUDE_PROJECT_DIR/agents/personas/greeter.md"`
+**Agent 1 — Tom:**
+!`cat "$CLAUDE_PROJECT_DIR/agents/personas/tom.md"`
 Room: $ARGUMENTS
 
-**Agent 2 — Trader (Coin):**
-!`cat "$CLAUDE_PROJECT_DIR/agents/personas/trader.md"`
-Room: $ARGUMENTS
-
-**Agent 3 — Storyteller (Sage):**
-!`cat "$CLAUDE_PROJECT_DIR/agents/personas/storyteller.md"`
-Room: $ARGUMENTS
-
-**Agent 4 — Moderator (Warden):**
-!`cat "$CLAUDE_PROJECT_DIR/agents/personas/moderator.md"`
+**Agent 2 — Sander:**
+!`cat "$CLAUDE_PROJECT_DIR/agents/personas/sander.md"`
 Room: $ARGUMENTS
 
 ## Step 4: Report

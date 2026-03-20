@@ -1559,7 +1559,7 @@ app.get('/api/agents/bots', authRequired, async (req, res) => {
 
 app.get('/api/agents/status', authRequired, async (req, res) => {
   try {
-    const MCP_URL = (process.env.HABBO_MCP_URL || 'http://habbo-mcp:3003/mcp').replace(/\/?$/, '');
+    const MCP_URL = (process.env.HOTEL_MCP_URL || 'http://habbo-mcp:3003/mcp').replace(/\/?$/, '');
     const MCP_KEY = process.env.MCP_API_KEY || '';
 
     const [triggerRes, mcpRes, personasRes, roomsRes] = await Promise.allSettled([

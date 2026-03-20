@@ -34,7 +34,7 @@ function writeNarratorBotsMap(knownBots: string[]): void {
 // ── MCP helper (used by narrator) ────────────────────────────────────────────
 
 const MCP_ENDPOINT = (() => {
-  const raw = (process.env.HABBO_MCP_URL ?? "http://habbo-mcp:3003/mcp").trim();
+  const raw = (process.env.HOTEL_MCP_URL ?? "http://habbo-mcp:3003/mcp").trim();
   return raw.endsWith("/mcp") ? raw : raw.replace(/\/+$/, "") + "/mcp";
 })();
 const MCP_API_KEY = process.env.MCP_API_KEY ?? "";
