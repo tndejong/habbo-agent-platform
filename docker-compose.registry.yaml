@@ -22,6 +22,7 @@ services:
       - mysql
     networks:
       nitro:
+      proxy_net:
 
   nitro:
     container_name: nitro
@@ -57,6 +58,7 @@ services:
       - ${HABBO_SWF_BIND_PORT:-8081}:8081
     networks:
       nitro:
+      proxy_net:
 
   mysql:
     container_name: mysql
@@ -126,6 +128,7 @@ services:
       - mailpit
     networks:
       nitro:
+      proxy_net:
 
   nitro-imager:
     container_name: nitro-imager
@@ -184,6 +187,7 @@ services:
       - arcturus
     networks:
       nitro:
+      proxy_net:
 
   agent-trigger:
     container_name: agent-trigger
@@ -212,9 +216,12 @@ services:
       - habbo-mcp
     networks:
       nitro:
+      proxy_net:
 
 networks:
   nitro:
     ipam:
       config:
         - subnet: ${HABBO_DOCKER_SUBNET:-172.28.0.0/16}
+  proxy_net:
+    external: true
