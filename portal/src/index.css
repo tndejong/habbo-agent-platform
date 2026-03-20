@@ -1,72 +1,96 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Press+Start+2P&family=VT323&display=swap');
 @import "tailwindcss";
+@import "tw-animate-css";
 
-/* ── Raw CSS variables (HSL triplets, no hsl() wrapper) ─────────────────── */
+@custom-variant dark (&:is(.dark *));
+
+/* ── Hotel dark theme (oklch) ───────────────────────────────────────────── */
+/* Primary = gold/yellow, Accent = cyan, dark navy background               */
 @layer base {
   :root {
-    --background: 222 47% 11%;
-    --foreground: 210 40% 98%;
-    --card: 222 47% 14%;
-    --card-foreground: 210 40% 98%;
-    --popover: 222 47% 14%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 45 93% 63%;
-    --primary-foreground: 222 47% 11%;
-    --secondary: 217 33% 20%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217 33% 17%;
-    --muted-foreground: 215 20% 65%;
-    --accent: 199 89% 70%;
-    --accent-foreground: 222 47% 11%;
-    --destructive: 0 63% 51%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 217 33% 22%;
-    --input: 217 33% 20%;
-    --ring: 45 93% 63%;
-    --sidebar: 222 47% 9%;
+    --background:             oklch(0.19 0.038 258);   /* navy  222 47% 11% */
+    --foreground:             oklch(0.97 0.004 240);   /* near-white        */
+    --card:                   oklch(0.22 0.038 258);   /* card  222 47% 14% */
+    --card-foreground:        oklch(0.97 0.004 240);
+    --popover:                oklch(0.22 0.038 258);
+    --popover-foreground:     oklch(0.97 0.004 240);
+    --primary:                oklch(0.82 0.155 84);    /* gold  45 93% 63%  */
+    --primary-foreground:     oklch(0.19 0.038 258);   /* navy on gold      */
+    --secondary:              oklch(0.27 0.028 252);   /* 217 33% 20%       */
+    --secondary-foreground:   oklch(0.97 0.004 240);
+    --muted:                  oklch(0.23 0.028 252);   /* 217 33% 17%       */
+    --muted-foreground:       oklch(0.65 0.018 248);   /* 215 20% 65%       */
+    --accent:                 oklch(0.77 0.115 210);   /* cyan 199 89% 70%  */
+    --accent-foreground:      oklch(0.19 0.038 258);   /* navy on cyan      */
+    --destructive:            oklch(0.57 0.22 27);     /* red  0 63% 51%    */
+    --destructive-foreground: oklch(0.97 0.004 240);
+    --border:                 oklch(0.29 0.028 252);   /* 217 33% 22%       */
+    --input:                  oklch(0.27 0.028 252);   /* 217 33% 20%       */
+    --ring:                   oklch(0.82 0.155 84);    /* gold ring         */
+    --radius:                 0.5rem;
+    --sidebar:                oklch(0.16 0.038 258);   /* 222 47% 9%        */
+    --sidebar-foreground:     oklch(0.97 0.004 240);
+    --sidebar-primary:        oklch(0.82 0.155 84);
+    --sidebar-primary-foreground: oklch(0.19 0.038 258);
+    --sidebar-accent:         oklch(0.27 0.028 252);
+    --sidebar-accent-foreground: oklch(0.97 0.004 240);
+    --sidebar-border:         oklch(0.29 0.028 252);
+    --sidebar-ring:           oklch(0.82 0.155 84);
   }
 }
 
-/* ── Tailwind v4: map CSS vars → color utilities ────────────────────────── */
-/* Without this, bg-background / text-foreground / border-border etc.        */
-/* generate NO CSS at all — Tailwind v4 requires explicit @theme mapping.    */
+/* ── @theme inline: expose CSS vars as Tailwind utilities ───────────────── */
+/* Required in Tailwind v4 — without this, bg-background etc. generate nothing */
 @theme inline {
-  --color-background:            hsl(var(--background));
-  --color-foreground:            hsl(var(--foreground));
-  --color-card:                  hsl(var(--card));
-  --color-card-foreground:       hsl(var(--card-foreground));
-  --color-popover:               hsl(var(--popover));
-  --color-popover-foreground:    hsl(var(--popover-foreground));
-  --color-primary:               hsl(var(--primary));
-  --color-primary-foreground:    hsl(var(--primary-foreground));
-  --color-secondary:             hsl(var(--secondary));
-  --color-secondary-foreground:  hsl(var(--secondary-foreground));
-  --color-muted:                 hsl(var(--muted));
-  --color-muted-foreground:      hsl(var(--muted-foreground));
-  --color-accent:                hsl(var(--accent));
-  --color-accent-foreground:     hsl(var(--accent-foreground));
-  --color-destructive:           hsl(var(--destructive));
-  --color-destructive-foreground: hsl(var(--destructive-foreground));
-  --color-border:                hsl(var(--border));
-  --color-input:                 hsl(var(--input));
-  --color-ring:                  hsl(var(--ring));
-  --color-sidebar:               hsl(var(--sidebar));
-  --radius: 0.5rem;
+  --color-background:                  var(--background);
+  --color-foreground:                  var(--foreground);
+  --color-card:                        var(--card);
+  --color-card-foreground:             var(--card-foreground);
+  --color-popover:                     var(--popover);
+  --color-popover-foreground:          var(--popover-foreground);
+  --color-primary:                     var(--primary);
+  --color-primary-foreground:          var(--primary-foreground);
+  --color-secondary:                   var(--secondary);
+  --color-secondary-foreground:        var(--secondary-foreground);
+  --color-muted:                       var(--muted);
+  --color-muted-foreground:            var(--muted-foreground);
+  --color-accent:                      var(--accent);
+  --color-accent-foreground:           var(--accent-foreground);
+  --color-destructive:                 var(--destructive);
+  --color-destructive-foreground:      var(--destructive-foreground);
+  --color-border:                      var(--border);
+  --color-input:                       var(--input);
+  --color-ring:                        var(--ring);
+  --color-sidebar:                     var(--sidebar);
+  --color-sidebar-foreground:          var(--sidebar-foreground);
+  --color-sidebar-primary:             var(--sidebar-primary);
+  --color-sidebar-primary-foreground:  var(--sidebar-primary-foreground);
+  --color-sidebar-accent:              var(--sidebar-accent);
+  --color-sidebar-accent-foreground:   var(--sidebar-accent-foreground);
+  --color-sidebar-border:              var(--sidebar-border);
+  --color-sidebar-ring:                var(--sidebar-ring);
+  --radius-sm:  calc(var(--radius) * 0.6);
+  --radius-md:  calc(var(--radius) * 0.8);
+  --radius-lg:  var(--radius);
+  --radius-xl:  calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --font-sans: 'Inter', system-ui, sans-serif;
 }
 
+/* ── Base resets ────────────────────────────────────────────────────────── */
 @layer base {
-  * { box-sizing: border-box; border-color: hsl(var(--border)); }
+  * {
+    box-sizing: border-box;
+    @apply border-border;
+  }
   body {
-    background-color: hsl(var(--background));
-    color: hsl(var(--foreground));
+    @apply bg-background text-foreground;
     font-family: 'Inter', system-ui, sans-serif;
     margin: 0;
   }
 }
 
-/* Keep retro font for hotel elements */
+/* ── Retro / pixel fonts for hotel UI elements ─────────────────────────── */
 .font-retro { font-family: 'VT323', monospace; }
 .font-pixel { font-family: 'Press Start 2P', monospace; }
-
-/* Figure/avatar rendering */
 img.pixel-art { image-rendering: pixelated; image-rendering: crisp-edges; }
