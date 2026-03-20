@@ -101,8 +101,8 @@ services:
       - RCON_PORT=${HABBO_RCON_PORT:-3001}
       - AGENT_TRIGGER_URL=${HABBO_AGENT_TRIGGER_URL:-http://agent-trigger:3004}
       - PORTAL_INTERNAL_SECRET=${HABBO_PORTAL_INTERNAL_SECRET:-change-this-secret}
-      - MCP_API_KEY=${HABBO_MCP_FALLBACK_API_KEY:-}
-      - HABBO_MCP_URL=${HABBO_MCP_URL:-http://habbo-mcp:3003/mcp}
+      - MCP_API_KEY=${HOTEL_MCP_API_KEY:-}
+      - HABBO_MCP_URL=${HOTEL_MCP_URL:-http://habbo-mcp:3003/mcp}
     ports:
       - ${HABBO_PORTAL_PORT:-3090}:3000
     depends_on:
@@ -165,9 +165,9 @@ services:
       - MCP_HTTP_HOST=0.0.0.0
       - MCP_HTTP_PORT=3003
       - MCP_ALLOW_STATIC_API_KEY_FALLBACK=true
-      - MCP_API_KEY=${HABBO_MCP_FALLBACK_API_KEY:-}
+      - MCP_API_KEY=${HOTEL_MCP_API_KEY:-}
     ports:
-      - "127.0.0.1:${HABBO_MCP_PORT:-3003}:3003"
+      - "127.0.0.1:${HOTEL_MCP_PORT:-3003}:3003"
     depends_on:
       - mysql
       - arcturus
@@ -182,7 +182,7 @@ services:
     environment:
       - HABBO_AGENT_TRIGGER_PORT=3004
       - HABBO_PROJECT_DIR=/project
-      - HABBO_MCP_URL=${HABBO_MCP_URL:-http://habbo-mcp:3003/mcp}
+      - HABBO_MCP_URL=${HOTEL_MCP_URL:-http://habbo-mcp:3003/mcp}
       - HABBO_PUBLIC_URL=${HABBO_PUBLIC_URL:-https://trigger.thepixeloffice.ai}
       - HABBO_ALLOWED_PHONE_NUMBERS=${HABBO_ALLOWED_PHONE_NUMBERS:-}
       - MCP_API_KEY=${MCP_API_KEY:-}
