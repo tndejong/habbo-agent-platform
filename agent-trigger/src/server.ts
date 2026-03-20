@@ -153,10 +153,12 @@ function buildPrompt(roomId: number, from: string): string {
 
 interface TeamMember {
   name: string;
+  persona_role: string;
+  capabilities: string;
   prompt: string;
   figure_type: string;
   bot_name: string;
-  role: string;
+  team_role: string;
 }
 
 interface RoomTemplate {
@@ -168,7 +170,7 @@ interface RoomTemplate {
 }
 
 interface TeamConfig {
-  team: { id: number; name: string; description: string; orchestrator_prompt: string };
+  team: { id: number; name: string; description: string; orchestrator_prompt: string; execution_mode: string; tasks_json: string };
   members: TeamMember[];
   flow: { name: string; description: string; tasks_json: string } | null;
   templates: RoomTemplate[];
@@ -203,6 +205,55 @@ async function fetchTeamConfig(teamId: number, flowId: number | null): Promise<T
   return { team: data.team, members: data.members, flow: data.flow, templates: data.templates ?? [] };
 }
 
+function renderTasksBlock(config: TeamConfig, roomId: number): string {
+  let tasks: Array<{ id: string; title: string; description?: string; assign_to?: string; depends_on?: string[] }> = []
+  try { tasks = JSON.parse(config.team.tasks_json || '[]') } catch { tasks = [] }
+  if (!tasks.length) return ''
+
+  const mode = config.team.execution_mode || 'concurrent'
+
+  if (mode === 'shared') {
+    const taskObjs = tasks.map((t, i) => ({
+      id: t.id || `t${i + 1}`,
+      title: t.title,
+      description: t.description || '',
+      assign_to: t.assign_to || null,
+      depends_on: t.depends_on || [],
+      status: 'pending',
+      claimed_by: null,
+      result: null,
+    }))
+    return `
+## Step 2: Write shared task list
+Write this exact JSON to \`/tmp/hotel-team-tasks.json\` using the Write tool:
+\`\`\`json
+${JSON.stringify({ room_id: roomId, created_at: '<ISO timestamp>', stop: false, tasks: taskObjs, messages: [] }, null, 2)}
+\`\`\`
+
+Each agent must: read \`/tmp/hotel-team-tasks.json\`, find a pending task assigned to them (or unclaimed if assign_to is null) that matches their capabilities and whose dependencies are resolved, atomically set \`claimed_by\` to their bot name, complete the work, write the \`result\` back and set \`status\` to \`done\`. Check \`messages[]\` and completed task results for dependency context.
+`
+  }
+
+  if (mode === 'sequential') {
+    const steps = tasks.map((t, i) => {
+      const idx = i + 1
+      const deps = (t.depends_on || []).length ? ` (depends on: ${t.depends_on!.join(', ')})` : ''
+      const assignee = t.assign_to ? ` → assign to **${t.assign_to}**` : ''
+      return `${idx}. **${t.title}**${assignee}${deps}${t.description ? `\n   ${t.description}` : ''}`
+    }).join('\n')
+    return `
+## Tasks — execute IN ORDER, one at a time
+Spawn ONE agent per task. Wait for each Agent call to return before spawning the next.
+
+${steps}
+
+Do NOT run tasks concurrently. Each agent receives the previous task's result as context.
+`
+  }
+
+  return ''
+}
+
 function buildPromptFromConfig(config: TeamConfig, roomId: number, triggeredBy: string): string {
   const templateNote = (botName: string): string => {
     const tpl = config.templates.find(t => t.bot_name === botName && t.room_id === roomId);
@@ -210,21 +261,68 @@ function buildPromptFromConfig(config: TeamConfig, roomId: number, triggeredBy: 
     return `\n**Room placement**: deploy anywhere in room ${roomId}`;
   };
 
-  const memberSections = config.members.map(m => `
-## Agent: ${m.name}${m.role ? ` (${m.role})` : ""} — bot: "${m.bot_name}"
-${m.prompt}
-${templateNote(m.bot_name)}`).join("\n\n");
+  const memberSections = config.members.map(m => {
+    const titleParts = [m.team_role, m.persona_role].filter(Boolean)
+    const header = `## Agent: ${m.name}${titleParts.length ? ` (${titleParts.join(' · ')})` : ''} — bot: "${m.bot_name}"`
+    const capSection = m.capabilities?.trim()
+      ? `\n### Capabilities\n${m.capabilities.trim()}`
+      : ''
+    const personalitySection = m.prompt?.trim()
+      ? `\n### Personality & Hotel Setup\n${m.prompt.trim()}`
+      : ''
+    return `${header}${capSection}${personalitySection}\n${templateNote(m.bot_name)}`
+  }).join("\n\n");
 
   const flowSection = config.flow
     ? `\n## Flow: ${config.flow.name}\n${config.flow.description}\n`
     : "";
 
-  const orchestratorBase = config.team.orchestrator_prompt
-    || `You are the orchestrator for team "${config.team.name}".\nTarget room: {{ROOM_ID}}\nTriggered by: {{TRIGGERED_BY}}\n\nLaunch all agents CONCURRENTLY in a single Agent tool call.\n\n{{PERSONAS}}\n\nLaunch all agents in ONE message.`;
+  const tasksBlock = renderTasksBlock(config, roomId)
+  const mode = config.team.execution_mode || 'concurrent'
+
+  let orchestratorBase = config.team.orchestrator_prompt
+  if (!orchestratorBase) {
+    if (mode === 'shared') {
+      orchestratorBase = `You are the orchestrator for team "{{TEAM_NAME}}".
+Target room: {{ROOM_ID}}
+Triggered by: {{TRIGGERED_BY}}
+
+## Step 1: Check hotel state
+Call list_bots — find all team bots, note their bot_id and room_id.
+
+{{TASKS}}
+
+## Step 3: Spawn agents concurrently (single message, all Agent calls at once)
+{{PERSONAS}}
+
+## Step 4: Report
+When all agents finish, read \`/tmp/hotel-team-tasks.json\` and summarise: tasks completed, messages exchanged, results.`
+    } else if (mode === 'sequential') {
+      orchestratorBase = `You are the orchestrator for team "{{TEAM_NAME}}".
+Target room: {{ROOM_ID}}
+Triggered by: {{TRIGGERED_BY}}
+
+{{TASKS}}
+
+{{PERSONAS}}`
+    } else {
+      orchestratorBase = `You are the orchestrator for team "{{TEAM_NAME}}".
+Target room: {{ROOM_ID}}
+Triggered by: {{TRIGGERED_BY}}
+
+Launch all agents CONCURRENTLY in a single Agent tool call.
+
+{{PERSONAS}}
+
+Launch all agents in ONE message.`
+    }
+  }
 
   return orchestratorBase
+    .replaceAll("{{TEAM_NAME}}", config.team.name)
     .replaceAll("{{ROOM_ID}}", String(roomId))
     .replaceAll("{{TRIGGERED_BY}}", triggeredBy)
+    .replaceAll("{{TASKS}}", tasksBlock)
     .replaceAll("{{PERSONAS}}", memberSections + flowSection);
 }
 

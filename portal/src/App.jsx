@@ -590,6 +590,7 @@ function BotsTab({ figureTypes }) {
   const [editForm, setEditForm] = useState({})
   const [botBusy, setBotBusy] = useState({})
   const [botMsg, setBotMsg] = useState({})
+  const [confirmDelete, setConfirmDelete] = useState(null)
 
   const fetchBots = useCallback(async () => {
     setLoading(true)
@@ -636,7 +637,8 @@ function BotsTab({ figureTypes }) {
   }
 
   async function deleteBot(botId) {
-    if (!window.confirm('Permanently delete this bot?')) return
+    if (confirmDelete !== botId) { setConfirmDelete(botId); return }
+    setConfirmDelete(null)
     setBotBusy(prev => ({ ...prev, [botId]: true }))
     try {
       await api(`/api/hotel/bots/${botId}`, { method: 'DELETE' })
@@ -691,9 +693,11 @@ function BotsTab({ figureTypes }) {
                     className="h-7 px-2 text-xs border border-border rounded-md hover:bg-secondary transition-colors disabled:opacity-50 flex items-center gap-1">
                     <Edit className="w-3 h-3" />
                   </button>
-                  <button onClick={() => deleteBot(bot.id)} disabled={isBusy}
-                    className="h-7 px-2 text-xs border border-destructive/30 text-destructive rounded-md hover:bg-destructive/10 transition-colors disabled:opacity-50 flex items-center gap-1">
-                    <Trash2 className="w-3 h-3" />
+                  <button onClick={() => confirmDelete === bot.id ? deleteBot(bot.id) : setConfirmDelete(bot.id)}
+                    onBlur={() => setConfirmDelete(null)}
+                    disabled={isBusy}
+                    className={`h-7 px-2 text-xs border rounded-md transition-colors disabled:opacity-50 flex items-center gap-1 ${confirmDelete === bot.id ? 'border-destructive bg-destructive text-white' : 'border-destructive/30 text-destructive hover:bg-destructive/10'}`}>
+                    {confirmDelete === bot.id ? 'Sure?' : <Trash2 className="w-3 h-3" />}
                   </button>
                 </div>
 

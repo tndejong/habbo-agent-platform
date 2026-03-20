@@ -117,6 +117,8 @@ services:
       - RCON_PORT=${HABBO_RCON_PORT:-3001}
       - AGENT_TRIGGER_URL=${HABBO_AGENT_TRIGGER_URL:-http://agent-trigger:3004}
       - PORTAL_INTERNAL_SECRET=${HABBO_PORTAL_INTERNAL_SECRET:-change-this-secret}
+      - MCP_API_KEY=${HABBO_MCP_FALLBACK_API_KEY:-}
+      - HABBO_MCP_URL=${HABBO_MCP_URL:-http://habbo-mcp:3003/mcp}
     ports:
       - ${HABBO_PORTAL_PORT:-3090}:3000
     depends_on:
@@ -173,8 +175,8 @@ services:
       - MCP_TRANSPORT=http
       - MCP_HTTP_HOST=0.0.0.0
       - MCP_HTTP_PORT=3003
-      - MCP_ALLOW_STATIC_API_KEY_FALLBACK=false
-      - MCP_API_KEY=${MCP_API_KEY:-}
+      - MCP_ALLOW_STATIC_API_KEY_FALLBACK=true
+      - MCP_API_KEY=${HABBO_MCP_FALLBACK_API_KEY:-}
     ports:
       - "127.0.0.1:${HABBO_MCP_PORT:-3003}:3003"
     depends_on:
@@ -193,13 +195,15 @@ services:
       - HABBO_MCP_URL=${HABBO_MCP_URL:-http://habbo-mcp:3003/mcp}
       - HABBO_PUBLIC_URL=${HABBO_PUBLIC_URL:-https://trigger.thepixeloffice.ai}
       - HABBO_ALLOWED_PHONE_NUMBERS=${HABBO_ALLOWED_PHONE_NUMBERS:-}
-      - MCP_API_KEY=${MCP_API_KEY:-}
+      - MCP_API_KEY=${HABBO_MCP_FALLBACK_API_KEY:-}
       - ATLASSIAN_API_TOKEN=${ATLASSIAN_API_TOKEN:-}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ANTHROPIC_API_KEY=${HABBO_ANTHROPIC_API_KEY}
       - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN:-}
       - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID:-}
       - TWILIO_FROM_NUMBER=${TWILIO_FROM_NUMBER:-}
       - HABBO_HOOK_ENABLED=false
+      - PORTAL_URL=${HABBO_PORTAL_INTERNAL_URL:-http://agent-portal:3000}
+      - PORTAL_INTERNAL_SECRET=${HABBO_PORTAL_INTERNAL_SECRET:-change-this-secret}
     volumes:
       - .:/project:ro
     ports:

@@ -288,6 +288,11 @@ async function ensurePortalSchema() {
 
   await db.execute(`ALTER TABLE agent_teams ADD COLUMN IF NOT EXISTS pack_source_url TEXT;`);
   await db.execute(`ALTER TABLE agent_teams ADD COLUMN IF NOT EXISTS role_assignments JSON;`);
+  await db.execute(`ALTER TABLE agent_teams ADD COLUMN IF NOT EXISTS execution_mode VARCHAR(20) NOT NULL DEFAULT 'concurrent';`);
+  await db.execute(`ALTER TABLE agent_teams ADD COLUMN IF NOT EXISTS tasks_json MEDIUMTEXT NOT NULL DEFAULT '[]';`);
+  await db.execute(`ALTER TABLE agent_personas ADD COLUMN IF NOT EXISTS role VARCHAR(64) NOT NULL DEFAULT '' AFTER name;`);
+  await db.execute(`ALTER TABLE agent_personas ADD COLUMN IF NOT EXISTS capabilities TEXT NOT NULL DEFAULT '' AFTER role;`);
+  await db.execute(`ALTER TABLE agent_personas ADD COLUMN IF NOT EXISTS figure TEXT NOT NULL DEFAULT '' AFTER figure_type;`);
 
   await db.execute(`
     CREATE TABLE IF NOT EXISTS agent_team_members (
@@ -1030,7 +1035,7 @@ app.get('/api/hotel/bots', authRequired, async (req, res) => {
     LEFT JOIN rooms r ON r.id = a.room_id
     LEFT JOIN bots b ON b.id = a.bot_id
     WHERE a.user_id = ?
-    ORDER BY a.created_at DESC
+    ORDER BY a.active DESC, a.created_at DESC
   `, [habboUserId]);
   res.json({ bots: rows });
 });
@@ -1139,7 +1144,7 @@ app.delete('/api/hotel/bots/:id', authRequired, async (req, res) => {
     if (!rconOk) await db.execute('DELETE FROM bots WHERE id=?', [bot.id]);
   }
 
-  await db.execute('UPDATE ai_agent_configs SET active=0, bot_id=NULL WHERE id=?', [configId]);
+  await db.execute('DELETE FROM ai_agent_configs WHERE id=?', [configId]);
   res.json({ ok: true });
 });
 
@@ -1192,11 +1197,11 @@ app.get('/api/agents/personas', authRequired, async (req, res) => {
 
 app.post('/api/agents/personas', authRequired, devRequired, async (req, res) => {
   try {
-    const { name, description, prompt, figure_type, bot_name } = req.body;
+    const { name, description, prompt, capabilities, figure_type, bot_name } = req.body;
     if (!name || !name.trim()) return res.status(400).json({ error: 'Name required' });
     const [result] = await db.execute(
-      'INSERT INTO agent_personas (name, description, prompt, figure_type, bot_name, created_by_user_id) VALUES (?,?,?,?,?,?)',
-      [name.trim(), description || '', prompt || '', figure_type || 'agent-m', bot_name || '', req.user.habbo_user_id]
+      'INSERT INTO agent_personas (name, description, prompt, capabilities, figure_type, bot_name, created_by_user_id) VALUES (?,?,?,?,?,?,?)',
+      [name.trim(), description || '', prompt || '', capabilities || '', figure_type || 'agent-m', bot_name || '', req.user.habbo_user_id]
     );
     res.json({ ok: true, id: result.insertId });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1212,10 +1217,10 @@ app.get('/api/agents/personas/:id', authRequired, async (req, res) => {
 
 app.put('/api/agents/personas/:id', authRequired, devRequired, async (req, res) => {
   try {
-    const { name, description, prompt, figure_type, bot_name } = req.body;
+    const { name, role, capabilities, description, prompt, figure_type, bot_name, figure } = req.body;
     await db.execute(
-      'UPDATE agent_personas SET name=?, description=?, prompt=?, figure_type=?, bot_name=? WHERE id=?',
-      [name, description || '', prompt || '', figure_type || 'agent-m', bot_name || '', req.params.id]
+      'UPDATE agent_personas SET name=?, role=?, capabilities=?, description=?, prompt=?, figure_type=?, bot_name=?, figure=? WHERE id=?',
+      [name, role || '', capabilities || '', description || '', prompt || '', figure_type || 'agent-m', bot_name || '', figure || '', req.params.id]
     );
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1244,11 +1249,11 @@ app.get('/api/agents/teams', authRequired, async (req, res) => {
 
 app.post('/api/agents/teams', authRequired, devRequired, async (req, res) => {
   try {
-    const { name, description, orchestrator_prompt, pack_source_url, role_assignments } = req.body;
+    const { name, description, orchestrator_prompt, pack_source_url, role_assignments, execution_mode, tasks_json } = req.body;
     if (!name?.trim()) return res.status(400).json({ error: 'Name required' });
     const [result] = await db.execute(
-      'INSERT INTO agent_teams (name, description, orchestrator_prompt, pack_source_url, role_assignments, created_by_user_id) VALUES (?,?,?,?,?,?)',
-      [name.trim(), description || '', orchestrator_prompt || '', pack_source_url || null, role_assignments ? JSON.stringify(role_assignments) : null, req.user.habbo_user_id]
+      'INSERT INTO agent_teams (name, description, orchestrator_prompt, pack_source_url, role_assignments, execution_mode, tasks_json, created_by_user_id) VALUES (?,?,?,?,?,?,?,?)',
+      [name.trim(), description || '', orchestrator_prompt || '', pack_source_url || null, role_assignments ? JSON.stringify(role_assignments) : null, execution_mode || 'concurrent', JSON.stringify(tasks_json || []), req.user.habbo_user_id]
     );
     res.json({ ok: true, id: result.insertId });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1275,10 +1280,10 @@ app.get('/api/agents/teams/:id', authRequired, async (req, res) => {
 
 app.put('/api/agents/teams/:id', authRequired, devRequired, async (req, res) => {
   try {
-    const { name, description, orchestrator_prompt, pack_source_url, role_assignments } = req.body;
+    const { name, description, orchestrator_prompt, pack_source_url, role_assignments, execution_mode, tasks_json } = req.body;
     await db.execute(
-      'UPDATE agent_teams SET name=?, description=?, orchestrator_prompt=?, pack_source_url=?, role_assignments=? WHERE id=?',
-      [name, description || '', orchestrator_prompt || '', pack_source_url || null, role_assignments ? JSON.stringify(role_assignments) : null, req.params.id]
+      'UPDATE agent_teams SET name=?, description=?, orchestrator_prompt=?, pack_source_url=?, role_assignments=?, execution_mode=?, tasks_json=? WHERE id=?',
+      [name, description || '', orchestrator_prompt || '', pack_source_url || null, role_assignments ? JSON.stringify(role_assignments) : null, execution_mode || 'concurrent', JSON.stringify(tasks_json || []), req.params.id]
     );
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1554,15 +1559,64 @@ app.get('/api/agents/bots', authRequired, async (req, res) => {
 
 app.get('/api/agents/status', authRequired, async (req, res) => {
   try {
-    const [triggerRes, botsRes, mcpRes] = await Promise.allSettled([
+    const MCP_URL = (process.env.HABBO_MCP_URL || 'http://habbo-mcp:3003/mcp').replace(/\/?$/, '');
+    const MCP_KEY = process.env.MCP_API_KEY || '';
+
+    const [triggerRes, mcpRes, personasRes, roomsRes] = await Promise.allSettled([
       fetch(`${AGENT_TRIGGER_URL}/health`).then(r => r.json()),
-      db.execute('SELECT id, name, motto, figure, gender, room_id, x, y FROM bots ORDER BY id ASC'),
       fetch(`${AGENT_TRIGGER_URL}/mcp-status`).then(r => r.json()),
+      // Fetch all persona→bot_name mappings for enrichment
+      db.execute(`
+        SELECT p.name AS persona_name, p.bot_name, p.figure AS persona_figure,
+               at2.name AS team_name
+        FROM agent_personas p
+        LEFT JOIN agent_team_members atm ON atm.persona_id = p.id
+        LEFT JOIN agent_teams at2 ON at2.id = atm.team_id
+      `),
+      db.execute('SELECT id, caption AS name FROM rooms'),
     ]);
+
+    // Build room name lookup
+    const roomNames = {};
+    if (roomsRes.status === 'fulfilled') {
+      for (const r of roomsRes.value[0]) roomNames[r.id] = r.name;
+    }
+
+    // Call MCP list_bots for truly live game state
+    let liveBots = [];
+    try {
+      const headers = { 'content-type': 'application/json' };
+      if (MCP_KEY) headers['authorization'] = `Bearer ${MCP_KEY}`;
+      const mcpBotRes = await fetch(MCP_URL, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ jsonrpc: '2.0', id: 'status', method: 'tools/call', params: { name: 'list_bots', arguments: {} } }),
+        signal: AbortSignal.timeout(4000),
+      });
+      const mcpData = await mcpBotRes.json();
+      const parsed = JSON.parse(mcpData.result?.content?.[0]?.text || '{}');
+      const allBots = parsed.bots || [];
+
+      // Only bots in a loaded room (room_id > 0)
+      const personas = personasRes.status === 'fulfilled' ? personasRes.value[0] : [];
+      const personaMap = {};
+      for (const p of personas) personaMap[p.bot_name?.toLowerCase()] = p;
+
+      liveBots = allBots
+        .filter(b => b.room_id > 0)
+        .map(b => ({
+          ...b,
+          room_name: roomNames[b.room_id] || null,
+          ...(personaMap[b.name?.toLowerCase()] || {}),
+          is_agent: !!personaMap[b.name?.toLowerCase()],
+        }))
+        .sort((a, b) => (b.is_agent ? 1 : 0) - (a.is_agent ? 1 : 0) || a.name.localeCompare(b.name));
+    } catch (e) { /* MCP unreachable — return empty */ }
+
     res.json({
       ok: true,
       trigger: triggerRes.status === 'fulfilled' ? triggerRes.value : { ok: false },
-      bots: botsRes.status === 'fulfilled' ? botsRes.value[0] : [],
+      bots: liveBots,
       mcp: mcpRes.status === 'fulfilled' ? mcpRes.value : { ok: false, servers: [], error: 'agent-trigger unreachable' },
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1581,7 +1635,7 @@ app.get('/api/internal/teams/:id/config', async (req, res) => {
     const [[team]] = await db.execute('SELECT * FROM agent_teams WHERE id=?', [teamId]);
     if (!team) return res.status(404).json({ error: 'Team not found' });
     const [members] = await db.execute(
-      `SELECT p.name, p.prompt, p.figure_type, p.bot_name, atm.role
+      `SELECT p.name, p.role AS persona_role, p.capabilities, p.prompt, p.figure_type, p.bot_name, atm.role AS team_role
        FROM agent_team_members atm JOIN agent_personas p ON p.id = atm.persona_id
        WHERE atm.team_id = ?`, [teamId]
     );

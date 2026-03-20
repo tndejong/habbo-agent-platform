@@ -7,6 +7,9 @@
 /* ── Hotel dark theme (oklch) ───────────────────────────────────────────── */
 /* Primary = gold/yellow, Accent = cyan, dark navy background               */
 @layer base {
+  button, [role="button"], select, label[for], a { cursor: pointer; }
+  button:disabled { cursor: not-allowed; }
+
   :root {
     --background:             oklch(0.19 0.038 258);   /* navy  222 47% 11% */
     --foreground:             oklch(0.97 0.004 240);   /* near-white        */

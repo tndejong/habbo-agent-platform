@@ -6,6 +6,9 @@ RUN apk add --no-cache nodejs npm
 # Install claude CLI globally
 RUN npm install -g @anthropic-ai/claude-code
 
+# Create non-root user — claude refuses --dangerously-skip-permissions as root
+RUN addgroup -S claude && adduser -S -G claude -h /home/claude claude
+
 WORKDIR /app
 
 COPY package.json ./
@@ -13,12 +16,13 @@ COPY src/ ./src/
 COPY entrypoint.sh ./entrypoint.sh
 
 # Bake Claude hook settings + narrator script into the image
-# Placed at /app/hooks/ (not under /project) so the Portainer volume mount
-# on /project doesn't shadow these files.
-COPY .claude/ /root/.claude/
+COPY .claude/ /home/claude/.claude/
 COPY hooks/ /app/hooks/
 
-RUN chmod +x /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh && \
+    chown -R claude:claude /app /home/claude
+
+USER claude
 
 EXPOSE 3004
 
