@@ -87,8 +87,8 @@ services:
 
   agent-portal:
     container_name: agent-portal
-    build:
-      context: ./portal
+    image: ghcr.io/${HABBO_OWNER_OR_ORG}/agent-portal:latest
+    restart: unless-stopped
     environment:
       - PORT=3000
       - HABBO_BASE_URL=${HABBO_PORTAL_BASE_URL:-http://127.0.0.1:${HABBO_NITRO_BIND_PORT:-1080}}
@@ -112,6 +112,11 @@ services:
       - DB_USER=arcturus_user
       - DB_PASSWORD=arcturus_pw
       - IMAGER_URL=${HABBO_IMAGER_URL:-http://nitro-imager:3005}
+      - AI_SERVICE_URL=${HABBO_AI_SERVICE_URL:-http://habbo-ai-service:3002}
+      - RCON_HOST=${HABBO_RCON_HOST:-arcturus}
+      - RCON_PORT=${HABBO_RCON_PORT:-3001}
+      - AGENT_TRIGGER_URL=${HABBO_AGENT_TRIGGER_URL:-http://agent-trigger:3004}
+      - PORTAL_INTERNAL_SECRET=${HABBO_PORTAL_INTERNAL_SECRET:-change-this-secret}
     ports:
       - ${HABBO_PORTAL_PORT:-3090}:3000
     depends_on:

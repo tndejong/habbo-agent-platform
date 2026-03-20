@@ -11,7 +11,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: '../portal-dist',
+    outDir: './dist',
     emptyOutDir: true,
   },
 })

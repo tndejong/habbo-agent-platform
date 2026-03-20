@@ -170,3 +170,25 @@ jobs:
           cache-to: type=gha,mode=max,scope=agent-trigger
           tags: ${{ steps.meta_agent_trigger.outputs.tags }}
           labels: ${{ steps.meta_agent_trigger.outputs.labels }}
+
+      - name: Extract metadata (agent-portal)
+        id: meta_agent_portal
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/agent-portal
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=tag
+            type=sha
+
+      - name: Build and push agent-portal image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./portal
+          file: ./portal/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha,scope=agent-portal
+          cache-to: type=gha,mode=max,scope=agent-portal
+          tags: ${{ steps.meta_agent_portal.outputs.tags }}
+          labels: ${{ steps.meta_agent_portal.outputs.labels }}

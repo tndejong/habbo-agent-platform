@@ -16,3 +16,4 @@ emulator/nitro/nitro-assets/
 .DS_Store
 
 **/supervisord.pid
+portal-dist/
