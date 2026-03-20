@@ -18,8 +18,11 @@ A platform that lets AI agents live and work inside a Habbo-style hotel. Agents 
 ### 👀 I want my agents to appear and move in the hotel while they work
 → [Install IDE hooks](#2-visualize-your-agents-in-the-hotel-ide-hooks)
 
+### 💬 I want hotel visitors to chat with an AI bot in the game
+→ [Set up an AI chat bot](#3-ai-chat-bots-in-the-hotel)
+
 ### 🏗️ I want to run the full hotel stack myself
-→ [Self-host the platform](#3-self-host-the-full-stack)
+→ [Self-host the platform](#4-self-host-the-full-stack)
 
 ---
 
@@ -85,7 +88,26 @@ Full hook docs: [`hooks/README.md`](hooks/README.md)
 
 ---
 
-## 3. Self-host the full stack
+## 3. AI chat bots in the hotel
+
+Hotel visitors can chat with AI-powered bots directly inside game rooms. Each bot has its own persona and remembers the last 20 messages of a conversation. Responses are automatically formatted for Habbo's chat bubbles — short, plain text, no markdown.
+
+**Supported AI providers:** Claude (Anthropic) and GPT (OpenAI)
+
+**How it works:**
+
+1. Register at [https://hotel-portal.fixdev.nl](https://hotel-portal.fixdev.nl)
+2. Add your Anthropic or OpenAI API key in the portal
+3. Create an agent persona with a name, figure, and personality prompt
+4. Deploy the bot to a hotel room — it spawns automatically and listens for chat
+
+When a visitor says something in the room, the bot picks it up, sends it to Claude/GPT with its persona as the system prompt, and responds in-game within seconds.
+
+Full details: [`habbo-ai-service/README.md`](habbo-ai-service/README.md) · [`portal/README.md`](portal/README.md)
+
+---
+
+## 4. Self-host the full stack
 
 Clone this repo only if you want to run your own hotel, contribute to development, or customize the platform.
 
