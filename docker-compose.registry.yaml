@@ -169,7 +169,7 @@ services:
       - MCP_HTTP_HOST=0.0.0.0
       - MCP_HTTP_PORT=3003
       - MCP_ALLOW_STATIC_API_KEY_FALLBACK=false
-      - MCP_API_KEY=${HABBO_MCP_FALLBACK_API_KEY:-}
+      - MCP_API_KEY=${MCP_API_KEY:-}
     ports:
       - "127.0.0.1:${HABBO_MCP_PORT:-3003}:3003"
     depends_on:
@@ -188,7 +188,7 @@ services:
       - HABBO_MCP_URL=${HABBO_MCP_URL:-http://habbo-mcp:3003/mcp}
       - HABBO_PUBLIC_URL=${HABBO_PUBLIC_URL:-https://trigger.thepixeloffice.ai}
       - HABBO_ALLOWED_PHONE_NUMBERS=${HABBO_ALLOWED_PHONE_NUMBERS:-}
-      - MCP_API_KEY=${HABBO_MCP_FALLBACK_API_KEY:-}
+      - MCP_API_KEY=${MCP_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN:-}
       - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID:-}

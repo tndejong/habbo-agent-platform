@@ -31,6 +31,8 @@ const PORTAL_BOOTSTRAP_HABBO_USERNAME = (process.env.PORTAL_BOOTSTRAP_HABBO_USER
 const PORTAL_RESET_TOKEN_TTL_MINUTES = Number.parseInt(process.env.PORTAL_RESET_TOKEN_TTL_MINUTES || '30', 10);
 const IMAGER_URL     = (process.env.IMAGER_URL     || 'http://nitro-imager:3005').replace(/\/$/, '');
 const AI_SERVICE_URL = (process.env.AI_SERVICE_URL || 'http://habbo-ai-service:3002').replace(/\/$/, '');
+const AGENT_TRIGGER_URL = (process.env.AGENT_TRIGGER_URL || 'http://agent-trigger:3004').replace(/\/$/, '');
+const PORTAL_INTERNAL_SECRET = process.env.PORTAL_INTERNAL_SECRET || '';
 const RCON_HOST      = (process.env.RCON_HOST      || 'arcturus');
 const RCON_PORT      = Number.parseInt(process.env.RCON_PORT || '3001', 10);
 const PORTAL_SMTP_HOST = (process.env.PORTAL_SMTP_HOST || '').trim();
@@ -117,6 +119,21 @@ function authRequired(req, res, next) {
     return next();
   } catch {
     return res.status(401).json({ error: 'Session expired' });
+  }
+}
+
+async function devRequired(req, res, next) {
+  try {
+    const [rows] = await db.execute(
+      'SELECT is_developer FROM portal_users WHERE habbo_user_id = ?',
+      [req.user.habbo_user_id]
+    );
+    if (!rows[0]?.is_developer) {
+      return res.status(403).json({ error: 'Developer access required' });
+    }
+    next();
+  } catch (err) {
+    res.status(500).json({ error: 'Internal error' });
   }
 }
 
@@ -236,6 +253,80 @@ async function ensurePortalSchema() {
   `);
 
   await db.execute(`
+    ALTER TABLE portal_users ADD COLUMN IF NOT EXISTS is_developer TINYINT(1) NOT NULL DEFAULT 0 AFTER ai_tier;
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS agent_personas (
+      id INT NOT NULL AUTO_INCREMENT,
+      name VARCHAR(64) NOT NULL,
+      description VARCHAR(255) NOT NULL DEFAULT '',
+      prompt MEDIUMTEXT NOT NULL DEFAULT '',
+      figure_type VARCHAR(64) NOT NULL DEFAULT 'agent-m',
+      bot_name VARCHAR(25) NOT NULL DEFAULT '',
+      created_by_user_id INT,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_agent_persona_name (name)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS agent_teams (
+      id INT NOT NULL AUTO_INCREMENT,
+      name VARCHAR(64) NOT NULL,
+      description VARCHAR(255) NOT NULL DEFAULT '',
+      orchestrator_prompt MEDIUMTEXT NOT NULL DEFAULT '',
+      created_by_user_id INT,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_agent_team_name (name)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS agent_team_members (
+      id INT NOT NULL AUTO_INCREMENT,
+      team_id INT NOT NULL,
+      persona_id INT NOT NULL,
+      role VARCHAR(64) NOT NULL DEFAULT '',
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_team_persona (team_id, persona_id),
+      CONSTRAINT fk_atm_team FOREIGN KEY (team_id) REFERENCES agent_teams(id) ON DELETE CASCADE,
+      CONSTRAINT fk_atm_persona FOREIGN KEY (persona_id) REFERENCES agent_personas(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS agent_flows (
+      id INT NOT NULL AUTO_INCREMENT,
+      name VARCHAR(64) NOT NULL,
+      description VARCHAR(255) NOT NULL DEFAULT '',
+      tasks_json MEDIUMTEXT NOT NULL DEFAULT '[]',
+      allowed_tools_json TEXT NOT NULL DEFAULT '[]',
+      created_by_user_id INT,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_agent_flow_name (name)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS agent_team_flows (
+      id INT NOT NULL AUTO_INCREMENT,
+      team_id INT NOT NULL,
+      flow_id INT NOT NULL,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_team_flow (team_id, flow_id),
+      CONSTRAINT fk_atf_team FOREIGN KEY (team_id) REFERENCES agent_teams(id) ON DELETE CASCADE,
+      CONSTRAINT fk_atf_flow FOREIGN KEY (flow_id) REFERENCES agent_flows(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+
+  await db.execute(`
     CREATE TABLE IF NOT EXISTS portal_mcp_call_logs (
       id BIGINT NOT NULL AUTO_INCREMENT,
       token_id BIGINT NULL,
@@ -283,7 +374,7 @@ function maskTokenPreview(token) {
 
 async function getPortalUserByHabboUserId(habboUserId) {
   const [rows] = await db.execute(
-    'SELECT id, email, username, habbo_user_id, habbo_username, ai_tier FROM portal_users WHERE habbo_user_id = ? LIMIT 1',
+    'SELECT id, email, username, habbo_user_id, habbo_username, ai_tier, is_developer FROM portal_users WHERE habbo_user_id = ? LIMIT 1',
     [habboUserId]
   );
   return rows[0] || null;
@@ -614,6 +705,7 @@ app.get('/api/auth/me', authRequired, async (req, res) => {
       username: req.user.username,
       habbo_username: req.user.habbo_username,
       ai_tier: portalUser?.ai_tier || 'basic',
+      is_developer: portalUser?.is_developer || 0,
       figure: habboUser?.look || null
     }
   });
@@ -913,6 +1005,270 @@ app.get('/api/figure', async (req, res) => {
   } catch {
     res.status(502).end();
   }
+});
+
+// ── Agent Personas ──────────────────────────────────────────────────────────
+
+app.use('/api/agents', express.json({ limit: '1mb' }));
+
+app.get('/api/agents/personas', authRequired, async (req, res) => {
+  try {
+    const [rows] = await db.execute('SELECT * FROM agent_personas ORDER BY name ASC');
+    res.json({ ok: true, personas: rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/agents/personas', authRequired, devRequired, async (req, res) => {
+  try {
+    const { name, description, prompt, figure_type, bot_name } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ error: 'Name required' });
+    const [result] = await db.execute(
+      'INSERT INTO agent_personas (name, description, prompt, figure_type, bot_name, created_by_user_id) VALUES (?,?,?,?,?,?)',
+      [name.trim(), description || '', prompt || '', figure_type || 'agent-m', bot_name || '', req.user.habbo_user_id]
+    );
+    res.json({ ok: true, id: result.insertId });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/agents/personas/:id', authRequired, async (req, res) => {
+  try {
+    const [[row]] = await db.execute('SELECT * FROM agent_personas WHERE id=?', [req.params.id]);
+    if (!row) return res.status(404).json({ error: 'Not found' });
+    res.json({ ok: true, persona: row });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/agents/personas/:id', authRequired, devRequired, async (req, res) => {
+  try {
+    const { name, description, prompt, figure_type, bot_name } = req.body;
+    await db.execute(
+      'UPDATE agent_personas SET name=?, description=?, prompt=?, figure_type=?, bot_name=? WHERE id=?',
+      [name, description || '', prompt || '', figure_type || 'agent-m', bot_name || '', req.params.id]
+    );
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/agents/personas/:id', authRequired, devRequired, async (req, res) => {
+  try {
+    await db.execute('DELETE FROM agent_personas WHERE id=?', [req.params.id]);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Agent Teams ─────────────────────────────────────────────────────────────
+
+app.get('/api/agents/teams', authRequired, async (req, res) => {
+  try {
+    const [teams] = await db.execute('SELECT * FROM agent_teams ORDER BY name ASC');
+    // For each team, get member count
+    for (const team of teams) {
+      const [[{ cnt }]] = await db.execute('SELECT COUNT(*) as cnt FROM agent_team_members WHERE team_id=?', [team.id]);
+      team.member_count = cnt;
+    }
+    res.json({ ok: true, teams });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/agents/teams', authRequired, devRequired, async (req, res) => {
+  try {
+    const { name, description, orchestrator_prompt } = req.body;
+    if (!name?.trim()) return res.status(400).json({ error: 'Name required' });
+    const [result] = await db.execute(
+      'INSERT INTO agent_teams (name, description, orchestrator_prompt, created_by_user_id) VALUES (?,?,?,?)',
+      [name.trim(), description || '', orchestrator_prompt || '', req.user.habbo_user_id]
+    );
+    res.json({ ok: true, id: result.insertId });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/agents/teams/:id', authRequired, async (req, res) => {
+  try {
+    const [[team]] = await db.execute('SELECT * FROM agent_teams WHERE id=?', [req.params.id]);
+    if (!team) return res.status(404).json({ error: 'Not found' });
+    const [members] = await db.execute(
+      `SELECT atm.id, atm.role, p.id AS persona_id, p.name, p.description, p.figure_type, p.bot_name
+       FROM agent_team_members atm
+       JOIN agent_personas p ON p.id = atm.persona_id
+       WHERE atm.team_id = ?`, [req.params.id]
+    );
+    const [flows] = await db.execute(
+      `SELECT f.* FROM agent_flows f
+       JOIN agent_team_flows atf ON atf.flow_id = f.id
+       WHERE atf.team_id = ?`, [req.params.id]
+    );
+    res.json({ ok: true, team: { ...team, members, flows } });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/agents/teams/:id', authRequired, devRequired, async (req, res) => {
+  try {
+    const { name, description, orchestrator_prompt } = req.body;
+    await db.execute(
+      'UPDATE agent_teams SET name=?, description=?, orchestrator_prompt=? WHERE id=?',
+      [name, description || '', orchestrator_prompt || '', req.params.id]
+    );
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/agents/teams/:id', authRequired, devRequired, async (req, res) => {
+  try {
+    await db.execute('DELETE FROM agent_teams WHERE id=?', [req.params.id]);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/agents/teams/:id/members', authRequired, devRequired, async (req, res) => {
+  try {
+    const { persona_id, role } = req.body;
+    await db.execute(
+      'INSERT IGNORE INTO agent_team_members (team_id, persona_id, role) VALUES (?,?,?)',
+      [req.params.id, persona_id, role || '']
+    );
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/agents/teams/:id/members/:memberId', authRequired, devRequired, async (req, res) => {
+  try {
+    await db.execute('DELETE FROM agent_team_members WHERE id=? AND team_id=?', [req.params.memberId, req.params.id]);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/agents/teams/:id/flows', authRequired, devRequired, async (req, res) => {
+  try {
+    const { flow_id } = req.body;
+    await db.execute('INSERT IGNORE INTO agent_team_flows (team_id, flow_id) VALUES (?,?)', [req.params.id, flow_id]);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/agents/teams/:id/flows/:flowId', authRequired, devRequired, async (req, res) => {
+  try {
+    await db.execute('DELETE FROM agent_team_flows WHERE team_id=? AND flow_id=?', [req.params.id, req.params.flowId]);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Trigger a team
+app.post('/api/agents/teams/:id/trigger', authRequired, async (req, res) => {
+  try {
+    const { flow_id, room_id } = req.body;
+    const [[team]] = await db.execute('SELECT id, name FROM agent_teams WHERE id=?', [req.params.id]);
+    if (!team) return res.status(404).json({ error: 'Team not found' });
+    const r = await fetch(`${AGENT_TRIGGER_URL}/trigger`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        team_id: Number(req.params.id),
+        flow_id: flow_id ? Number(flow_id) : null,
+        room_id: Number(room_id) || 202,
+        triggered_by: req.user.username,
+        portal_url: process.env.PORTAL_PUBLIC_URL
+      })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) return res.status(502).json({ error: data.error || 'Trigger failed' });
+    res.json({ ok: true, ...data });
+  } catch (err) { res.status(502).json({ error: 'Agent trigger unavailable: ' + err.message }); }
+});
+
+// Stop active team
+app.post('/api/agents/stop', authRequired, async (req, res) => {
+  try {
+    const r = await fetch(`${AGENT_TRIGGER_URL}/reset`, { method: 'POST' });
+    const data = await r.json().catch(() => ({}));
+    res.json({ ok: true, ...data });
+  } catch (err) { res.status(502).json({ error: 'Agent trigger unavailable' }); }
+});
+
+// ── Agent Flows ─────────────────────────────────────────────────────────────
+
+app.get('/api/agents/flows', authRequired, async (req, res) => {
+  try {
+    const [rows] = await db.execute('SELECT * FROM agent_flows ORDER BY name ASC');
+    res.json({ ok: true, flows: rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/agents/flows', authRequired, devRequired, async (req, res) => {
+  try {
+    const { name, description, tasks_json, allowed_tools_json } = req.body;
+    if (!name?.trim()) return res.status(400).json({ error: 'Name required' });
+    const [result] = await db.execute(
+      'INSERT INTO agent_flows (name, description, tasks_json, allowed_tools_json, created_by_user_id) VALUES (?,?,?,?,?)',
+      [name.trim(), description || '', JSON.stringify(tasks_json || []), JSON.stringify(allowed_tools_json || []), req.user.habbo_user_id]
+    );
+    res.json({ ok: true, id: result.insertId });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/agents/flows/:id', authRequired, async (req, res) => {
+  try {
+    const [[row]] = await db.execute('SELECT * FROM agent_flows WHERE id=?', [req.params.id]);
+    if (!row) return res.status(404).json({ error: 'Not found' });
+    res.json({ ok: true, flow: row });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/agents/flows/:id', authRequired, devRequired, async (req, res) => {
+  try {
+    const { name, description, tasks_json, allowed_tools_json } = req.body;
+    await db.execute(
+      'UPDATE agent_flows SET name=?, description=?, tasks_json=?, allowed_tools_json=? WHERE id=?',
+      [name, description || '', JSON.stringify(tasks_json || []), JSON.stringify(allowed_tools_json || []), req.params.id]
+    );
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/agents/flows/:id', authRequired, devRequired, async (req, res) => {
+  try {
+    await db.execute('DELETE FROM agent_flows WHERE id=?', [req.params.id]);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Agent Status ─────────────────────────────────────────────────────────────
+
+app.get('/api/agents/status', authRequired, async (req, res) => {
+  try {
+    const [triggerRes, botsRes] = await Promise.allSettled([
+      fetch(`${AGENT_TRIGGER_URL}/health`).then(r => r.json()),
+      db.execute('SELECT id, name, motto, figure, gender, room_id, x, y FROM bots ORDER BY id ASC')
+    ]);
+    res.json({
+      ok: true,
+      trigger: triggerRes.status === 'fulfilled' ? triggerRes.value : { ok: false },
+      bots: botsRes.status === 'fulfilled' ? botsRes.value[0] : []
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Internal endpoint for agent-trigger ────────────────────────────────────
+
+app.get('/api/internal/teams/:id/config', async (req, res) => {
+  try {
+    const secret = req.headers['x-internal-secret'];
+    if (PORTAL_INTERNAL_SECRET && secret !== PORTAL_INTERNAL_SECRET) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    const teamId = Number(req.params.id);
+    const flowId = req.query.flow_id ? Number(req.query.flow_id) : null;
+    const [[team]] = await db.execute('SELECT * FROM agent_teams WHERE id=?', [teamId]);
+    if (!team) return res.status(404).json({ error: 'Team not found' });
+    const [members] = await db.execute(
+      `SELECT p.name, p.prompt, p.figure_type, p.bot_name, atm.role
+       FROM agent_team_members atm JOIN agent_personas p ON p.id = atm.persona_id
+       WHERE atm.team_id = ?`, [teamId]
+    );
+    const flow = flowId
+      ? (await db.execute('SELECT * FROM agent_flows WHERE id=?', [flowId]))[0][0]
+      : null;
+    res.json({ ok: true, team, members, flow });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 const indexPath = path.join(__dirname, 'dist/index.html');
