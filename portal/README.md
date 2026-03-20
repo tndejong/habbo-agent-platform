@@ -35,6 +35,41 @@ Groups of agents deployed together. Each team has:
 
 ## Local setup — first-time requirements
 
+### In-room AI commands require rank 7
+
+The in-room commands `:set_ai_key` and `:setup_agent` are gated by the Arcturus permissions system. On a fresh database, new hotel accounts default to rank **1** which does not have these permissions — typing the command in the room will silently do nothing.
+
+**Fix — promote the hotel account to rank 7 (superadmin):**
+
+```sql
+UPDATE users SET rank = 7 WHERE username = 'yourusername';
+```
+
+Or grant the AI commands to all ranks if you want every user to be able to spawn their own bots:
+
+```sql
+UPDATE permissions SET cmd_set_ai_key = '1', cmd_setup_agent = '1', cmd_ai_help = '1';
+```
+
+**Also verify the `habbo-ai-service` migrations have been applied** (they add the permission columns — without this the commands don't exist at all):
+
+```sql
+SHOW COLUMNS FROM permissions LIKE 'cmd_set_ai_key';
+```
+
+If that returns empty the `habbo-ai-service` container hasn't run its migrations yet — make sure it started successfully with `just doctor` or `docker compose logs habbo-ai-service`.
+
+**In-room command flow once permissions are correct:**
+
+```
+:set_ai_key sk-ant-api01...                            # register + verify Anthropic key
+:setup_agent Aria type:agent A friendly assistant      # spawn the bot next to you
+```
+
+Available figure types: `default`, `citizen`, `agent`, `bouncer`, `m-employee`
+
+---
+
 ### Room 202 must exist before triggering a team
 
 When you trigger a team locally, agent-trigger deploys bots to room **202** by default. This room does not exist automatically — you need to create it manually once in the hotel before the first trigger.
