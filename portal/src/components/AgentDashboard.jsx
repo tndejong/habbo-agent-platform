@@ -114,37 +114,30 @@ export function AgentDashboard({ me }) {
       const d = await res.json().catch(() => ({}))
       if (!d.lines) return d
       setLogLines(d.lines)
+
+      // Detect errors by scanning the last 20 lines directly — no state transition needed
+      // Only show banner if there's no active team (crash) and we haven't already shown it
+      const tail = d.lines.slice(-20).join('\n')
+      const hasRecentError = /\[trigger\].*error:/i.test(tail)
+      if (hasRecentError && !activeTeam) {
+        if (/credit balance is too low/i.test(tail)) {
+          setTeamError({ type: 'billing', message: 'Anthropic credit balance is too low — top up at console.anthropic.com' })
+        } else {
+          const errLine = d.lines.slice(-20).reverse().find(l => /\[trigger\].*error:/i.test(l))
+          const detail = errLine ? errLine.split('error:')[1]?.trim() : null
+          setTeamError({ type: 'error', message: detail || 'Team stopped with an error — check the log panel for details' })
+        }
+      }
       return d
     } catch { return {} }
-  }, [])
+  }, [activeTeam])
 
   useEffect(() => {
-    async function pollLogs() {
-      if (logPaused) return
-      const d = await fetchLogs()
-      if (!d.lines) return
-
-      // Detect team stopping with an error by scanning the last 20 lines
-      const wasActive = prevActiveTeam.current
-      const isActive = activeTeam
-      if (wasActive && !isActive) {
-        const tail = d.lines.slice(-20).join('\n')
-        let detected = null
-        if (/credit balance is too low/i.test(tail)) {
-          detected = { type: 'billing', message: 'Anthropic credit balance is too low — top up at console.anthropic.com' }
-        } else if (/claude exited 1/i.test(tail)) {
-          const errLine = d.lines.slice(-20).reverse().find(l => l.includes('[trigger]') && l.includes('error:'))
-          const detail = errLine ? errLine.split('error:')[1]?.trim() : null
-          detected = { type: 'error', message: detail || 'Team stopped with an error — check the log panel for details' }
-        }
-        if (detected) setTeamError(detected)
-      }
-      prevActiveTeam.current = isActive
-    }
-    pollLogs()
-    const id = setInterval(pollLogs, 3000)
+    fetchLogs()
+    if (logPaused) return
+    const id = setInterval(fetchLogs, 3000)
     return () => clearInterval(id)
-  }, [logPaused, activeTeam, fetchLogs])
+  }, [logPaused, fetchLogs])
 
   async function stopTeam() {
     setStopping(true)
@@ -923,7 +916,7 @@ function IntegratedView({ onAfterTrigger }) {
     try {
       await api(`/api/agents/teams/${team.id}/trigger`, { method: 'POST' })
       showToast(`Team "${team.name}" deployed!`)
-      // Fetch logs immediately + again after 2s to catch fast crashes
+      // Fetch logs immediately + again after 2s/4s to catch fast crashes
       onAfterTrigger?.()
       setTimeout(() => onAfterTrigger?.(), 2000)
       setTimeout(() => onAfterTrigger?.(), 4000)

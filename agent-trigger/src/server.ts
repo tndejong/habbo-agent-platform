@@ -14,7 +14,8 @@ const ALLOWED_NUMBERS = (process.env.HABBO_ALLOWED_PHONE_NUMBERS ?? "")
   .map((n) => n.trim())
   .filter(Boolean);
 const STOP_FILE = "/tmp/hotel-team-stop";
-const LOG_FILE = "/tmp/hotel-team.log";
+// Write logs to the mounted project dir so they survive container restarts
+const LOG_FILE = existsSync(PROJECT_DIR) ? join(PROJECT_DIR, "hotel-team.log") : "/tmp/hotel-team.log";
 const NARRATOR_BOTS_MAP = "/tmp/hotel-narrator-bots.json";
 
 function writeNarratorBotsMap(knownBots: string[]): void {
