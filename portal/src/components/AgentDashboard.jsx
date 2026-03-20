@@ -108,37 +108,43 @@ export function AgentDashboard({ me }) {
   }, [])
 
   // Poll logs every 3s + detect errors when team stops
+  const fetchLogs = useCallback(async () => {
+    try {
+      const res = await fetch('/api/agents/logs?lines=150', { credentials: 'include' })
+      const d = await res.json().catch(() => ({}))
+      if (!d.lines) return d
+      setLogLines(d.lines)
+      return d
+    } catch { return {} }
+  }, [])
+
   useEffect(() => {
     async function pollLogs() {
       if (logPaused) return
-      try {
-        const res = await fetch('/api/agents/logs?lines=150', { credentials: 'include' })
-        const d = await res.json().catch(() => ({}))
-        if (!d.lines) return
-        setLogLines(d.lines)
+      const d = await fetchLogs()
+      if (!d.lines) return
 
-        // Detect team stopping with an error by scanning the last 20 lines
-        const wasActive = prevActiveTeam.current
-        const isActive = activeTeam
-        if (wasActive && !isActive) {
-          const tail = d.lines.slice(-20).join('\n')
-          let detected = null
-          if (/credit balance is too low/i.test(tail)) {
-            detected = { type: 'billing', message: 'Anthropic credit balance is too low — top up at console.anthropic.com' }
-          } else if (/claude exited 1/i.test(tail)) {
-            const errLine = d.lines.slice(-20).reverse().find(l => l.includes('[trigger]') && l.includes('error:'))
-            const detail = errLine ? errLine.split('error:')[1]?.trim() : null
-            detected = { type: 'error', message: detail || 'Team stopped with an error — check the log panel for details' }
-          }
-          if (detected) setTeamError(detected)
+      // Detect team stopping with an error by scanning the last 20 lines
+      const wasActive = prevActiveTeam.current
+      const isActive = activeTeam
+      if (wasActive && !isActive) {
+        const tail = d.lines.slice(-20).join('\n')
+        let detected = null
+        if (/credit balance is too low/i.test(tail)) {
+          detected = { type: 'billing', message: 'Anthropic credit balance is too low — top up at console.anthropic.com' }
+        } else if (/claude exited 1/i.test(tail)) {
+          const errLine = d.lines.slice(-20).reverse().find(l => l.includes('[trigger]') && l.includes('error:'))
+          const detail = errLine ? errLine.split('error:')[1]?.trim() : null
+          detected = { type: 'error', message: detail || 'Team stopped with an error — check the log panel for details' }
         }
-        prevActiveTeam.current = isActive
-      } catch { /* ignore */ }
+        if (detected) setTeamError(detected)
+      }
+      prevActiveTeam.current = isActive
     }
     pollLogs()
     const id = setInterval(pollLogs, 3000)
     return () => clearInterval(id)
-  }, [logPaused, activeTeam])
+  }, [logPaused, activeTeam, fetchLogs])
 
   async function stopTeam() {
     setStopping(true)
@@ -289,7 +295,7 @@ export function AgentDashboard({ me }) {
           )
         })()}
         {tab === 'packs' && <PacksView />}
-        {tab === 'integrated' && <IntegratedView />}
+        {tab === 'integrated' && <IntegratedView onAfterTrigger={fetchLogs} />}
         {tab === 'developer' && me?.is_developer && <DeveloperView mcpStatus={mcpStatus} logLines={logLines} logPaused={logPaused} setLogPaused={setLogPaused} />}
 
         {/* Live log panel — shown on all tabs when a team is running */}
@@ -873,7 +879,7 @@ function PackForm({ pack, bots, onSave, onCancel }) {
 
 // ── Integrated View ───────────────────────────────────────────────────────
 
-function IntegratedView() {
+function IntegratedView({ onAfterTrigger }) {
   const [personas, setPersonas] = useState([])
   const [teams, setTeams] = useState([])
   const [bots, setBots] = useState([])
@@ -917,8 +923,13 @@ function IntegratedView() {
     try {
       await api(`/api/agents/teams/${team.id}/trigger`, { method: 'POST' })
       showToast(`Team "${team.name}" deployed!`)
+      // Fetch logs immediately + again after 2s to catch fast crashes
+      onAfterTrigger?.()
+      setTimeout(() => onAfterTrigger?.(), 2000)
+      setTimeout(() => onAfterTrigger?.(), 4000)
     } catch (e) {
       showToast(`Deploy failed: ${e.message}`, 'error')
+      onAfterTrigger?.()
     } finally {
       setDeployingIds(prev => { const n = new Set(prev); n.delete(team.id); return n })
     }
