@@ -88,6 +88,8 @@ export function AgentDashboard({ me }) {
   const [mcpStatus, setMcpStatus] = useState(null)
   const [logLines, setLogLines] = useState([])
   const [logPaused, setLogPaused] = useState(false)
+  const [teamError, setTeamError] = useState(null)
+  const prevActiveTeam = useRef(null)
 
   // Poll agent-trigger health every 5s to show active team status
   useEffect(() => {
@@ -105,20 +107,38 @@ export function AgentDashboard({ me }) {
     return () => clearInterval(id)
   }, [])
 
-  // Poll logs every 3s
+  // Poll logs every 3s + detect errors when team stops
   useEffect(() => {
     async function pollLogs() {
       if (logPaused) return
       try {
         const res = await fetch('/api/agents/logs?lines=150', { credentials: 'include' })
         const d = await res.json().catch(() => ({}))
-        if (d.lines) setLogLines(d.lines)
+        if (!d.lines) return
+        setLogLines(d.lines)
+
+        // Detect team stopping with an error by scanning the last 20 lines
+        const wasActive = prevActiveTeam.current
+        const isActive = activeTeam
+        if (wasActive && !isActive) {
+          const tail = d.lines.slice(-20).join('\n')
+          let detected = null
+          if (/credit balance is too low/i.test(tail)) {
+            detected = { type: 'billing', message: 'Anthropic credit balance is too low — top up at console.anthropic.com' }
+          } else if (/claude exited 1/i.test(tail)) {
+            const errLine = d.lines.slice(-20).reverse().find(l => l.includes('[trigger]') && l.includes('error:'))
+            const detail = errLine ? errLine.split('error:')[1]?.trim() : null
+            detected = { type: 'error', message: detail || 'Team stopped with an error — check the log panel for details' }
+          }
+          if (detected) setTeamError(detected)
+        }
+        prevActiveTeam.current = isActive
       } catch { /* ignore */ }
     }
     pollLogs()
     const id = setInterval(pollLogs, 3000)
     return () => clearInterval(id)
-  }, [logPaused])
+  }, [logPaused, activeTeam])
 
   async function stopTeam() {
     setStopping(true)
@@ -182,6 +202,30 @@ export function AgentDashboard({ me }) {
           ))}
         </div>
       </div>
+
+      {/* Error banner */}
+      {teamError && (
+        <div className={`border-b px-4 py-3 flex items-center gap-3 ${
+          teamError.type === 'billing'
+            ? 'bg-amber-500/10 border-amber-500/30'
+            : 'bg-red-500/10 border-red-500/30'
+        }`}>
+          <AlertCircle className={`w-4 h-4 flex-shrink-0 ${teamError.type === 'billing' ? 'text-amber-400' : 'text-red-400'}`} />
+          <span className={`text-sm flex-1 ${teamError.type === 'billing' ? 'text-amber-300' : 'text-red-300'}`}>
+            {teamError.type === 'billing' && <strong>Billing: </strong>}
+            {teamError.message}
+            {teamError.type === 'billing' && (
+              <a href="https://console.anthropic.com" target="_blank" rel="noreferrer"
+                className="ml-2 underline underline-offset-2 hover:text-amber-200">
+                Add credits →
+              </a>
+            )}
+          </span>
+          <button onClick={() => setTeamError(null)} className="text-muted-foreground hover:text-foreground ml-auto flex-shrink-0">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Content */}
       <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
