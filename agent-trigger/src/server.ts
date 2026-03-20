@@ -163,6 +163,43 @@ const server = Bun.serve({
       return Response.json({ ok: true, activeTeam });
     }
 
+    // ── MCP config status ────────────────────────────────────────────────────
+    if (url.pathname === "/mcp-status") {
+      try {
+        const mcpJsonPath = join(PROJECT_DIR, ".mcp.json");
+        if (!existsSync(mcpJsonPath)) {
+          return Response.json({ ok: false, servers: [], error: "MCP config not found at " + mcpJsonPath });
+        }
+        const config = JSON.parse(readFileSync(mcpJsonPath, "utf-8"));
+        const servers = await Promise.all(
+          Object.entries(config.mcpServers ?? {}).map(async ([name, cfg]: [string, any]) => {
+            const rawAuth: string = cfg.headers?.Authorization ?? "";
+            const keyPart = rawAuth.replace(/^Bearer |^Basic /, "").trim();
+            const hasKey = keyPart.length > 0;
+            const keyPreview = hasKey ? keyPart.slice(0, 8) + "…" : "";
+            let reachable = false;
+            let statusCode: number | null = null;
+            try {
+              const r = await fetch(cfg.url, {
+                method: "GET",
+                headers: { ...(cfg.headers ?? {}) },
+                signal: AbortSignal.timeout(4000),
+              });
+              statusCode = r.status;
+              // MCP HTTP servers return 405 on GET (expects POST) — that's fine, server is up
+              reachable = r.ok || r.status === 405 || r.status === 401 || r.status === 400;
+            } catch (e: any) {
+              statusCode = null;
+            }
+            return { name, url: cfg.url, hasKey, keyPreview, reachable, statusCode };
+          })
+        );
+        return Response.json({ ok: true, servers, mcpJsonPath });
+      } catch (e: any) {
+        return Response.json({ ok: false, servers: [], error: e.message });
+      }
+    }
+
     if (url.pathname === "/reset" && req.method === "POST") {
       activeTeam = null;
       if (existsSync(STOP_FILE)) unlinkSync(STOP_FILE);

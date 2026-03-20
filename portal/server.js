@@ -1235,14 +1235,16 @@ app.delete('/api/agents/flows/:id', authRequired, devRequired, async (req, res) 
 
 app.get('/api/agents/status', authRequired, async (req, res) => {
   try {
-    const [triggerRes, botsRes] = await Promise.allSettled([
+    const [triggerRes, botsRes, mcpRes] = await Promise.allSettled([
       fetch(`${AGENT_TRIGGER_URL}/health`).then(r => r.json()),
-      db.execute('SELECT id, name, motto, figure, gender, room_id, x, y FROM bots ORDER BY id ASC')
+      db.execute('SELECT id, name, motto, figure, gender, room_id, x, y FROM bots ORDER BY id ASC'),
+      fetch(`${AGENT_TRIGGER_URL}/mcp-status`).then(r => r.json()),
     ]);
     res.json({
       ok: true,
       trigger: triggerRes.status === 'fulfilled' ? triggerRes.value : { ok: false },
-      bots: botsRes.status === 'fulfilled' ? botsRes.value[0] : []
+      bots: botsRes.status === 'fulfilled' ? botsRes.value[0] : [],
+      mcp: mcpRes.status === 'fulfilled' ? mcpRes.value : { ok: false, servers: [], error: 'agent-trigger unreachable' },
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

@@ -875,6 +875,7 @@ function ControlView({ isDev }) {
   const [teams, setTeams] = useState([])
   const [flows, setFlows] = useState([])
   const [bots, setBots] = useState([])
+  const [mcpStatus, setMcpStatus] = useState(null)
   const [status, setStatus] = useState(null)
   const [form, setForm] = useState({ team_id: '', flow_id: '', room_id: '202' })
   const [triggering, setTriggering] = useState(false)
@@ -885,6 +886,7 @@ function ControlView({ isDev }) {
       const d = await api('/api/agents/status')
       setStatus(d.trigger)
       setBots(d.bots || [])
+      setMcpStatus(d.mcp || null)
     } catch(e) {}
   }, [])
 
@@ -925,6 +927,58 @@ function ControlView({ isDev }) {
   const isActive = status?.activeTeam != null
 
   return (
+    <div className="space-y-6">
+
+    {/* MCP Connection status banner */}
+    <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <h2 className="font-semibold text-sm">MCP Connections</h2>
+        <button onClick={loadStatus} className="text-muted-foreground hover:text-foreground transition-colors">
+          <RefreshCw className="w-3.5 h-3.5" />
+        </button>
+      </div>
+      {!mcpStatus ? (
+        <p className="text-xs text-muted-foreground">Connecting to agent-trigger…</p>
+      ) : !mcpStatus.ok ? (
+        <div className="flex items-center gap-2 text-xs text-destructive">
+          <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+          <span>{mcpStatus.error || 'agent-trigger offline — cannot read MCP config'}</span>
+        </div>
+      ) : mcpStatus.servers.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No MCP servers configured in .mcp.json</p>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+          {mcpStatus.servers.map(srv => (
+            <div key={srv.name} className="flex items-start gap-2.5 p-3 rounded-lg border border-border bg-background">
+              <div className={`mt-0.5 w-2 h-2 rounded-full flex-shrink-0 ${
+                srv.reachable ? 'bg-green-500' : 'bg-red-500'
+              }`} />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-medium text-foreground truncate">{srv.name}</p>
+                <p className="text-xs text-muted-foreground truncate">{srv.url}</p>
+                <div className="flex items-center gap-2 mt-1 flex-wrap">
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                    srv.reachable
+                      ? 'bg-green-500/10 text-green-400'
+                      : 'bg-red-500/10 text-red-400'
+                  }`}>
+                    {srv.reachable ? `HTTP ${srv.statusCode ?? '✓'}` : srv.statusCode ? `HTTP ${srv.statusCode}` : 'unreachable'}
+                  </span>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                    srv.hasKey
+                      ? 'bg-blue-500/10 text-blue-400'
+                      : 'bg-yellow-500/10 text-yellow-400'
+                  }`}>
+                    {srv.hasKey ? `key: ${srv.keyPreview}` : 'no key'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       {/* Trigger panel */}
       <div className="space-y-4">
@@ -1024,6 +1078,7 @@ function ControlView({ isDev }) {
           </div>
         )}
       </div>
+    </div>
     </div>
   )
 }
