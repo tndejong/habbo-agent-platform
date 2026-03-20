@@ -1,23 +1,28 @@
 #!/usr/bin/env node
 /**
- * hotel_narrator.mjs — Claude Code PostToolUse / SubagentStart / SubagentStop hook
+ * hotel_narrator.mjs — Claude Code hook: PreToolUse(Agent) / SubagentStart / PostToolUse / SubagentStop
  *
- * 1. On SubagentStart  : parse the subagent's prompt for a known bot name
- *                        → write session_id → bot_name to /tmp/hotel-narrator-bots.json
- *                        → POST "arrival" message to agent-trigger /narrator
+ * Bot linking flow:
+ *   1. pre_agent_spawn (PreToolUse on Agent tool)
+ *      Orchestrator is about to spawn a subagent. Read tool_input.prompt,
+ *      detect the bot name, push to a PENDING QUEUE in the bots map.
  *
- * 2. On PostToolUse    : look up bot for this session_id
- *                        → call Haiku to translate tool call → friendly Dutch sentence
- *                        → POST to agent-trigger /narrator (fire-and-forget, <1.5s)
+ *   2. subagent_start (SubagentStart)
+ *      Subagent has started, we now have its session_id.
+ *      Pop the oldest pending bot from the queue → write session_id → bot_name.
  *
- * 3. On SubagentStop   : look up bot, POST "done" message, clean up session entry
+ *   3. post_tool_use (PostToolUse)
+ *      Look up bot for this session_id → translate via Haiku → narrate.
+ *
+ *   4. subagent_stop (SubagentStop)
+ *      Farewell message, remove session mapping.
  *
  * Always exits 0. Hard watchdog at 4.5s.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
-const EVENT_TYPE   = process.argv[2]; // post_tool_use | subagent_start | subagent_stop
+const EVENT_TYPE   = process.argv[2];
 const BOTS_MAP     = '/tmp/hotel-narrator-bots.json';
 const NARRATOR_URL = 'http://localhost:3004/narrator';
 const MAX_MS       = 4500;
@@ -27,60 +32,41 @@ const watchdog = setTimeout(() => process.exit(0), MAX_MS);
 // Tools too noisy to narrate
 const SKIP_TOOLS = new Set([
   'Read', 'Glob', 'Grep', 'LS', 'exit_plan_mode', 'ExitPlanMode', 'EnterPlanMode',
-  'TodoRead', 'TodoWrite', 'Task', 'mcp__check_stop_signal',
+  'TodoRead', 'TodoWrite', 'Task', 'mcp__check_stop_signal', 'Agent',
 ]);
 
-// Simple fallback templates (when Haiku is unavailable / times out)
+// Fallback templates when Haiku times out
 const FALLBACK = {
-  Write:      (n, i) => `${n} schrijft naar ${tail(i?.file_path ?? 'een bestand')}.`,
-  Edit:       (n, i) => `${n} past ${tail(i?.file_path ?? 'een bestand')} aan.`,
-  Bash:       (n, i) => `${n} voert uit: ${String(i?.command ?? '').slice(0, 50)}.`,
-  WebFetch:   (n)    => `${n} zoekt informatie op het internet.`,
-  WebSearch:  (n)    => `${n} doorzoekt het web.`,
-  Agent:      (n)    => `${n} start een subtaak.`,
-  NotebookEdit:(n)   => `${n} werkt een notebook bij.`,
+  Write:       (n, i) => `${n} schrijft naar ${tail(i?.file_path ?? 'een bestand')}.`,
+  Edit:        (n, i) => `${n} past ${tail(i?.file_path ?? 'een bestand')} aan.`,
+  Bash:        (n, i) => `${n} voert uit: ${String(i?.command ?? '').slice(0, 50)}.`,
+  WebFetch:    (n)    => `${n} zoekt informatie op het internet.`,
+  WebSearch:   (n)    => `${n} doorzoekt het web.`,
+  NotebookEdit:(n)    => `${n} werkt een notebook bij.`,
 };
 
 function tail(p) { return String(p).split('/').slice(-2).join('/'); }
 
-// ── Bots map helpers ─────────────────────────────────────────────────────────
-// Format: { known_bots: ["Tom","Sander"], sessions: { "<session_id>": "Tom" } }
+// ── Bots map ─────────────────────────────────────────────────────────────────
+// Format:
+// {
+//   known_bots: ["Tom", "Sander"],
+//   pending:    ["Tom"],            ← FIFO queue: pre_agent_spawn pushes, subagent_start pops
+//   sessions:   { "<session_id>": "Tom" }
+// }
 
 function readMap() {
   try {
-    if (!existsSync(BOTS_MAP)) return { known_bots: [], sessions: {} };
-    return JSON.parse(readFileSync(BOTS_MAP, 'utf-8'));
-  } catch { return { known_bots: [], sessions: {} }; }
+    if (!existsSync(BOTS_MAP)) return { known_bots: [], pending: [], sessions: {} };
+    const m = JSON.parse(readFileSync(BOTS_MAP, 'utf-8'));
+    m.pending  = m.pending  ?? [];
+    m.sessions = m.sessions ?? {};
+    return m;
+  } catch { return { known_bots: [], pending: [], sessions: {} }; }
 }
 
-function writeMap(map) {
-  try { writeFileSync(BOTS_MAP, JSON.stringify(map, null, 2), 'utf-8'); } catch {}
-}
-
-function botForSession(sessionId) {
-  const m = readMap();
-  return m.sessions?.[sessionId] ?? null;
-}
-
-function registerSession(sessionId, botName) {
-  const m = readMap();
-  m.sessions = m.sessions ?? {};
-  m.sessions[sessionId] = botName;
-  writeMap(m);
-}
-
-function unregisterSession(sessionId) {
-  const m = readMap();
-  delete m.sessions?.[sessionId];
-  writeMap(m);
-}
-
-// Try to find a known bot name inside the raw payload string (subagent prompt contains it)
-function detectBotInPayload(payloadStr) {
-  const m = readMap();
-  const known = m.known_bots ?? [];
-  const lower = payloadStr.toLowerCase();
-  return known.find(name => lower.includes(name.toLowerCase())) ?? null;
+function writeMap(m) {
+  try { writeFileSync(BOTS_MAP, JSON.stringify(m, null, 2), 'utf-8'); } catch {}
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
@@ -91,7 +77,6 @@ async function main() {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
   }
   const raw = Buffer.concat(chunks).toString('utf8').trim();
-
   let payload = {};
   try { payload = JSON.parse(raw); } catch { payload = { raw }; }
 
@@ -99,12 +84,28 @@ async function main() {
     payload.session_id ?? payload.conversation_id ?? payload.sessionId ?? 'default'
   );
 
-  if (EVENT_TYPE === 'subagent_start') {
-    // Detect which persona this subagent is
-    const botName = detectBotInPayload(raw);
+  if (EVENT_TYPE === 'pre_agent_spawn') {
+    // Orchestrator is about to spawn a subagent — detect bot name from prompt
+    const prompt = String(
+      payload.tool_input?.prompt ?? payload.tool_input?.description ?? ''
+    );
+    const map = readMap();
+    const botName = findBotInText(prompt, map.known_bots);
+    if (botName) {
+      map.pending.push(botName);
+      writeMap(map);
+    }
+
+  } else if (EVENT_TYPE === 'subagent_start') {
+    // New subagent started — pop from pending queue, assign to this session
+    const map = readMap();
+    // First try pending queue (most reliable), fall back to scanning raw payload
+    const botName = map.pending.shift() ?? findBotInText(raw, map.known_bots);
     if (!botName) { clearTimeout(watchdog); process.exit(0); }
 
-    registerSession(sessionId, botName);
+    map.sessions[sessionId] = botName;
+    writeMap(map);
+
     await postNarrator({
       event: 'subagent_start',
       bot_name: botName,
@@ -113,7 +114,8 @@ async function main() {
     });
 
   } else if (EVENT_TYPE === 'subagent_stop') {
-    const botName = botForSession(sessionId);
+    const map = readMap();
+    const botName = map.sessions[sessionId];
     if (botName) {
       await postNarrator({
         event: 'subagent_stop',
@@ -121,11 +123,12 @@ async function main() {
         session_id: sessionId,
         message: `${botName} heeft de taak afgerond.`,
       });
+      delete map.sessions[sessionId];
+      writeMap(map);
     }
-    unregisterSession(sessionId);
 
   } else if (EVENT_TYPE === 'post_tool_use') {
-    const botName = botForSession(sessionId);
+    const botName = readMap().sessions[sessionId];
     if (!botName) { clearTimeout(watchdog); process.exit(0); }
 
     const toolName = String(payload.tool_name ?? payload.toolName ?? '');
@@ -145,6 +148,14 @@ async function main() {
 
   clearTimeout(watchdog);
   process.exit(0);
+}
+
+// ── Bot name detection ────────────────────────────────────────────────────────
+
+function findBotInText(text, knownBots = []) {
+  if (!text || !knownBots.length) return null;
+  const lower = text.toLowerCase();
+  return knownBots.find(name => lower.includes(name.toLowerCase())) ?? null;
 }
 
 // ── Narration ─────────────────────────────────────────────────────────────────
@@ -189,12 +200,10 @@ async function callHaiku(apiKey, botName, toolName, toolInput) {
     if (!res.ok) return null;
     const data = await res.json();
     return data.content?.[0]?.text?.trim()?.slice(0, 240) || null;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
-// ── HTTP fire-and-forget to agent-trigger ─────────────────────────────────────
+// ── POST to agent-trigger /narrator ──────────────────────────────────────────
 
 async function postNarrator(body) {
   try {
@@ -209,7 +218,4 @@ async function postNarrator(body) {
 
 // ── Run ──────────────────────────────────────────────────────────────────────
 
-main().catch(() => {
-  clearTimeout(watchdog);
-  process.exit(0);
-});
+main().catch(() => { clearTimeout(watchdog); process.exit(0); });
