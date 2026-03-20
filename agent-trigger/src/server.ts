@@ -50,16 +50,15 @@ async function mcpCall<T>(toolName: string, args: Record<string, unknown>): Prom
 const botIdCache = new Map<string, number>();
 
 async function findBotIdByName(name: string): Promise<number | null> {
-  if (botIdCache.has(name)) return botIdCache.get(name)!;
+  if (botIdCache.has(name.toLowerCase())) return botIdCache.get(name.toLowerCase())!;
   try {
-    const bots = await mcpCall<Array<{ id: number; name: string }>>("list_bots", {});
-    if (Array.isArray(bots)) {
-      for (const b of bots) {
-        if (b.name) botIdCache.set(b.name.toLowerCase(), b.id);
-      }
+    const res = await mcpCall<{ bots?: Array<{ id: number; name: string }> } | Array<{ id: number; name: string }>>("list_bots", {});
+    // list_bots returns { count, bots: [...] } — unwrap either shape
+    const arr = Array.isArray(res) ? res : (res as any).bots ?? [];
+    for (const b of arr) {
+      if (b.name) botIdCache.set(b.name.toLowerCase(), b.id);
     }
-    const id = botIdCache.get(name.toLowerCase());
-    return id ?? null;
+    return botIdCache.get(name.toLowerCase()) ?? null;
   } catch {
     return null;
   }
