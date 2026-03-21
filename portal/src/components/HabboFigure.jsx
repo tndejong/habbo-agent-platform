@@ -36,7 +36,7 @@ export function HabboFigure({ figure, size = 'md', animate = true, className = '
       {UNIQUE_DIRS.map(dir => (
         <img
           key={dir}
-          src={`/api/figure?figure=${encodeURIComponent(figure)}&direction=${dir}&head_direction=${dir}&v=3`}
+          src={`/api/figure?figure=${encodeURIComponent(figure)}&direction=${dir}&head_direction=${dir}&v=4`}
           alt=""
           style={{
             position: 'absolute',

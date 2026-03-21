@@ -305,7 +305,7 @@ app.get('/figure', async (req, res) => {
     }
 
     res.setHeader('Content-Type', 'image/png');
-    res.setHeader('Cache-Control', 'public, max-age=60');
+    res.setHeader('Cache-Control', 'no-cache, must-revalidate');
     res.send(finalPng);
   } catch (err) {
     console.error('Render error:', err.message);
