@@ -192,3 +192,39 @@ jobs:
           cache-to: type=gha,mode=max,scope=agent-portal
           tags: ${{ steps.meta_agent_portal.outputs.tags }}
           labels: ${{ steps.meta_agent_portal.outputs.labels }}
+
+      - name: Notify Discord (success)
+        if: success()
+        run: |
+          curl -s -X POST "${{ secrets.DISCORD_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "embeds": [{
+                "title": "✅ Containers published",
+                "description": "All images pushed to GHCR successfully.",
+                "color": 3066993,
+                "fields": [
+                  { "name": "Branch", "value": "${{ github.ref_name }}", "inline": true },
+                  { "name": "Commit", "value": "[`${{ github.sha }}`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})", "inline": true },
+                  { "name": "Run", "value": "[${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})", "inline": true }
+                ]
+              }]
+            }'
+
+      - name: Notify Discord (failure)
+        if: failure()
+        run: |
+          curl -s -X POST "${{ secrets.DISCORD_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "embeds": [{
+                "title": "❌ Container publish failed",
+                "description": "One or more images failed to build or push.",
+                "color": 15158332,
+                "fields": [
+                  { "name": "Branch", "value": "${{ github.ref_name }}", "inline": true },
+                  { "name": "Commit", "value": "[`${{ github.sha }}`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})", "inline": true },
+                  { "name": "Run", "value": "[${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})", "inline": true }
+                ]
+              }]
+            }'
