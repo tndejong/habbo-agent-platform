@@ -2520,10 +2520,7 @@ app.post('/api/my/teams/:id/trigger', authRequired, tierGate('pro'), async (req,
     // Forward to agent-trigger — build a compatible config
     const r = await fetch(`${AGENT_TRIGGER_URL}/trigger`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Internal-Secret': PORTAL_INTERNAL_SECRET,
-      },
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Secret': PORTAL_INTERNAL_SECRET },
       body: JSON.stringify({
         team_id: team.id,
         user_team: true,

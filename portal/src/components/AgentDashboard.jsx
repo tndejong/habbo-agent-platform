@@ -806,6 +806,7 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [] }) {
   const [editingTeam, setEditingTeam] = useState(null)
   const [toast, setToast] = useState(null)
   const [deployingIds, setDeployingIds] = useState(new Set())
+  const [hasApiKey, setHasApiKey] = useState(true)
 
   const isBasic = me?.ai_tier === 'basic'
   const isDev = me?.is_developer
@@ -814,11 +815,12 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [] }) {
     setLoading(true)
     setError(null)
     try {
-      const [pd, bd, td, rd] = await Promise.all([
+      const [pd, bd, td, rd, kd] = await Promise.all([
         api('/api/my/personas'),
         api('/api/agents/bots?mine=true'),
         api('/api/my/teams'),
         api('/api/hotel/rooms'),
+        api('/api/account/api-keys'),
       ])
       setPersonas(pd.personas || [])
       setBots(bd.bots || [])
@@ -826,6 +828,7 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [] }) {
       const roomList = rd.rooms || []
       setRooms(roomList)
       if (roomList.length > 0 && !selectedRoomId) setSelectedRoomId(roomList[0].id)
+      setHasApiKey(!!(kd.keys || []).find(k => k.provider === 'anthropic'))
     } catch (e) {
       setError(friendlyFetchError(e))
     } finally {
@@ -984,6 +987,7 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [] }) {
                 liveBots={liveBots}
                 selectedRoomId={selectedRoomId}
                 deploying={deployingIds.has(team.id)}
+                hasApiKey={hasApiKey}
                 onDeploy={() => deployTeam(team)}
                 onEdit={() => { setEditingTeam(team); setShowTeamForm(true) }}
                 onDelete={() => deleteTeam(team)}
@@ -1048,7 +1052,7 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [] }) {
 
 // ── Integrated Team Card ───────────────────────────────────────────────────
 
-function IntegratedTeamCard({ team, isDev, bots = [], liveBots = [], selectedRoomId, deploying, onDeploy, onEdit, onDelete }) {
+function IntegratedTeamCard({ team, isDev, bots = [], liveBots = [], selectedRoomId, deploying, hasApiKey = true, onDeploy, onEdit, onDelete }) {
   const [expanded, setExpanded] = useState(false)
   const [members, setMembers] = useState(team.members || null) // null = still loading
 
@@ -1088,7 +1092,8 @@ function IntegratedTeamCard({ team, isDev, bots = [], liveBots = [], selectedRoo
     return members.some(m => !m.bot_name?.trim())
   }, [members])
 
-  const blocked = !!roomConflict || hasUnlinked
+  const noKey = !hasApiKey
+  const blocked = !!roomConflict || hasUnlinked || noKey
 
   return (
     <div className={`rounded-xl border bg-card overflow-hidden ${roomConflict ? 'border-warning/40' : 'border-border'}`}>
@@ -1127,7 +1132,7 @@ function IntegratedTeamCard({ team, isDev, bots = [], liveBots = [], selectedRoo
         <button
           onClick={onDeploy}
           disabled={deploying || blocked}
-          title={roomConflict || undefined}
+          title={noKey ? 'Add an Anthropic API key in Settings to deploy' : roomConflict || undefined}
           className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition-colors flex-shrink-0 ${
             blocked
               ? 'bg-warning/20 text-warning border border-warning/30 cursor-not-allowed'
@@ -1135,7 +1140,7 @@ function IntegratedTeamCard({ team, isDev, bots = [], liveBots = [], selectedRoo
           }`}
         >
           {deploying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : blocked ? <AlertTriangle className="w-3.5 h-3.5" /> : <Zap className="w-3.5 h-3.5" />}
-          {deploying ? 'Deploying…' : blocked ? 'Blocked' : 'Deploy'}
+          {deploying ? 'Deploying…' : noKey ? 'No API Key' : blocked ? 'Blocked' : 'Deploy'}
         </button>
       </div>
 

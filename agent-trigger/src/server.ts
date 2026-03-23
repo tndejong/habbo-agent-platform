@@ -685,7 +685,7 @@ const server = Bun.serve({
       let body: {
         team_id?: number; flow_id?: number | null; room_id?: number; triggered_by?: string; portal_url?: string;
         pack_source_url?: string; role_assignments?: Record<string, string>; pack_id?: number;
-        portal_user_id?: number;
+        portal_user_id?: number; user_team?: boolean;
       };
       try {
         body = await req.json();
