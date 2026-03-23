@@ -2175,7 +2175,7 @@ app.post('/api/agents/teams/:id/trigger', authRequired, devRequired, async (req,
           `SELECT name, room_id FROM bots WHERE name IN (${placeholders}) AND room_id > 0`,
           botNames
         );
-        const wrongRoom = activeBots.filter(b => b.room_id !== resolvedRoomId);
+        const wrongRoom = activeBots.filter(b => Number(b.room_id) !== resolvedRoomId);
         if (wrongRoom.length > 0) {
           const conflictRoom = wrongRoom[0].room_id;
           const names = wrongRoom.map(b => `"${b.name}"`).join(', ');
@@ -2509,7 +2509,7 @@ app.post('/api/my/teams/:id/trigger', authRequired, tierGate('pro'), async (req,
         `SELECT name, room_id FROM bots WHERE name IN (${placeholders}) AND room_id > 0`,
         botNames
       );
-      const wrongRoom = activeBots.filter(b => b.room_id !== resolvedRoomId);
+      const wrongRoom = activeBots.filter(b => Number(b.room_id) !== resolvedRoomId);
       if (wrongRoom.length > 0) {
         return res.status(400).json({
           error: `Bot ${wrongRoom.map(b => `"${b.name}"`).join(', ')} already active in room ${wrongRoom[0].room_id}.`
