@@ -206,11 +206,12 @@ async function callHaiku(apiKey, botName, toolName, toolInput) {
 // ── POST to agent-trigger /narrator ──────────────────────────────────────────
 
 async function postNarrator(body) {
+  const userMcpToken = process.env.USER_MCP_TOKEN || '';
   try {
     await fetch(NARRATOR_URL, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...body, ...(userMcpToken ? { mcp_token: userMcpToken } : {}) }),
       signal: AbortSignal.timeout(1500),
     });
   } catch { /* best effort */ }

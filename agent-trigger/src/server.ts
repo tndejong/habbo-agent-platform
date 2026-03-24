@@ -40,9 +40,10 @@ const MCP_ENDPOINT = (() => {
 })();
 const MCP_API_KEY = process.env.MCP_API_KEY ?? "";
 
-async function mcpCall<T>(toolName: string, args: Record<string, unknown>): Promise<T> {
+async function mcpCall<T>(toolName: string, args: Record<string, unknown>, token?: string): Promise<T> {
+  const effectiveToken = token || MCP_API_KEY;
   const headers: Record<string, string> = { "content-type": "application/json" };
-  if (MCP_API_KEY) headers["authorization"] = `Bearer ${MCP_API_KEY}`;
+  if (effectiveToken) headers["authorization"] = `Bearer ${effectiveToken}`;
   const res = await fetch(MCP_ENDPOINT, {
     method: "POST",
     headers,
@@ -64,17 +65,19 @@ async function mcpCall<T>(toolName: string, args: Record<string, unknown>): Prom
 // Bot name → id cache (avoids calling list_bots every tool use)
 const botIdCache = new Map<string, number>();
 
-async function findBotIdByName(name: string): Promise<number | null> {
-  if (botIdCache.has(name.toLowerCase())) return botIdCache.get(name.toLowerCase())!;
+async function findBotIdByName(name: string, token?: string): Promise<number | null> {
+  const cacheKey = name.toLowerCase();
+  if (botIdCache.has(cacheKey)) return botIdCache.get(cacheKey)!;
   try {
-    const res = await mcpCall<{ bots?: Array<{ id: number; name: string }> } | Array<{ id: number; name: string }>>("list_bots", {});
+    const res = await mcpCall<{ bots?: Array<{ id: number; name: string }> } | Array<{ id: number; name: string }>>("list_bots", {}, token);
     // list_bots returns { count, bots: [...] } — unwrap either shape
     const arr = Array.isArray(res) ? res : (res as any).bots ?? [];
     for (const b of arr) {
       if (b.name) botIdCache.set(b.name.toLowerCase(), b.id);
     }
-    return botIdCache.get(name.toLowerCase()) ?? null;
-  } catch {
+    return botIdCache.get(cacheKey) ?? null;
+  } catch (err: any) {
+    log(`[narrator] list_bots failed: ${err.message}`);
     return null;
   }
 }
@@ -90,6 +93,20 @@ async function fetchUserAnthropicKey(portalUserId: number): Promise<string | nul
     if (!res.ok) return null;
     const data = await res.json() as { ok: boolean; api_key: string | null };
     return data.api_key ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchUserMcpToken(portalUserId: number): Promise<string | null> {
+  if (!portalUserId) return null;
+  try {
+    const res = await fetch(`${PORTAL_URL}/api/internal/user/${portalUserId}/mcp-token`, {
+      headers: { "X-Internal-Secret": PORTAL_INTERNAL_SECRET },
+    });
+    if (!res.ok) return null;
+    const data = await res.json() as { ok: boolean; mcp_token: string | null };
+    return data.mcp_token ?? null;
   } catch {
     return null;
   }
@@ -439,7 +456,7 @@ This ensures each agent is visually represented by their hotel bot in the room.`
   return basePrompt + injectionBlock;
 }
 
-function runOrchestratorWithPrompt(prompt: string, roomId: number, from: string, userApiKey?: string | null, onChild?: (child: ReturnType<typeof spawn>) => void): Promise<string> {
+function runOrchestratorWithPrompt(prompt: string, roomId: number, from: string, userApiKey?: string | null, onChild?: (child: ReturnType<typeof spawn>) => void, userMcpToken?: string | null): Promise<string> {
   return new Promise((resolve, reject) => {
     if (existsSync(STOP_FILE)) unlinkSync(STOP_FILE);
 
@@ -450,6 +467,7 @@ function runOrchestratorWithPrompt(prompt: string, roomId: number, from: string,
         ...process.env,
         ANTHROPIC_API_KEY: userApiKey || (process.env.ANTHROPIC_API_KEY ?? ""),
         MCP_API_KEY: process.env.MCP_API_KEY ?? "",
+        USER_MCP_TOKEN: userMcpToken || "",
         HABBO_HOOK_ENABLED: "true",
         HABBO_HOOK_TRANSPORT: process.env.HABBO_HOOK_TRANSPORT ?? "remote",
         HABBO_HOOK_REMOTE_BASE_URL:
@@ -654,18 +672,21 @@ const server = Bun.serve({
 
     // ── Hotel narrator endpoint (called by hotel_narrator.mjs hook) ─────────
     if (url.pathname === "/narrator" && req.method === "POST") {
-      let body: { bot_name?: string; message?: string; event?: string; session_id?: string; tool_name?: string };
+      let body: { bot_name?: string; message?: string; event?: string; session_id?: string; tool_name?: string; mcp_token?: string };
       try { body = await req.json(); } catch { return Response.json({ ok: false }, { status: 400 }); }
 
-      const { bot_name, message } = body;
+      const { bot_name, message, mcp_token } = body;
       if (!bot_name || !message) return Response.json({ ok: false, error: "bot_name and message required" }, { status: 400 });
+
+      // Prefer the user's own MCP token, fall back to static system key
+      const effectiveMcpToken = mcp_token || MCP_API_KEY;
 
       // Fire-and-forget: resolve bot_id then talk
       (async () => {
         try {
-          const botId = await findBotIdByName(bot_name);
+          const botId = await findBotIdByName(bot_name, effectiveMcpToken);
           if (botId == null) { log(`[narrator] Bot "${bot_name}" not found in hotel`); return; }
-          await mcpCall("talk_bot", { bot_id: botId, message: message.slice(0, 240), type: "talk" });
+          await mcpCall("talk_bot", { bot_id: botId, message: message.slice(0, 240), type: "talk" }, effectiveMcpToken);
           log(`[narrator] ${bot_name}: ${message.slice(0, 80)}`);
         } catch (err: any) {
           log(`[narrator] error for ${bot_name}: ${err.message}`);
@@ -718,15 +739,20 @@ const server = Bun.serve({
         const knownBots = Object.values(packConfig.role_assignments).filter(Boolean);
         writeNarratorBotsMap(knownBots);
 
-        const packUserApiKey = await fetchUserAnthropicKey(Number(body.portal_user_id) || 0);
+        const packPortalUserId = Number(body.portal_user_id) || 0;
+        const [packUserApiKey, packUserMcpToken] = await Promise.all([
+          fetchUserAnthropicKey(packPortalUserId),
+          fetchUserMcpToken(packPortalUserId),
+        ]);
         if (packUserApiKey) log(`[trigger] Pack using API key from portal user ${body.portal_user_id}`);
+        if (packUserMcpToken) log(`[trigger] Pack using MCP token from portal user ${body.portal_user_id}`);
 
         activeTeam = { roomId: packConfig.room_id, startTime: new Date(), from: packConfig.triggered_by, child: null };
         log(`[trigger] Pack ${packConfig.pack_id} started in room ${packConfig.room_id} by ${packConfig.triggered_by}`);
 
         runOrchestratorWithPrompt(prompt, packConfig.room_id, packConfig.triggered_by, packUserApiKey, (child) => {
           if (activeTeam) activeTeam.child = child;
-        })
+        }, packUserMcpToken)
           .then((summary) => { activeTeam = null; log(`[trigger] Pack ${packConfig.pack_id} completed: ${summary.slice(0, 100)}`); })
           .catch((err: Error) => { activeTeam = null; log(`[trigger] Pack ${packConfig.pack_id} error: ${err.message}`); });
 
@@ -748,14 +774,16 @@ const server = Bun.serve({
         return Response.json({ ok: false, error: `Team already active in room ${activeTeam.roomId}. Stop it first.` }, { status: 409 });
       }
 
-      // Fetch team config + user API key in parallel
+      // Fetch team config + user API key + user MCP token in parallel
       const isUserTeam = body.user_team === true;
       let config: TeamConfig;
       let userApiKey: string | null = null;
+      let userMcpToken: string | null = null;
       try {
-        [config, userApiKey] = await Promise.all([
+        [config, userApiKey, userMcpToken] = await Promise.all([
           isUserTeam ? fetchUserTeamConfig(teamId) : fetchTeamConfig(teamId, flowId),
           fetchUserAnthropicKey(portalUserId),
+          fetchUserMcpToken(portalUserId),
         ]);
       } catch (err: any) {
         log(`[trigger] Failed to fetch team config: ${err.message}`);
@@ -764,6 +792,9 @@ const server = Bun.serve({
 
       if (userApiKey) {
         log(`[trigger] Using API key from portal user ${portalUserId}`);
+      }
+      if (userMcpToken) {
+        log(`[trigger] Using MCP token from portal user ${portalUserId}`);
       }
 
       const prompt = buildPromptFromConfig(config, roomId, triggeredBy);
@@ -777,7 +808,7 @@ const server = Bun.serve({
       // Run in background
       runOrchestratorWithPrompt(prompt, roomId, triggeredBy, userApiKey, (child) => {
         if (activeTeam) activeTeam.child = child;
-      })
+      }, userMcpToken)
         .then((summary) => {
           activeTeam = null;
           log(`[trigger] Team "${config.team.name}" completed: ${summary.slice(0, 100)}`);

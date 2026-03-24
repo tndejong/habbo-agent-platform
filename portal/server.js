@@ -274,6 +274,7 @@ async function ensurePortalSchema() {
       plan_tier ENUM('pro', 'enterprise') NOT NULL DEFAULT 'pro',
       scopes_json JSON NULL,
       token_hash CHAR(64) NOT NULL,
+      token_raw_encrypted TEXT NULL,
       token_label VARCHAR(64) NOT NULL DEFAULT '',
       status ENUM('active', 'revoked') NOT NULL DEFAULT 'active',
       expires_at DATETIME NOT NULL,
@@ -291,6 +292,10 @@ async function ensurePortalSchema() {
 
   await db.execute(`
     ALTER TABLE portal_users ADD COLUMN IF NOT EXISTS is_developer TINYINT(1) NOT NULL DEFAULT 0 AFTER ai_tier;
+  `);
+
+  await db.execute(`
+    ALTER TABLE portal_mcp_tokens ADD COLUMN IF NOT EXISTS token_raw_encrypted TEXT NULL AFTER token_hash;
   `);
 
   await db.execute(`
@@ -1248,6 +1253,25 @@ app.get('/api/internal/user/:portalUserId/api-key/:provider', async (req, res) =
   res.json({ ok: true, api_key: plain });
 });
 
+app.get('/api/internal/user/:portalUserId/mcp-token', async (req, res) => {
+  const secret = req.headers['x-internal-secret'];
+  if (PORTAL_INTERNAL_SECRET && secret !== PORTAL_INTERNAL_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const [rows] = await db.execute(
+    `SELECT token_raw_encrypted FROM portal_mcp_tokens
+     WHERE portal_user_id = ? AND status = 'active' AND expires_at > NOW() AND token_raw_encrypted IS NOT NULL
+     ORDER BY created_at DESC LIMIT 1`,
+    [req.params.portalUserId]
+  );
+
+  if (!rows.length) return res.json({ ok: true, mcp_token: null });
+
+  const plain = decryptApiKey(rows[0].token_raw_encrypted);
+  return res.json({ ok: true, mcp_token: plain });
+});
+
 app.get('/api/mcp/tokens', authRequired, async (req, res) => {
   const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
   if (!portalUser) {
@@ -1292,20 +1316,22 @@ app.post('/api/mcp/tokens', authRequired, async (req, res) => {
   const safeTtlDays = Number.isFinite(ttlDays) ? Math.max(1, Math.min(3650, ttlDays)) : PORTAL_MCP_TOKEN_TTL_DAYS;
   const token = createMcpToken();
   const tokenHash = sha256(token);
+  const tokenRawEncrypted = encryptApiKey(token);
   const expiresAt = new Date(Date.now() + safeTtlDays * 24 * 60 * 60 * 1000);
   const planTier = portalUser.ai_tier === 'enterprise' ? 'enterprise' : 'pro';
   const scopes = planTier === 'enterprise' ? ['*'] : [];
 
   const [result] = await db.execute(
     `INSERT INTO portal_mcp_tokens
-      (portal_user_id, tenant_id, plan_tier, scopes_json, token_hash, token_label, expires_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      (portal_user_id, tenant_id, plan_tier, scopes_json, token_hash, token_raw_encrypted, token_label, expires_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       portalUser.id,
       PORTAL_MCP_DEFAULT_TENANT,
       planTier,
       JSON.stringify(scopes),
       tokenHash,
+      tokenRawEncrypted,
       label,
       expiresAt
     ]
@@ -2515,6 +2541,15 @@ app.post('/api/my/teams/:id/trigger', authRequired, tierGate('pro'), async (req,
           error: `Bot ${wrongRoom.map(b => `"${b.name}"`).join(', ')} already active in room ${wrongRoom[0].room_id}.`
         });
       }
+    }
+
+    // Require an active MCP token so the narrator can authenticate bot calls
+    const [mcpTokenRows] = await db.execute(
+      `SELECT id FROM portal_mcp_tokens WHERE portal_user_id = ? AND status = 'active' AND expires_at > NOW() AND token_raw_encrypted IS NOT NULL LIMIT 1`,
+      [portalUser.id]
+    );
+    if (mcpTokenRows.length === 0) {
+      return res.status(400).json({ error: 'No active MCP token found. Go to Settings → MCP Tokens and generate one before deploying.' });
     }
 
     // Forward to agent-trigger — build a compatible config

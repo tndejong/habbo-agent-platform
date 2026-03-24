@@ -807,6 +807,7 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [] }) {
   const [toast, setToast] = useState(null)
   const [deployingIds, setDeployingIds] = useState(new Set())
   const [hasApiKey, setHasApiKey] = useState(true)
+  const [hasMcpToken, setHasMcpToken] = useState(true)
 
   const isBasic = me?.ai_tier === 'basic'
   const isDev = me?.is_developer
@@ -815,12 +816,13 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [] }) {
     setLoading(true)
     setError(null)
     try {
-      const [pd, bd, td, rd, kd] = await Promise.all([
+      const [pd, bd, td, rd, kd, md] = await Promise.all([
         api('/api/my/personas'),
         api('/api/agents/bots?mine=true'),
         api('/api/my/teams'),
         api('/api/hotel/rooms'),
         api('/api/account/api-keys'),
+        api('/api/mcp/tokens'),
       ])
       setPersonas(pd.personas || [])
       setBots(bd.bots || [])
@@ -829,6 +831,8 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [] }) {
       setRooms(roomList)
       if (roomList.length > 0 && !selectedRoomId) setSelectedRoomId(roomList[0].id)
       setHasApiKey(!!(kd.keys || []).find(k => k.provider === 'anthropic'))
+      const now = new Date()
+      setHasMcpToken(!!(md.tokens || []).find(t => t.status === 'active' && new Date(t.expires_at) > now))
     } catch (e) {
       setError(friendlyFetchError(e))
     } finally {
@@ -988,6 +992,7 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [] }) {
                 selectedRoomId={selectedRoomId}
                 deploying={deployingIds.has(team.id)}
                 hasApiKey={hasApiKey}
+                hasMcpToken={hasMcpToken}
                 onDeploy={() => deployTeam(team)}
                 onEdit={() => { setEditingTeam(team); setShowTeamForm(true) }}
                 onDelete={() => deleteTeam(team)}
@@ -1052,7 +1057,7 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [] }) {
 
 // ── Integrated Team Card ───────────────────────────────────────────────────
 
-function IntegratedTeamCard({ team, isDev, bots = [], liveBots = [], selectedRoomId, deploying, hasApiKey = true, onDeploy, onEdit, onDelete }) {
+function IntegratedTeamCard({ team, isDev, bots = [], liveBots = [], selectedRoomId, deploying, hasApiKey = true, hasMcpToken = true, onDeploy, onEdit, onDelete }) {
   const [expanded, setExpanded] = useState(false)
   const [members, setMembers] = useState(team.members || null) // null = still loading
 
@@ -1093,7 +1098,8 @@ function IntegratedTeamCard({ team, isDev, bots = [], liveBots = [], selectedRoo
   }, [members])
 
   const noKey = !hasApiKey
-  const blocked = !!roomConflict || hasUnlinked || noKey
+  const noMcpToken = !hasMcpToken
+  const blocked = !!roomConflict || hasUnlinked || noKey || noMcpToken
 
   return (
     <div className={`rounded-xl border bg-card overflow-hidden ${roomConflict ? 'border-warning/40' : 'border-border'}`}>
@@ -1132,7 +1138,7 @@ function IntegratedTeamCard({ team, isDev, bots = [], liveBots = [], selectedRoo
         <button
           onClick={onDeploy}
           disabled={deploying || blocked}
-          title={noKey ? 'Add an Anthropic API key in Settings to deploy' : roomConflict || undefined}
+          title={noKey ? 'Add an Anthropic API key in Settings to deploy' : noMcpToken ? 'Generate an MCP token in Settings → MCP Tokens to deploy' : roomConflict || undefined}
           className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition-colors flex-shrink-0 ${
             blocked
               ? 'bg-warning/20 text-warning border border-warning/30 cursor-not-allowed'
@@ -1140,7 +1146,7 @@ function IntegratedTeamCard({ team, isDev, bots = [], liveBots = [], selectedRoo
           }`}
         >
           {deploying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : blocked ? <AlertTriangle className="w-3.5 h-3.5" /> : <Zap className="w-3.5 h-3.5" />}
-          {deploying ? 'Deploying…' : noKey ? 'No API Key' : blocked ? 'Blocked' : 'Deploy'}
+          {deploying ? 'Deploying…' : noKey ? 'No API Key' : noMcpToken ? 'No MCP Token' : blocked ? 'Blocked' : 'Deploy'}
         </button>
       </div>
 
