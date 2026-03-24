@@ -20,6 +20,9 @@ services:
       - ${HABBO_WS_BIND_PORT:-2096}:2096
     depends_on:
       - mysql
+    extra_hosts:
+      - "habbo.com:0.0.0.0"
+      - "www.habbo.com:0.0.0.0"
     networks:
       nitro:
       proxy_net:
