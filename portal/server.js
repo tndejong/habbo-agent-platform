@@ -295,6 +295,14 @@ async function ensurePortalSchema() {
   `);
 
   await db.execute(`
+    ALTER TABLE portal_users ADD COLUMN IF NOT EXISTS phone_number VARCHAR(20) NULL AFTER is_developer;
+  `);
+
+  await db.execute(`
+    ALTER TABLE portal_users ADD UNIQUE INDEX IF NOT EXISTS uq_portal_phone_number (phone_number);
+  `);
+
+  await db.execute(`
     ALTER TABLE portal_mcp_tokens ADD COLUMN IF NOT EXISTS token_raw_encrypted TEXT NULL AFTER token_hash;
   `);
 
@@ -586,7 +594,7 @@ function maskTokenPreview(token) {
 
 async function getPortalUserByHabboUserId(habboUserId) {
   const [rows] = await db.execute(
-    'SELECT id, email, username, habbo_user_id, habbo_username, ai_tier, is_developer FROM portal_users WHERE habbo_user_id = ? LIMIT 1',
+    'SELECT id, email, username, habbo_user_id, habbo_username, ai_tier, is_developer, phone_number FROM portal_users WHERE habbo_user_id = ? LIMIT 1',
     [habboUserId]
   );
   return rows[0] || null;
@@ -1208,6 +1216,39 @@ app.delete('/api/account/api-keys/:provider', authRequired, async (req, res) => 
   res.json({ ok: true, message: 'API key removed' });
 });
 
+// ─── Account: phone number ────────────────────────────────────────────────────
+app.get('/api/account/phone', authRequired, async (req, res) => {
+  const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
+  if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
+  res.json({ ok: true, phone_number: portalUser.phone_number ?? null });
+});
+
+app.post('/api/account/phone', authRequired, async (req, res) => {
+  const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
+  if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
+
+  const raw = String(req.body?.phone_number || '').trim();
+  // Accept E.164 format only: +<digits>, 8–15 chars total
+  if (!/^\+[1-9]\d{7,14}$/.test(raw)) {
+    return res.status(400).json({ error: 'Phone number must be in E.164 format (e.g. +31612345678)' });
+  }
+
+  try {
+    await db.execute('UPDATE portal_users SET phone_number = ? WHERE id = ?', [raw, portalUser.id]);
+    res.json({ ok: true, phone_number: raw });
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'This phone number is already registered to another account' });
+    throw err;
+  }
+});
+
+app.delete('/api/account/phone', authRequired, async (req, res) => {
+  const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
+  if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
+  await db.execute('UPDATE portal_users SET phone_number = NULL WHERE id = ?', [portalUser.id]);
+  res.json({ ok: true });
+});
+
 // ─── Account: change own password ─────────────────────────────────────────────
 app.post('/api/account/password', authRequired, async (req, res) => {
   const currentPassword = String(req.body?.current_password || '');
@@ -1270,6 +1311,32 @@ app.get('/api/internal/user/:portalUserId/mcp-token', async (req, res) => {
 
   const plain = decryptApiKey(rows[0].token_raw_encrypted);
   return res.json({ ok: true, mcp_token: plain });
+});
+
+// ─── Internal: look up a portal user + their first team by phone number ───────
+app.get('/api/internal/user-by-phone/:number', async (req, res) => {
+  const secret = req.headers['x-internal-secret'];
+  if (PORTAL_INTERNAL_SECRET && secret !== PORTAL_INTERNAL_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    const [[user]] = await db.execute(
+      'SELECT id, username FROM portal_users WHERE phone_number = ? LIMIT 1',
+      [req.params.number]
+    );
+    if (!user) return res.status(404).json({ error: 'No user registered for this number' });
+
+    // Return the user's first team (lowest id) so SMS/voice can auto-trigger it
+    const [[team]] = await db.execute(
+      'SELECT id, name, default_room_id FROM user_teams WHERE portal_user_id = ? ORDER BY id ASC LIMIT 1',
+      [user.id]
+    );
+
+    res.json({ ok: true, portal_user_id: user.id, username: user.username, team: team ?? null });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/mcp/tokens', authRequired, async (req, res) => {
@@ -1709,6 +1776,8 @@ app.put('/api/hotel/bots/:id', authRequired, async (req, res) => {
   }
 
   // Push all changes live in one RCON call (bot stays in room, no respawn)
+  let liveUpdated = false;
+  let liveUpdateError = null;
   if (liveBot) {
     const update = {
       bot_id: liveBot.id,
@@ -1720,12 +1789,23 @@ app.put('/api/hotel/bots/:id', authRequired, async (req, res) => {
     const hasChanges = update.name !== undefined || update.motto !== undefined
                     || update.figure !== undefined || update.gender !== undefined;
     if (hasChanges) {
-      try { await rconCommand('updatebotvisuals', update); } catch { /* applies on next room load */ }
+      try {
+        const rconResult = await rconCommand('updatebotvisuals', update);
+        // status 0 = success; message "updated live" means the bot was found in an active room
+        liveUpdated = rconResult?.status === 0 || rconResult?.message === 'updated live';
+        if (!liveUpdated) liveUpdateError = rconResult?.message || 'Bot not in active room';
+      } catch (e) {
+        liveUpdateError = e.message || 'RCON unavailable';
+      }
+    } else {
+      liveUpdated = true; // nothing to update visually
     }
+  } else {
+    liveUpdateError = 'Bot not linked — sync bots and try again';
   }
 
   const visualChanged = newName !== config.name || newFigure !== config.figure || newGender !== config.gender;
-  res.json({ ok: true, personaUpdated, visualChanged });
+  res.json({ ok: true, personaUpdated, visualChanged, liveUpdated, liveUpdateError });
 });
 
 app.delete('/api/hotel/bots/:id', authRequired, async (req, res) => {
@@ -2085,7 +2165,7 @@ app.post('/api/agents/packs/:id/trigger', authRequired, async (req, res) => {
         pack_source_url: pack.pack_source_url,
         role_assignments: roleAssignments,
         room_id: pack.room_id,
-        triggered_by: req.user.habbo_username,
+        triggered_by: req.user.username,
         portal_user_id: (await getPortalUserByHabboUserId(req.user.habbo_user_id))?.id,
       })
     });
@@ -2236,13 +2316,38 @@ app.post('/api/agents/teams/:id/trigger', authRequired, devRequired, async (req,
   } catch (err) { res.status(502).json({ error: 'Agent trigger unavailable: ' + err.message }); }
 });
 
-// Stop active team
+// Stop active team — forwards room_id so only that room is stopped
 app.post('/api/agents/stop', authRequired, async (req, res) => {
   try {
-    const r = await fetch(`${AGENT_TRIGGER_URL}/reset`, { method: 'POST' });
+    const body = req.body?.room_id ? { room_id: Number(req.body.room_id) } : {};
+    const r = await fetch(`${AGENT_TRIGGER_URL}/reset`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
     const data = await r.json().catch(() => ({}));
     res.json({ ok: true, ...data });
   } catch (err) { res.status(502).json({ error: 'Agent trigger unavailable' }); }
+});
+
+// Stop a specific user team run by team id (user must own the team)
+app.post('/api/my/teams/:id/stop', authRequired, async (req, res) => {
+  try {
+    const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
+    if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
+    const [[team]] = await db.execute('SELECT id, default_room_id FROM user_teams WHERE id = ? AND portal_user_id = ?', [req.params.id, portalUser.id]);
+    if (!team) return res.status(404).json({ error: 'Team not found' });
+    const room_id = Number(req.body?.room_id) || team.default_room_id;
+    if (!room_id) return res.status(400).json({ error: 'room_id required' });
+    const r = await fetch(`${AGENT_TRIGGER_URL}/reset`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ room_id }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) return res.status(r.status).json({ error: data.error || 'Stop failed' });
+    res.json({ ok: true, ...data });
+  } catch (err) { res.status(502).json({ error: 'Agent trigger unavailable: ' + err.message }); }
 });
 
 app.get('/api/agents/logs', authRequired, async (req, res) => {
@@ -2250,6 +2355,11 @@ app.get('/api/agents/logs', authRequired, async (req, res) => {
     const lines = Math.min(parseInt(req.query.lines ?? '150'), 500);
     const r = await fetch(`${AGENT_TRIGGER_URL}/logs?lines=${lines}`);
     const data = await r.json().catch(() => ({ ok: false, lines: [] }));
+    // Filter by room_id if provided — match lines containing [room-N]
+    if (req.query.room_id && data.lines) {
+      const prefix = `[room-${req.query.room_id}]`;
+      data.lines = data.lines.filter(l => l.includes(prefix));
+    }
     res.json(data);
   } catch (err) { res.json({ ok: false, lines: [], error: 'Agent trigger unavailable' }); }
 });
@@ -2764,9 +2874,15 @@ app.get('/api/agents/status', authRequired, async (req, res) => {
         .sort((a, b) => (b.is_agent ? 1 : 0) - (a.is_agent ? 1 : 0) || a.name.localeCompare(b.name));
     } catch (e) { /* MCP unreachable — return empty */ }
 
+    // Scope activeRuns to current user — developers see all, regular users only their own
+    const triggerData = triggerRes.status === 'fulfilled' ? triggerRes.value : { ok: false };
+    if (triggerData.activeRuns && !req.user.is_developer) {
+      triggerData.activeRuns = triggerData.activeRuns.filter(r => r.from === req.user.username);
+    }
+
     res.json({
       ok: true,
-      trigger: triggerRes.status === 'fulfilled' ? triggerRes.value : { ok: false },
+      trigger: triggerData,
       bots: liveBots,
       mcp: mcpRes.status === 'fulfilled' ? mcpRes.value : { ok: false, servers: [], error: 'agent-trigger unreachable' },
     });

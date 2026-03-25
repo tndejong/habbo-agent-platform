@@ -23,7 +23,9 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 const EVENT_TYPE   = process.argv[2];
-const BOTS_MAP     = '/tmp/hotel-narrator-bots.json';
+// Use the room-scoped bots file injected by agent-trigger; fall back to legacy global path
+const ROOM_ID      = process.env.HABBO_ROOM_ID ?? '';
+const BOTS_MAP     = ROOM_ID ? `/tmp/hotel-narrator-bots-${ROOM_ID}.json` : '/tmp/hotel-narrator-bots.json';
 const NARRATOR_URL = 'http://localhost:3004/narrator';
 const MAX_MS       = 4500;
 
@@ -211,7 +213,11 @@ async function postNarrator(body) {
     await fetch(NARRATOR_URL, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ...body, ...(userMcpToken ? { mcp_token: userMcpToken } : {}) }),
+      body: JSON.stringify({
+        ...body,
+        ...(userMcpToken ? { mcp_token: userMcpToken } : {}),
+        ...(ROOM_ID ? { room_id: Number(ROOM_ID) } : {}),
+      }),
       signal: AbortSignal.timeout(1500),
     });
   } catch { /* best effort */ }

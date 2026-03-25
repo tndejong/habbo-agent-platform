@@ -5,15 +5,64 @@ import { friendlyFetchError } from '../utils/fetchError'
 import { useTheme } from '../ThemeContext'
 import {
   Bot, Edit2, Trash2, Plus, X, Check,
-  Loader2, AlertCircle, AlertTriangle, Users, Zap, ChevronDown, ChevronUp, Square,
+  Loader2, AlertCircle, AlertTriangle, Users, Zap, ChevronDown, ChevronUp, ChevronLeft, Square,
   Shield, Wifi, WifiOff, Key, ServerCog, Terminal, RefreshCw, User, Eye, EyeOff,
-  Sun, Moon,
+  Sun, Moon, Phone,
+  Bold, Italic, Code, Heading2, List, ListOrdered, Link, Minus,
 } from 'lucide-react'
 
 // ── Markdown Editor ───────────────────────────────────────────────────────
 
 function MarkdownEditor({ value, onChange, placeholder, rows = 16 }) {
   const [mode, setMode] = useState('edit')
+  const textareaRef = useRef(null)
+
+  function insert({ before, after = '', placeholder: ph = '' }) {
+    const el = textareaRef.current
+    if (!el) return
+    const start = el.selectionStart
+    const end = el.selectionEnd
+    const selected = value.slice(start, end) || ph
+    const newValue = value.slice(0, start) + before + selected + after + value.slice(end)
+    onChange(newValue)
+    // Restore cursor after React re-render
+    requestAnimationFrame(() => {
+      el.focus()
+      const cursor = selected === ph
+        ? start + before.length + ph.length
+        : start + before.length + selected.length + after.length
+      el.setSelectionRange(
+        start + before.length,
+        start + before.length + selected.length,
+      )
+    })
+  }
+
+  function insertLine(prefix) {
+    const el = textareaRef.current
+    if (!el) return
+    const start = el.selectionStart
+    // Find start of line
+    const lineStart = value.lastIndexOf('\n', start - 1) + 1
+    const newValue = value.slice(0, lineStart) + prefix + value.slice(lineStart)
+    onChange(newValue)
+    requestAnimationFrame(() => {
+      el.focus()
+      el.setSelectionRange(lineStart + prefix.length, lineStart + prefix.length)
+    })
+  }
+
+  const tools = [
+    { icon: Bold,        title: 'Bold',           action: () => insert({ before: '**', after: '**', placeholder: 'bold text' }) },
+    { icon: Italic,      title: 'Italic',         action: () => insert({ before: '_', after: '_', placeholder: 'italic text' }) },
+    { icon: Code,        title: 'Inline code',    action: () => insert({ before: '`', after: '`', placeholder: 'code' }) },
+    { icon: Heading2,    title: 'Heading',        action: () => insertLine('## ') },
+    { icon: List,        title: 'Bullet list',    action: () => insertLine('- ') },
+    { icon: ListOrdered, title: 'Numbered list',  action: () => insertLine('1. ') },
+    { icon: Link,        title: 'Link',           action: () => insert({ before: '[', after: '](url)', placeholder: 'link text' }) },
+    { icon: Minus,       title: 'Divider',        action: () => insert({ before: '\n---\n', placeholder: '' }) },
+  ]
+
   return (
     <div className="rounded-md border border-border overflow-hidden">
       {/* Tab bar */}
@@ -35,9 +84,27 @@ function MarkdownEditor({ value, onChange, placeholder, rows = 16 }) {
         <span className="ml-auto px-3 text-xs text-muted-foreground/50">Markdown</span>
       </div>
 
+      {/* Formatting toolbar — only in edit mode */}
+      {mode === 'edit' && (
+        <div className="flex items-center gap-0.5 px-2 py-1.5 border-b border-border bg-muted/20">
+          {tools.map(({ icon: Icon, title, action }) => (
+            <button
+              key={title}
+              type="button"
+              title={title}
+              onMouseDown={e => { e.preventDefault(); action() }}
+              className="h-6 w-6 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            >
+              <Icon className="w-3.5 h-3.5" />
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Edit mode */}
       {mode === 'edit' && (
         <textarea
+          ref={textareaRef}
           value={value}
           onChange={e => onChange(e.target.value)}
           placeholder={placeholder}
@@ -99,6 +166,50 @@ export function AccountView({ me, onKeyUpdated }) {
   const [showNewPw, setShowNewPw] = useState(false)
   const [pwSaving, setPwSaving] = useState(false)
   const [pwMsg, setPwMsg] = useState(null) // { type: 'success'|'error', text }
+
+  const [phone, setPhone] = useState(null)       // current saved number or null
+  const [phoneInput, setPhoneInput] = useState('')
+  const [phoneSaving, setPhoneSaving] = useState(false)
+  const [phoneDeleting, setPhoneDeleting] = useState(false)
+  const [phoneMsg, setPhoneMsg] = useState(null) // { type: 'success'|'error', text }
+
+  useEffect(() => {
+    api('/api/account/phone').then(d => {
+      setPhone(d.phone_number ?? null)
+      setPhoneInput(d.phone_number ?? '')
+    }).catch(() => {})
+  }, [])
+
+  async function handleSavePhone() {
+    setPhoneMsg(null)
+    setPhoneSaving(true)
+    try {
+      const d = await api('/api/account/phone', { method: 'POST', body: JSON.stringify({ phone_number: phoneInput.trim() }) })
+      setPhone(d.phone_number)
+      setPhoneInput(d.phone_number)
+      setPhoneMsg({ type: 'success', text: 'Phone number saved.' })
+    } catch (e) {
+      setPhoneMsg({ type: 'error', text: e.message })
+    } finally {
+      setPhoneSaving(false)
+    }
+  }
+
+  async function handleDeletePhone() {
+    if (!window.confirm('Remove your phone number?')) return
+    setPhoneDeleting(true)
+    setPhoneMsg(null)
+    try {
+      await api('/api/account/phone', { method: 'DELETE' })
+      setPhone(null)
+      setPhoneInput('')
+      setPhoneMsg({ type: 'success', text: 'Phone number removed.' })
+    } catch (e) {
+      setPhoneMsg({ type: 'error', text: e.message })
+    } finally {
+      setPhoneDeleting(false)
+    }
+  }
 
   async function handleChangePassword() {
     setPwMsg(null)
@@ -177,27 +288,80 @@ export function AccountView({ me, onKeyUpdated }) {
   }
 
   return (
-    <div className="max-w-2xl mx-auto px-4 py-8 space-y-8">
-      {/* Profile */}
-      <section className="space-y-3">
-        <h2 className="text-sm font-semibold text-foreground flex items-center gap-2"><User className="w-4 h-4" /> Profile</h2>
-        <div className="bg-card border border-border rounded-xl p-4 space-y-2">
-          <div className="flex items-center gap-3">
-            {me?.figure && <HabboFigure figure={me.figure} size="sm" animate={false} />}
-            <div>
-              <p className="text-sm font-medium text-foreground">{me?.habbo_username}</p>
-              <p className="text-xs text-muted-foreground">{me?.email}</p>
+    <div className="max-w-5xl mx-auto px-4 py-8 space-y-6">
+
+      {/* Row 1: Profile + Phone */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+        {/* Profile */}
+        <section className="space-y-3">
+          <h2 className="text-sm font-semibold text-foreground flex items-center gap-2.5">
+            <span className="w-6 h-6 rounded-md bg-secondary flex items-center justify-center flex-shrink-0"><User className="w-3.5 h-3.5" /></span>
+            Profile
+          </h2>
+          <div className="bg-card border border-border rounded-xl p-4 space-y-2">
+            <div className="flex items-center gap-3">
+              {me?.figure && <HabboFigure figure={me.figure} size="sm" animate={false} />}
+              <div>
+                <p className="text-sm font-medium text-foreground">{me?.habbo_username}</p>
+                <p className="text-xs text-muted-foreground">{me?.email}</p>
+              </div>
+              {me?.is_developer && (
+                <span className="ml-auto text-xs bg-primary/10 text-primary border border-primary/20 rounded px-2 py-0.5">Developer</span>
+              )}
             </div>
-            {me?.is_developer && (
-              <span className="ml-auto text-xs bg-primary/10 text-primary border border-primary/20 rounded px-2 py-0.5">Developer</span>
-            )}
           </div>
-        </div>
-      </section>
+        </section>
+
+        {/* Phone Number */}
+        <section className="space-y-3">
+          <h2 className="text-sm font-semibold text-foreground flex items-center gap-2.5">
+            <span className="w-6 h-6 rounded-md bg-secondary flex items-center justify-center flex-shrink-0"><Phone className="w-3.5 h-3.5" /></span>
+            Phone Number
+          </h2>
+          <div className="bg-card border border-border rounded-xl p-4 space-y-4">
+            <p className="text-xs text-muted-foreground">
+              Link your number to trigger agents by SMS or voice via Twilio. Use E.164 format, e.g. <span className="font-mono">+31612345678</span>.
+            </p>
+            {phoneMsg && (
+              <div className={`text-xs rounded-lg px-3 py-2 flex items-center gap-2 ${phoneMsg.type === 'success' ? 'bg-success/10 text-success border border-success/20' : 'bg-destructive/10 text-destructive border border-destructive/20'}`}>
+                {phoneMsg.type === 'success' ? <Check className="w-3.5 h-3.5 flex-shrink-0" /> : <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />}
+                {phoneMsg.text}
+              </div>
+            )}
+            {phone && (
+              <div className="flex items-center justify-between bg-background rounded-lg border border-border px-3 py-2">
+                <div>
+                  <p className="text-xs text-muted-foreground mb-0.5">Current number</p>
+                  <p className="text-sm font-mono text-foreground">{phone}</p>
+                </div>
+                <button onClick={handleDeletePhone} disabled={phoneDeleting}
+                  className="flex items-center gap-1 text-xs text-destructive hover:text-destructive/70 border border-destructive/30 hover:border-destructive/50 rounded px-2 py-1 transition-colors disabled:opacity-50">
+                  {phoneDeleting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />} Remove
+                </button>
+              </div>
+            )}
+            <div className="flex gap-2">
+              <input type="tel" value={phoneInput} onChange={e => setPhoneInput(e.target.value)} placeholder="+31612345678"
+                className="flex-1 bg-background border border-border rounded-lg px-3 py-2 text-sm font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+                onKeyDown={e => e.key === 'Enter' && handleSavePhone()} />
+              <button onClick={handleSavePhone} disabled={phoneSaving || !phoneInput.trim()}
+                className="flex items-center gap-1.5 px-3 py-2 bg-primary text-primary-foreground rounded-lg text-xs font-medium hover:opacity-80 disabled:opacity-50 transition-opacity">
+                {phoneSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />} Save
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      {/* Row 2: API Key + Password */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
 
       {/* API Keys */}
       <section className="space-y-3">
-        <h2 className="text-sm font-semibold text-foreground flex items-center gap-2"><Key className="w-4 h-4" /> Anthropic API Key</h2>
+        <h2 className="text-sm font-semibold text-foreground flex items-center gap-2.5">
+          <span className="w-6 h-6 rounded-md bg-secondary flex items-center justify-center flex-shrink-0"><Key className="w-3.5 h-3.5" /></span>
+          Anthropic API Key
+        </h2>
         <div className="bg-card border border-border rounded-xl p-4 space-y-4">
           <p className="text-xs text-muted-foreground">
             Your personal key is used when you trigger agent teams. It overrides the server default so your usage is billed to your own Anthropic account.
@@ -278,7 +442,10 @@ export function AccountView({ me, onKeyUpdated }) {
 
       {/* Change Password */}
       <section className="space-y-3">
-        <h2 className="text-sm font-semibold text-foreground flex items-center gap-2"><Shield className="w-4 h-4" /> Change Password</h2>
+        <h2 className="text-sm font-semibold text-foreground flex items-center gap-2.5">
+          <span className="w-6 h-6 rounded-md bg-secondary flex items-center justify-center flex-shrink-0"><Shield className="w-3.5 h-3.5" /></span>
+          Change Password
+        </h2>
         <div className="bg-card border border-border rounded-xl p-4 space-y-4">
           {pwMsg && (
             <div className={`text-xs rounded-lg px-3 py-2 flex items-center gap-2 ${pwMsg.type === 'success' ? 'bg-success/10 text-success border border-success/20' : 'bg-destructive/10 text-destructive border border-destructive/20'}`}>
@@ -347,10 +514,13 @@ export function AccountView({ me, onKeyUpdated }) {
         </div>
       </section>
 
-      {/* Appearance */}
+      </div>{/* end Row 2 */}
+
+      {/* Row 3: Appearance — full width */}
       <section className="space-y-3">
-        <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
-          <Sun className="w-4 h-4" /> Appearance
+        <h2 className="text-sm font-semibold text-foreground flex items-center gap-2.5">
+          <span className="w-6 h-6 rounded-md bg-secondary flex items-center justify-center flex-shrink-0"><Sun className="w-3.5 h-3.5" /></span>
+          Appearance
         </h2>
         <div className="bg-card border border-border rounded-xl p-4">
           <div className="flex items-center justify-between">
@@ -359,29 +529,15 @@ export function AccountView({ me, onKeyUpdated }) {
               <p className="text-xs text-muted-foreground mt-0.5">Choose light or dark interface.</p>
             </div>
             <div className="flex items-center gap-1 p-1 bg-secondary rounded-lg border border-border">
-              <button
-                onClick={() => theme === 'dark' && toggleTheme()}
-                className={`flex items-center gap-1.5 h-7 px-3 text-xs rounded-md transition-colors ${
-                  theme === 'light'
-                    ? 'bg-card text-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-                aria-pressed={theme === 'light'}
-              >
-                <Sun className="w-3.5 h-3.5" />
-                Light
+              <button onClick={() => theme === 'dark' && toggleTheme()}
+                className={`flex items-center gap-1.5 h-7 px-3 text-xs rounded-md transition-colors ${theme === 'light' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                aria-pressed={theme === 'light'}>
+                <Sun className="w-3.5 h-3.5" /> Light
               </button>
-              <button
-                onClick={() => theme === 'light' && toggleTheme()}
-                className={`flex items-center gap-1.5 h-7 px-3 text-xs rounded-md transition-colors ${
-                  theme === 'dark'
-                    ? 'bg-card text-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-                aria-pressed={theme === 'dark'}
-              >
-                <Moon className="w-3.5 h-3.5" />
-                Dark
+              <button onClick={() => theme === 'light' && toggleTheme()}
+                className={`flex items-center gap-1.5 h-7 px-3 text-xs rounded-md transition-colors ${theme === 'dark' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                aria-pressed={theme === 'dark'}>
+                <Moon className="w-3.5 h-3.5" /> Dark
               </button>
             </div>
           </div>
@@ -395,7 +551,7 @@ export function AccountView({ me, onKeyUpdated }) {
 
 export function AgentDashboard({ me, onActiveTeamChange, onStopTeam }) {
   const [tab, setTab] = useState('integrated')
-  const [activeTeam, setActiveTeam] = useState(null)
+  const [activeTeam, setActiveTeam] = useState(null)  // my own active run
   const [stopping, setStopping] = useState(false)
 
   const [liveBots, setLiveBots] = useState([])
@@ -405,15 +561,17 @@ export function AgentDashboard({ me, onActiveTeamChange, onStopTeam }) {
   const [teamError, setTeamError] = useState(null)
   const prevActiveTeam = useRef(null)
 
-  // Poll agent-trigger health every 5s to show active team status
+  // Poll agent-trigger health every 5s — find this user's own run by matching username
   useEffect(() => {
     async function poll() {
       try {
         const res = await fetch('/api/agents/status', { credentials: 'include' })
         const d = await res.json().catch(() => ({}))
-        const team = d.trigger?.activeTeam ?? null
-        setActiveTeam(team)
-        onActiveTeamChange?.(team)
+        const runs = d.trigger?.activeRuns ?? []
+        // Match the run that was triggered by this user (by Habbo username)
+        const myRun = runs.find(r => r.from === me?.username) ?? null
+        setActiveTeam(myRun)
+        onActiveTeamChange?.(myRun)
         setLiveBots((d.bots || []).filter(b => b.room_id > 0))
         if (d.mcp) setMcpStatus(d.mcp)
       } catch { setActiveTeam(null) }
@@ -421,17 +579,18 @@ export function AgentDashboard({ me, onActiveTeamChange, onStopTeam }) {
     poll()
     const id = setInterval(poll, 5000)
     return () => clearInterval(id)
-  }, [])
+  }, [me?.username])
 
-  // Poll logs every 3s + detect errors when team stops
+  // Poll logs every 3s — filter to this user's room so they only see their own output
   const fetchLogs = useCallback(async () => {
     try {
-      const res = await fetch('/api/agents/logs?lines=150', { credentials: 'include' })
+      const roomParam = activeTeam?.roomId ? `&room_id=${activeTeam.roomId}` : ''
+      const res = await fetch(`/api/agents/logs?lines=150${roomParam}`, { credentials: 'include' })
       const d = await res.json().catch(() => ({}))
       if (!d.lines) return d
       setLogLines(d.lines)
 
-      // Detect errors by scanning the last 20 lines directly — no state transition needed
+      // Detect errors by scanning the last 20 lines
       // Only show banner if there's no active team (crash) and we haven't already shown it
       const tail = d.lines.slice(-20).join('\n')
       const hasRecentError = /\[trigger\].*error:/i.test(tail)
@@ -457,7 +616,13 @@ export function AgentDashboard({ me, onActiveTeamChange, onStopTeam }) {
 
   async function stopTeam() {
     setStopping(true)
-    try { await api('/api/agents/stop', { method: 'POST' }) } catch { /* ignore */ }
+    try {
+      // Pass room_id so only this user's room is stopped, not other users' runs
+      await api('/api/agents/stop', {
+        method: 'POST',
+        body: JSON.stringify({ room_id: activeTeam?.roomId }),
+      })
+    } catch { /* ignore */ }
     finally { setStopping(false) }
   }
 
@@ -473,7 +638,7 @@ export function AgentDashboard({ me, onActiveTeamChange, onStopTeam }) {
     <div className="bg-background">
       {/* Sub-tabs */}
       <div className="border-b border-border bg-card/30">
-        <div className="max-w-6xl mx-auto px-4 flex gap-1">
+        <div className="max-w-5xl mx-auto px-4 flex gap-1">
           {tabs.map(({ id, label, icon: Icon, badge }) => (
             <button
               key={id}
@@ -521,7 +686,7 @@ export function AgentDashboard({ me, onActiveTeamChange, onStopTeam }) {
       )}
 
       {/* Content */}
-      <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
+      <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
         {tab === 'integrated' && <IntegratedView me={me} onAfterTrigger={fetchLogs} liveBots={liveBots} />}
         {tab === 'online' && <OnlineView me={me} liveBots={liveBots} />}
         {tab === 'developer' && me?.is_developer && <DeveloperView mcpStatus={mcpStatus} logLines={logLines} logPaused={logPaused} setLogPaused={setLogPaused} />}
@@ -545,6 +710,8 @@ const LOG_COLORS = {
   '[narrator]': 'text-pink-400',
   '[claude:err]': 'text-destructive',
   '[voice]':    'text-cyan-400',
+  '[sms]':      'text-cyan-400',
+  '[timeout]':  'text-destructive',
 }
 
 function logColor(line) {
@@ -723,12 +890,17 @@ function OnlineView({ me, liveBots }) {
     <div className="space-y-6">
       {/* Online section */}
       <div className="space-y-3">
-        <div className="flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-success animate-pulse" />
-          <h2 className="text-sm font-semibold text-foreground">Online</h2>
-          <span className="text-xs text-muted-foreground">
-            {agentCount} agent{agentCount !== 1 ? 's' : ''} in {roomCount} room{roomCount !== 1 ? 's' : ''}
-          </span>
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-success animate-pulse" />
+            <h2 className="text-sm font-semibold text-foreground">Online</h2>
+            <span className="text-xs text-muted-foreground">
+              {agentCount} agent{agentCount !== 1 ? 's' : ''} in {roomCount} room{roomCount !== 1 ? 's' : ''}
+            </span>
+          </div>
+          <p className="text-xs text-muted-foreground mt-0.5 ml-4">
+            Only bots linked to a persona are shown here — unlinked hotel bots are not listed.
+          </p>
         </div>
 
         {roomCount === 0 ? (
@@ -738,10 +910,13 @@ function OnlineView({ me, liveBots }) {
         ) : (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {Object.entries(rooms).map(([roomId, bots]) => (
-              <div key={roomId} className="rounded-xl border border-warning/25 bg-warning/5 p-4 space-y-3">
-                <div>
-                  <p className="text-sm font-semibold text-foreground">{bots[0]?.room_name || `Room ${roomId}`}</p>
-                  <p className="text-xs text-muted-foreground">#{roomId}</p>
+              <div key={roomId} className="rounded-xl border border-border bg-card p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">{bots[0]?.room_name || `Room ${roomId}`}</p>
+                    <p className="text-xs text-muted-foreground">#{roomId}</p>
+                  </div>
+                  <span className="w-2 h-2 rounded-full bg-success animate-pulse flex-shrink-0" />
                 </div>
                 <div className="space-y-2">
                   {bots.map(bot => (
@@ -749,7 +924,7 @@ function OnlineView({ me, liveBots }) {
                       <HabboFigure figure={bot.figure || bot.persona_figure || null} size="sm" animate={true} />
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-foreground">{bot.persona_name || bot.name}</p>
-                        {bot.team_name && <p className="text-xs text-warning/80">{bot.team_name}</p>}
+                        {bot.team_name && <p className="text-xs text-muted-foreground">{bot.team_name}</p>}
                       </div>
                       {(bot.x != null && bot.y != null) && (
                         <span className="text-[10px] text-muted-foreground/50 font-mono tabular-nums flex-shrink-0">
@@ -797,13 +972,13 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [] }) {
   const [teams, setTeams] = useState([])
   const [bots, setBots] = useState([])
   const [rooms, setRooms] = useState([])
-  const [selectedRoomId, setSelectedRoomId] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [showPersonaForm, setShowPersonaForm] = useState(false)
-  const [showTeamForm, setShowTeamForm] = useState(false)
-  const [editingPersona, setEditingPersona] = useState(null)
-  const [editingTeam, setEditingTeam] = useState(null)
+  // teamPage / personaPage: null = list view, { item: null } = new, { item: {...} } = edit
+  const [teamPage, setTeamPage] = useState(null)
+  const [personaPage, setPersonaPage] = useState(null)
+  // confirmModal: null | { title, message, onConfirm }
+  const [confirmModal, setConfirmModal] = useState(null)
   const [toast, setToast] = useState(null)
   const [deployingIds, setDeployingIds] = useState(new Set())
   const [hasApiKey, setHasApiKey] = useState(true)
@@ -829,7 +1004,6 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [] }) {
       setTeams(td.teams || [])
       const roomList = rd.rooms || []
       setRooms(roomList)
-      if (roomList.length > 0 && !selectedRoomId) setSelectedRoomId(roomList[0].id)
       setHasApiKey(!!(kd.keys || []).find(k => k.provider === 'anthropic'))
       const now = new Date()
       setHasMcpToken(!!(md.tokens || []).find(t => t.status === 'active' && new Date(t.expires_at) > now))
@@ -847,10 +1021,10 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [] }) {
     setTimeout(() => setToast(null), 3500)
   }
 
-  async function deployTeam(team) {
+  async function deployTeam(team, roomId) {
     setDeployingIds(prev => new Set([...prev, team.id]))
     try {
-      await api(`/api/my/teams/${team.id}/trigger`, { method: 'POST', body: JSON.stringify({ room_id: selectedRoomId }) })
+      await api(`/api/my/teams/${team.id}/trigger`, { method: 'POST', body: JSON.stringify({ room_id: roomId }) })
       showToast(`Team "${team.name}" deployed!`)
       onAfterTrigger?.()
       setTimeout(() => onAfterTrigger?.(), 2000)
@@ -863,49 +1037,147 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [] }) {
     }
   }
 
-  async function deleteTeam(team) {
-    if (!confirm(`Delete team "${team.name}"?`)) return
-    setTeams(prev => prev.filter(t => t.id !== team.id))
-    try {
-      await api(`/api/my/teams/${team.id}`, { method: 'DELETE' })
-    } catch { load() }
+  function deleteTeam(team) {
+    const memberPersonaIds = (team.members || []).map(m => m.persona_id).filter(Boolean)
+    const memberNames = (team.members || []).map(m => m.name).filter(Boolean)
+    const agentNote = memberPersonaIds.length > 0
+      ? ` The linked agent${memberPersonaIds.length > 1 ? 's' : ''} (${memberNames.join(', ')}) will also be removed from your agents list.`
+      : ''
+    setConfirmModal({
+      title: 'Delete team',
+      message: `Delete "${team.name}"? This cannot be undone. You can reinstall it from the Marketplace.${agentNote}`,
+      onConfirm: async () => {
+        setTeams(prev => prev.filter(t => t.id !== team.id))
+        if (memberPersonaIds.length > 0) {
+          setPersonas(prev => prev.filter(p => !memberPersonaIds.includes(p.id)))
+        }
+        try {
+          await api(`/api/my/teams/${team.id}`, { method: 'DELETE' })
+          await Promise.all(memberPersonaIds.map(pid => api(`/api/my/personas/${pid}`, { method: 'DELETE' })))
+        } catch { load() }
+      },
+    })
   }
 
-  async function deletePersona(persona) {
-    if (!confirm(`Delete agent "${persona.name}"?`)) return
-    setPersonas(prev => prev.filter(p => p.id !== persona.id))
-    try {
-      await api(`/api/my/personas/${persona.id}`, { method: 'DELETE' })
-    } catch { load() }
+  function deletePersona(persona) {
+    setConfirmModal({
+      title: 'Delete agent',
+      message: `Delete "${persona.name}"? This cannot be undone.`,
+      onConfirm: async () => {
+        setPersonas(prev => prev.filter(p => p.id !== persona.id))
+        try { await api(`/api/my/personas/${persona.id}`, { method: 'DELETE' }) }
+        catch { load() }
+      },
+    })
   }
 
   async function savePersona(data) {
-    if (editingPersona) {
-      await api(`/api/my/personas/${editingPersona.id}`, { method: 'PUT', body: JSON.stringify(data) })
+    if (personaPage?.persona) {
+      await api(`/api/my/personas/${personaPage.persona.id}`, { method: 'PUT', body: JSON.stringify(data) })
     } else {
       await api('/api/my/personas', { method: 'POST', body: JSON.stringify(data) })
     }
-    setShowPersonaForm(false)
-    setEditingPersona(null)
+    setPersonaPage(null)
     load()
   }
 
+  async function saveTeamRoomId(teamId, roomId) {
+    setTeams(prev => prev.map(t => t.id === teamId ? { ...t, default_room_id: roomId } : t))
+    try {
+      const team = teams.find(t => t.id === teamId)
+      if (team) {
+        // tasks_json from the DB is already a string — unwrap all stringify layers
+        // before sending so the PUT endpoint doesn't double-stringify it
+        let parsedTasks = []
+        try {
+          let v = JSON.parse(team.tasks_json || '[]')
+          let guard = 0
+          while (typeof v === 'string' && guard++ < 5) { try { v = JSON.parse(v) } catch { break } }
+          parsedTasks = Array.isArray(v) ? v : []
+        } catch { /* keep [] */ }
+        await api(`/api/my/teams/${teamId}`, { method: 'PUT', body: JSON.stringify({ ...team, tasks_json: parsedTasks, default_room_id: roomId }) })
+      }
+    } catch { /* non-fatal — local state already updated */ }
+  }
+
   async function saveTeam(data) {
-    let teamId = editingTeam?.id
-    if (editingTeam) {
-      await api(`/api/my/teams/${editingTeam.id}`, { method: 'PUT', body: JSON.stringify(data) })
+    let teamId = teamPage?.team?.id
+    if (teamPage?.team) {
+      await api(`/api/my/teams/${teamPage.team.id}`, { method: 'PUT', body: JSON.stringify(data) })
     } else {
       const r = await api('/api/my/teams', { method: 'POST', body: JSON.stringify(data) })
       teamId = r.id
     }
-    setShowTeamForm(false)
-    setEditingTeam(null)
+    setTeamPage(null)
     load()
     return { id: teamId }
   }
 
   if (loading) return <LoadingState />
   if (error) return <ErrorBanner message={error} onRetry={load} />
+
+  // ── Dedicated persona edit/new page ──────────────────────────────────────
+  if (personaPage !== null) {
+    const isEditing = !!personaPage.persona
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setPersonaPage(null)}
+            className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors group"
+          >
+            <ChevronLeft className="w-3.5 h-3.5 group-hover:-translate-x-0.5 transition-transform" />
+            My Agents
+          </button>
+          <span className="text-muted-foreground/40 text-sm">/</span>
+          <span className="text-sm text-foreground font-medium">
+            {isEditing ? `Edit: ${personaPage.persona.name}` : 'New Agent'}
+          </span>
+        </div>
+
+        <div className="rounded-xl border border-border bg-card p-5">
+          <PersonaEditor
+            persona={personaPage.persona}
+            bots={bots}
+            onSave={savePersona}
+            onCancel={() => setPersonaPage(null)}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  // ── Dedicated team edit/new page ──────────────────────────────────────────
+  if (teamPage !== null) {
+    const isEditing = !!teamPage.team
+    return (
+      <div className="space-y-6">
+        {/* Breadcrumb / back header */}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setTeamPage(null)}
+            className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors group"
+          >
+            <ChevronLeft className="w-3.5 h-3.5 group-hover:-translate-x-0.5 transition-transform" />
+            My Teams
+          </button>
+          <span className="text-muted-foreground/40 text-sm">/</span>
+          <span className="text-sm text-foreground font-medium">
+            {isEditing ? `Edit: ${teamPage.team.name}` : 'New Team'}
+          </span>
+        </div>
+
+        <IntegratedTeamForm
+          team={teamPage.team}
+          personas={personas}
+          rooms={rooms}
+          isDev={isDev}
+          onSave={saveTeam}
+          onCancel={() => setTeamPage(null)}
+        />
+      </div>
+    )
+  }
 
   if (isBasic && !isDev) {
     return (
@@ -934,6 +1206,9 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [] }) {
         </div>
       )}
 
+      {/* ── Teams + Agents — side by side on wide screens ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-8 items-start">
+
       {/* ── Teams ── */}
       <section className="space-y-4">
         <div className="flex items-center justify-between">
@@ -941,47 +1216,18 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [] }) {
             <h2 className="font-semibold text-foreground">Teams</h2>
             <p className="text-xs text-muted-foreground mt-0.5">Group agents into a deployable team</p>
           </div>
-          {!showTeamForm && (
-            <button
-              onClick={() => { setEditingTeam(null); setShowTeamForm(true) }}
-              className="flex items-center gap-1.5 text-xs bg-primary text-primary-foreground px-3 py-1.5 rounded-md hover:bg-primary/90 transition-colors"
-            >
-              <Plus className="w-3 h-3" /> New Team
-            </button>
-          )}
+          <button
+            onClick={() => setTeamPage({ team: null })}
+            className="flex items-center gap-1.5 text-xs bg-primary text-primary-foreground px-3 py-1.5 rounded-md hover:opacity-80 transition-opacity"
+          >
+            <Plus className="w-3 h-3" /> New Team
+          </button>
         </div>
 
-        {showTeamForm && (
-          <IntegratedTeamForm
-            team={editingTeam}
-            personas={personas}
-            isDev={isDev}
-            onSave={saveTeam}
-            onCancel={() => { setShowTeamForm(false); setEditingTeam(null) }}
-          />
-        )}
-
-        {/* Room selector */}
-        {rooms.length > 0 && (
-          <div className="flex items-center gap-3 bg-card border border-border rounded-xl px-4 py-3">
-            <Zap className="w-4 h-4 text-primary flex-shrink-0" />
-            <span className="text-xs font-medium text-foreground">Deploy room</span>
-            <select
-              value={selectedRoomId ?? ''}
-              onChange={e => setSelectedRoomId(Number(e.target.value))}
-              className="flex-1 bg-background border border-border rounded-lg px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
-            >
-              {rooms.map(r => (
-                <option key={r.id} value={r.id}>#{r.id} — {r.name}</option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        {teams.length === 0 && !showTeamForm ? (
+        {teams.length === 0 ? (
           <EmptyState icon={Users} title="No teams yet" description="Create a team to group and deploy your integrated agents" />
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-3 stagger-children">
             {teams.map(team => (
               <IntegratedTeamCard
                 key={team.id}
@@ -989,12 +1235,13 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [] }) {
                 isDev={isDev}
                 bots={bots}
                 liveBots={liveBots}
-                selectedRoomId={selectedRoomId}
+                rooms={rooms}
                 deploying={deployingIds.has(team.id)}
                 hasApiKey={hasApiKey}
                 hasMcpToken={hasMcpToken}
-                onDeploy={() => deployTeam(team)}
-                onEdit={() => { setEditingTeam(team); setShowTeamForm(true) }}
+                onDeploy={(roomId) => deployTeam(team, roomId)}
+                onRoomChange={(roomId) => saveTeamRoomId(team.id, roomId)}
+                onEdit={() => setTeamPage({ team })}
                 onDelete={() => deleteTeam(team)}
               />
             ))}
@@ -1002,37 +1249,22 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [] }) {
         )}
       </section>
 
-      {/* Divider */}
-      <div className="border-t border-border" />
-
       {/* ── Agents ── */}
       <section className="space-y-4">
         <div className="flex items-center justify-between">
           <div>
             <h2 className="font-semibold text-foreground">Agents</h2>
-            <p className="text-xs text-muted-foreground mt-0.5">Individual hotel personas that live in the hotel</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Individual hotel personas</p>
           </div>
-          {!showPersonaForm && (
-            <button
-              onClick={() => { setEditingPersona(null); setShowPersonaForm(true) }}
-              className="flex items-center gap-1.5 text-xs bg-primary text-primary-foreground px-3 py-1.5 rounded-md hover:bg-primary/90 transition-colors"
-            >
-              <Plus className="w-3 h-3" /> Add Agent
-            </button>
-          )}
+          <button
+            onClick={() => setPersonaPage({ persona: null })}
+            className="flex items-center gap-1.5 text-xs bg-primary text-primary-foreground px-3 py-1.5 rounded-md hover:opacity-80 transition-opacity"
+          >
+            <Plus className="w-3 h-3" /> Add Agent
+          </button>
         </div>
 
-        {/* New agent form — only shown when adding, not editing */}
-        {showPersonaForm && !editingPersona && (
-          <PersonaEditor
-            persona={null}
-            bots={bots}
-            onSave={savePersona}
-            onCancel={() => { setShowPersonaForm(false); setEditingPersona(null) }}
-          />
-        )}
-
-        {personas.length === 0 && !showPersonaForm ? (
+        {personas.length === 0 ? (
           <EmptyState icon={Bot} title="No agents yet" description="Add your first hotel agent to get started" />
         ) : (
           <div className="space-y-3">
@@ -1041,25 +1273,68 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [] }) {
                 key={persona.id}
                 persona={persona}
                 bots={bots}
-                expanded={editingPersona?.id === persona.id}
-                onEdit={() => { setEditingPersona(persona); setShowPersonaForm(true) }}
-                onCollapse={() => { setShowPersonaForm(false); setEditingPersona(null) }}
-                onSave={savePersona}
+                onEdit={() => setPersonaPage({ persona })}
                 onDelete={() => deletePersona(persona)}
               />
             ))}
           </div>
         )}
       </section>
+
+      </div>{/* end Teams + Agents grid */}
+
+      {/* Confirm modal */}
+      {confirmModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm"
+          onClick={() => setConfirmModal(null)}>
+          <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-sm shadow-2xl space-y-4"
+            onClick={e => e.stopPropagation()}>
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-full bg-destructive/10 flex items-center justify-center flex-shrink-0">
+                <AlertTriangle className="w-4 h-4 text-destructive" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-foreground">{confirmModal.title}</p>
+                <p className="text-xs text-muted-foreground mt-1">{confirmModal.message}</p>
+              </div>
+            </div>
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={() => setConfirmModal(null)}
+                className="flex-1 h-9 rounded-lg border border-border text-sm hover:bg-secondary transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => { confirmModal.onConfirm(); setConfirmModal(null) }}
+                className="flex-1 h-9 rounded-lg bg-destructive text-destructive-foreground text-sm font-medium hover:bg-destructive/90 transition-colors"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
 // ── Integrated Team Card ───────────────────────────────────────────────────
 
-function IntegratedTeamCard({ team, isDev, bots = [], liveBots = [], selectedRoomId, deploying, hasApiKey = true, hasMcpToken = true, onDeploy, onEdit, onDelete }) {
+function IntegratedTeamCard({ team, isDev, bots = [], liveBots = [], rooms = [], deploying, hasApiKey = true, hasMcpToken = true, onDeploy, onRoomChange, onEdit, onDelete }) {
   const [expanded, setExpanded] = useState(false)
   const [members, setMembers] = useState(team.members || null) // null = still loading
+  const [selectedRoomId, setSelectedRoomId] = useState(team.default_room_id || rooms[0]?.id || null)
+
+  // Keep in sync if rooms load after mount
+  useEffect(() => {
+    if (!selectedRoomId && rooms.length > 0) setSelectedRoomId(team.default_room_id || rooms[0].id)
+  }, [rooms, team.default_room_id])
+
+  function handleRoomChange(roomId) {
+    setSelectedRoomId(roomId)
+    onRoomChange?.(roomId)
+  }
 
   // Load members: list endpoint usually includes them; otherwise fetch single team (marketplace vs user-scoped)
   useEffect(() => {
@@ -1102,7 +1377,7 @@ function IntegratedTeamCard({ team, isDev, bots = [], liveBots = [], selectedRoo
   const blocked = !!roomConflict || hasUnlinked || noKey || noMcpToken
 
   return (
-    <div className={`rounded-xl border bg-card overflow-hidden ${roomConflict ? 'border-warning/40' : 'border-border'}`}>
+    <div className={`rounded-xl border bg-card overflow-hidden card-lift ${roomConflict ? 'border-warning/40' : 'border-border'}`}>
       {/* Room conflict warning */}
       {roomConflict && (
         <div className="flex items-center gap-2 px-4 py-2 bg-warning/10 border-b border-warning/20 text-xs text-warning">
@@ -1113,21 +1388,22 @@ function IntegratedTeamCard({ team, isDev, bots = [], liveBots = [], selectedRoo
 
       {/* Header row */}
       <div className="flex items-center gap-3 p-4">
-        <div className="w-8 h-8 rounded-lg bg-violet-500/10 flex items-center justify-center flex-shrink-0">
-          <Users className="w-4 h-4 text-violet-400" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="font-semibold text-sm text-foreground">{team.name}</p>
-          {team.description && (
-            <p className="text-xs text-muted-foreground mt-0.5 truncate">{team.description}</p>
-          )}
-        </div>
-        <span className="text-xs text-muted-foreground flex-shrink-0">{team.member_count ?? (members || []).length} agent{(team.member_count ?? (members || []).length) !== 1 ? 's' : ''}</span>
+        {/* Clickable left area — toggles member list */}
         <button
           onClick={() => setExpanded(e => !e)}
-          className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex-shrink-0"
+          className="flex items-center gap-3 flex-1 min-w-0 text-left hover:opacity-80 transition-opacity"
         >
-          {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+          <div className="w-8 h-8 rounded-lg bg-secondary flex items-center justify-center flex-shrink-0">
+            <Users className="w-4 h-4 text-foreground" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="font-semibold text-sm text-foreground">{team.name}</p>
+            {team.description && (
+              <p className="text-xs text-muted-foreground mt-0.5 truncate">{team.description}</p>
+            )}
+          </div>
+          <span className="text-xs text-muted-foreground flex-shrink-0">{team.member_count ?? (members || []).length} agent{(team.member_count ?? (members || []).length) !== 1 ? 's' : ''}</span>
+          {expanded ? <ChevronUp className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" /> : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />}
         </button>
         <button onClick={onEdit} className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex-shrink-0">
           <Edit2 className="w-3.5 h-3.5" />
@@ -1136,18 +1412,43 @@ function IntegratedTeamCard({ team, isDev, bots = [], liveBots = [], selectedRoo
           <Trash2 className="w-3.5 h-3.5" />
         </button>
         <button
-          onClick={onDeploy}
+          onClick={() => onDeploy(selectedRoomId)}
           disabled={deploying || blocked}
           title={noKey ? 'Add an Anthropic API key in Settings to deploy' : noMcpToken ? 'Generate an MCP token in Settings → MCP Tokens to deploy' : roomConflict || undefined}
           className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition-colors flex-shrink-0 ${
             blocked
               ? 'bg-warning/20 text-warning border border-warning/30 cursor-not-allowed'
-              : 'bg-violet-600 text-white hover:bg-violet-500 disabled:opacity-60 disabled:cursor-not-allowed'
+              : 'bg-primary text-primary-foreground hover:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed'
           }`}
         >
           {deploying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : blocked ? <AlertTriangle className="w-3.5 h-3.5" /> : <Zap className="w-3.5 h-3.5" />}
           {deploying ? 'Deploying…' : noKey ? 'No API Key' : noMcpToken ? 'No MCP Token' : blocked ? 'Blocked' : 'Deploy'}
         </button>
+      </div>
+
+      {/* Room selector — always visible, saves default_room_id on change */}
+      <div className="flex items-center gap-2 px-4 pb-3">
+        <span className="text-xs text-muted-foreground flex-shrink-0">Room</span>
+        {rooms.length > 0 ? (
+          <select
+            value={selectedRoomId ?? ''}
+            onChange={e => handleRoomChange(Number(e.target.value))}
+            className="flex-1 bg-background border border-border rounded-md px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+          >
+            {rooms.map(r => (
+              <option key={r.id} value={r.id}>#{r.id} — {r.name}</option>
+            ))}
+          </select>
+        ) : (
+          <input
+            type="number"
+            min="1"
+            value={selectedRoomId ?? ''}
+            onChange={e => handleRoomChange(Number(e.target.value))}
+            placeholder="Room ID"
+            className="w-28 bg-background border border-border rounded-md px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+          />
+        )}
       </div>
 
       {/* Expanded members */}
@@ -1221,13 +1522,22 @@ const TEAM_LANGUAGES = [
   { code: 'sv', label: '🇸🇪 Swedish' },
 ]
 
-function IntegratedTeamForm({ team, personas, isDev, onSave, onCancel }) {
+function IntegratedTeamForm({ team, personas, rooms = [], isDev, onSave, onCancel }) {
   const [name, setName] = useState(team?.name || '')
   const [description, setDescription] = useState(team?.description || '')
   const [orchestratorPrompt, setOrchestratorPrompt] = useState(team?.orchestrator_prompt || '')
-  const [executionMode, setExecutionMode] = useState(team?.execution_mode || 'concurrent')
+  const [executionMode, setExecutionMode] = useState(team?.execution_mode || 'shared')
   const [language, setLanguage] = useState(team?.language || 'en')
-  const parsedTasks = (() => { try { return JSON.parse(team?.tasks_json || '[]') } catch { return [] } })()
+  const [defaultRoomId, setDefaultRoomId] = useState(team?.default_room_id || '')
+  const parsedTasks = (() => {
+    try {
+      let v = JSON.parse(team?.tasks_json || '[]')
+      // Unwrap any number of extra stringify layers (e.g. from saveTeamRoomId corruption)
+      let guard = 0
+      while (typeof v === 'string' && guard++ < 5) { try { v = JSON.parse(v) } catch { break } }
+      return Array.isArray(v) ? v : []
+    } catch { return [] }
+  })()
   const [tasks, setTasks] = useState(parsedTasks.length ? parsedTasks : [])
   const [members, setMembers] = useState([]) // { id (atm.id), persona_id, name, role }
   const [addPersonaId, setAddPersonaId] = useState('')
@@ -1265,7 +1575,7 @@ function IntegratedTeamForm({ team, personas, isDev, onSave, onCancel }) {
     setSaving(true)
     setFormError(null)
     try {
-      const savedTeam = await onSave({ name: name.trim(), description: description.trim(), orchestrator_prompt: orchestratorPrompt.trim(), execution_mode: executionMode, tasks_json: tasks, language })
+      const savedTeam = await onSave({ name: name.trim(), description: description.trim(), orchestrator_prompt: orchestratorPrompt.trim(), execution_mode: executionMode, tasks_json: tasks, language, default_room_id: defaultRoomId || undefined })
       const teamId = savedTeam?.id || team?.id
       if (teamId) {
         // Sync members: fetch current from server, diff, add/remove
@@ -1343,9 +1653,9 @@ function IntegratedTeamForm({ team, personas, isDev, onSave, onCancel }) {
         <label className="text-xs font-medium text-foreground">Execution Mode</label>
         <div className="flex gap-2 flex-wrap">
           {[
+            { value: 'shared', label: 'Shared Task List', desc: 'Agents collaborate via a shared task file, claiming tasks as they go' },
             { value: 'concurrent', label: 'Concurrent', desc: 'All agents start at the same time, work independently' },
             { value: 'sequential', label: 'Sequential', desc: 'Tasks run one after another, each waits for the previous' },
-            { value: 'shared', label: 'Shared Task List', desc: 'Agents collaborate via a shared task file, claiming tasks as they go' },
           ].map(m => (
             <button
               key={m.value}
@@ -1380,6 +1690,35 @@ function IntegratedTeamForm({ team, personas, isDev, onSave, onCancel }) {
             <option key={l.code} value={l.code}>{l.label}</option>
           ))}
         </select>
+      </div>
+
+      {/* Default room */}
+      <div className="space-y-1.5">
+        <label className="text-xs font-medium text-foreground">
+          Default room
+          <span className="ml-1.5 text-muted-foreground font-normal">— used when triggered by phone or SMS</span>
+        </label>
+        {rooms.length > 0 ? (
+          <select
+            value={defaultRoomId ?? ''}
+            onChange={e => setDefaultRoomId(Number(e.target.value))}
+            className="w-full bg-muted/40 border border-border rounded-md px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          >
+            <option value="">— pick a room —</option>
+            {rooms.map(r => (
+              <option key={r.id} value={r.id}>#{r.id} — {r.name}</option>
+            ))}
+          </select>
+        ) : (
+          <input
+            type="number"
+            min="1"
+            value={defaultRoomId ?? ''}
+            onChange={e => setDefaultRoomId(Number(e.target.value) || '')}
+            placeholder="Room ID (e.g. 201)"
+            className="w-full bg-muted/40 border border-border rounded-md px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+        )}
       </div>
 
       {/* Task editor — shown for sequential + shared modes */}
@@ -1588,34 +1927,34 @@ function IntegratedTeamForm({ team, personas, isDev, onSave, onCancel }) {
 
 // ── Persona Card ──────────────────────────────────────────────────────────
 
-function PersonaCard({ persona, bots = [], expanded, onEdit, onCollapse, onSave, onDelete }) {
+function PersonaCard({ persona, bots = [], onEdit, onDelete }) {
   const figure = persona.figure || bots.find(b => b.name === persona.bot_name)?.figure || null
   return (
-    <div className={`rounded-xl border bg-card transition-colors ${expanded ? 'border-primary/40' : 'border-border'}`}>
-      {/* Card row — always visible */}
+    <button
+      onClick={onEdit}
+      className="w-full rounded-xl border border-border bg-card card-lift text-left hover:border-primary/40 transition-colors"
+    >
       <div className="flex items-center gap-4 p-4">
         <HabboFigure figure={figure} size="xl" animate={true} />
         <div className="flex-1 min-w-0">
           <p className="font-semibold text-sm text-foreground">{persona.name}</p>
           {persona.role && <p className="text-xs text-muted-foreground mt-0.5">{persona.role}</p>}
-          {!expanded && (persona.prompt || persona.description) && (
+          {(persona.prompt || persona.description) && (
             <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
               {persona.prompt || persona.description}
             </p>
           )}
         </div>
-        <div className="flex flex-col items-end gap-2 flex-shrink-0">
-          {persona.bot_name && (
-            <span className="inline-flex items-center text-xs bg-info/10 text-info border border-info/20 px-2 py-0.5 rounded-full">
-              {persona.bot_name}
-            </span>
-          )}
-        </div>
-        <div className="flex gap-1 flex-shrink-0">
+        {persona.bot_name && (
+          <span className="inline-flex items-center text-xs bg-info/10 text-info border border-info/20 px-2 py-0.5 rounded-full flex-shrink-0">
+            {persona.bot_name}
+          </span>
+        )}
+        <div className="flex gap-1 flex-shrink-0" onClick={e => e.stopPropagation()}>
           <button
-            onClick={expanded ? onCollapse : onEdit}
-            className={`p-1.5 rounded-md transition-colors ${expanded ? 'text-primary bg-primary/10' : 'text-muted-foreground hover:text-foreground hover:bg-secondary'}`}
-            title={expanded ? 'Collapse' : 'Edit agent'}
+            onClick={onEdit}
+            className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            title="Edit agent"
           >
             <Edit2 className="w-3.5 h-3.5" />
           </button>
@@ -1628,19 +1967,7 @@ function PersonaCard({ persona, bots = [], expanded, onEdit, onCollapse, onSave,
           </button>
         </div>
       </div>
-
-      {/* Inline edit — expands below */}
-      {expanded && (
-        <div className="border-t border-border/50 px-4 pb-4 pt-3">
-          <PersonaEditor
-            persona={persona}
-            bots={bots}
-            onSave={onSave}
-            onCancel={onCollapse}
-          />
-        </div>
-      )}
-    </div>
+    </button>
   )
 }
 

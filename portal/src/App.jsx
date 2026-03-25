@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { HabboFigure } from './components/HabboFigure'
 import { AgentDashboard, AccountView } from './components/AgentDashboard'
 import { MarketplaceView } from './components/MarketplaceView'
@@ -164,17 +165,14 @@ function AuthPage({ onLogin }) {
 
       {/* Logo */}
       <div className="absolute top-6 left-6">
-        <img src="/logo.png" alt="Agent Hotel" className="w-20 h-auto" style={{ imageRendering: 'auto' }} />
+        <span className="text-base font-semibold tracking-tight text-foreground">AgentHotel</span>
       </div>
 
       <div className="relative w-full max-w-sm">
         {/* Header */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-primary/10 border border-primary/20 mb-4">
-            <Hotel className="w-7 h-7 text-primary" />
-          </div>
-          <h1 className="font-pixel text-lg text-foreground">Agent Hotel</h1>
-          <p className="text-sm text-muted-foreground mt-1">Portal Access</p>
+          <h1 className="text-3xl font-semibold tracking-tight text-foreground">AgentHotel</h1>
+          <p className="text-sm text-muted-foreground mt-2">Sign in to your account</p>
         </div>
 
         {/* Auth card */}
@@ -392,7 +390,12 @@ function Dashboard({ me, setMe }) {
 
   async function stopTeam() {
     setStopping(true)
-    try { await api('/api/agents/stop', { method: 'POST' }) }
+    try {
+      await api('/api/agents/stop', {
+        method: 'POST',
+        body: JSON.stringify({ room_id: activeTeam?.roomId }),
+      })
+    }
     catch { /* ignore */ }
     finally { setStopping(false) }
   }
@@ -458,21 +461,21 @@ function Dashboard({ me, setMe }) {
       <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-20">
         <div className="max-w-7xl mx-auto px-4 h-14 flex items-center gap-4">
           {/* Logo */}
-          <img src="/logo.png" alt="Agent Hotel" className="h-8 w-auto flex-shrink-0" style={{ imageRendering: 'auto' }} />
+          <span className="text-base font-semibold tracking-tight text-foreground flex-shrink-0">AgentHotel</span>
 
           {/* Tabs — desktop */}
-          <nav className="hidden md:flex items-center gap-1 ml-2">
+          <nav className="hidden md:flex items-center h-14 ml-2">
             {tabs.map(({ id, label, icon: Icon, badge }) => (
               <button key={id} onClick={() => setActiveTab(id)}
-                className={`relative flex items-center gap-2 px-3 py-1.5 text-sm rounded-md font-medium transition-colors ${
+                className={`relative flex items-center gap-1.5 px-3 h-full text-sm font-medium transition-colors border-b-2 ${
                   activeTab === id
-                    ? 'bg-primary/10 text-primary'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
+                    ? 'border-foreground text-foreground'
+                    : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
                 }`}>
                 <Icon className="w-3.5 h-3.5" />
                 {label}
                 {badge > 0 && (
-                  <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[9px] font-bold text-primary-foreground">
+                  <span className="ml-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[9px] font-bold text-primary-foreground">
                     {badge}
                   </span>
                 )}
@@ -570,29 +573,32 @@ function Dashboard({ me, setMe }) {
 
       {/* Content */}
       <main className="flex-1">
-        {activeTab === 'home' && (
-          <HomeTab me={me} hotelStatus={hotelStatus} onJoinHotel={handleJoinHotel} busy={busy} />
-        )}
-        {activeTab === 'requests' && me?.is_developer && (
-          <UpgradeRequestsTab onCountChange={setPendingRequestCount} />
-        )}
-        {activeTab === 'agents' && (
-          <AgentDashboard me={me} onActiveTeamChange={setActiveTeam} />
-        )}
+        <div key={activeTab} className="animate-fade-up">
+          {activeTab === 'home' && (
+            <HomeTab me={me} hotelStatus={hotelStatus} onJoinHotel={handleJoinHotel} busy={busy} />
+          )}
+          {activeTab === 'requests' && me?.is_developer && (
+            <UpgradeRequestsTab onCountChange={setPendingRequestCount} />
+          )}
+          {activeTab === 'agents' && (
+            <AgentDashboard me={me} onActiveTeamChange={setActiveTeam} />
+          )}
         {activeTab === 'marketplace' && (
-          <div className="max-w-4xl mx-auto px-4 py-6">
+          <div className="max-w-5xl mx-auto px-4 py-6">
             <MarketplaceView me={me} />
           </div>
         )}
-        {activeTab === 'account' && (
-          <AccountView me={me} />
-        )}
-        {activeTab === 'bots' && (
-          <BotsTab figureTypes={figureTypes} />
-        )}
-        {activeTab === 'mcp' && (
-          <McpTab me={me} />
-        )}
+
+          {activeTab === 'account' && (
+            <AccountView me={me} />
+          )}
+          {activeTab === 'bots' && (
+            <BotsTab figureTypes={figureTypes} />
+          )}
+          {activeTab === 'mcp' && (
+            <McpTab me={me} />
+          )}
+        </div>
       </main>
 
       <UiBuildFooter />
@@ -615,7 +621,7 @@ function HomeTab({ me, hotelStatus, onJoinHotel, busy }) {
   }, [activeTier])
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
+    <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
 
       {/* Upgrade CTA for basic users */}
       {activeTier === 'basic' && (
@@ -662,29 +668,38 @@ function HomeTab({ me, hotelStatus, onJoinHotel, busy }) {
       )}
 
       {/* Welcome card */}
-      <div className="bg-card border border-border rounded-2xl p-6">
+      <div className="bg-card border border-border rounded-2xl p-6 card-lift">
         <div className="flex items-center gap-5">
           {me.figure && (
             <div className="flex-shrink-0">
               <HabboFigure figure={me.figure} size="md" animate={true} />
             </div>
           )}
-          <div>
-            <h2 className="text-xl font-semibold text-foreground">Welcome, {me.username}!</h2>
+          <div className="flex-1 min-w-0">
+            <h2 className="text-2xl font-semibold tracking-tight text-foreground">Welcome back, {me.username}</h2>
             <p className="text-sm text-muted-foreground mt-1">
-              Manage your hotel access, bots, and MCP connections from this portal.
+              Manage your hotel bots, agent teams, and MCP connections.
             </p>
             {me.habbo_username && (
-              <p className="text-xs text-muted-foreground mt-2">
-                Linked Habbo: <span className="font-retro text-primary">{me.habbo_username}</span>
+              <p className="text-xs text-muted-foreground mt-2 flex items-center gap-1.5">
+                <Users className="w-3 h-3" />
+                Habbo: <span className="font-retro">{me.habbo_username}</span>
               </p>
             )}
           </div>
+          <button
+            onClick={onJoinHotel}
+            disabled={busy || !hotelStatus.socket_online}
+            className="hidden sm:flex items-center gap-2 h-9 px-4 text-sm font-medium bg-primary text-primary-foreground rounded-lg hover:opacity-80 disabled:opacity-40 transition-opacity flex-shrink-0"
+          >
+            <Hotel className="w-4 h-4" />
+            Join Hotel
+          </button>
         </div>
       </div>
 
       {/* Status grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-3 gap-4 stagger-children">
         <StatusCard
           label="Linked Habbo"
           value={me.habbo_username || '—'}
@@ -692,36 +707,15 @@ function HomeTab({ me, hotelStatus, onJoinHotel, busy }) {
         />
         <StatusCard
           label="AI Tier"
-          value={activeTier.toUpperCase()}
+          value={activeTier.charAt(0).toUpperCase() + activeTier.slice(1)}
           icon={Key}
-          valueClassName="text-primary"
         />
         <StatusCard
-          label="Hotel Socket"
-          value={hotelStatus.loading ? 'Checking...' : hotelStatus.socket_online ? 'Online' : 'Offline'}
+          label="Hotel"
+          value={hotelStatus.loading ? 'Checking…' : hotelStatus.socket_online ? 'Online' : 'Offline'}
           icon={hotelStatus.socket_online ? Wifi : WifiOff}
           valueClassName={hotelStatus.socket_online ? 'text-success' : 'text-muted-foreground'}
         />
-      </div>
-
-      {/* Quick actions */}
-      <div className="bg-card border border-border rounded-2xl p-6 space-y-3">
-        <h3 className="text-sm font-semibold text-foreground">Quick Actions</h3>
-        <div className="flex flex-wrap gap-3">
-          <button
-            onClick={onJoinHotel}
-            disabled={busy || !hotelStatus.socket_online}
-            className="flex items-center gap-2 h-9 px-4 text-sm font-medium bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-colors"
-          >
-            <Hotel className="w-4 h-4" />
-            Join Hotel
-          </button>
-          {!hotelStatus.socket_online && !hotelStatus.loading && (
-            <p className="text-xs text-muted-foreground self-center">
-              Hotel is currently offline
-            </p>
-          )}
-        </div>
       </div>
     </div>
   )
@@ -729,12 +723,14 @@ function HomeTab({ me, hotelStatus, onJoinHotel, busy }) {
 
 function StatusCard({ label, value, icon: Icon, valueClassName = '' }) {
   return (
-    <div className="bg-card border border-border rounded-xl p-4">
-      <div className="flex items-center gap-2 mb-2">
-        <Icon className="w-3.5 h-3.5 text-muted-foreground" />
-        <p className="text-xs text-muted-foreground">{label}</p>
+    <div className="bg-card border border-border rounded-xl p-5 card-lift">
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{label}</p>
+        <div className="w-7 h-7 rounded-md bg-secondary flex items-center justify-center">
+          <Icon className="w-3.5 h-3.5 text-foreground" />
+        </div>
       </div>
-      <p className={`text-base font-semibold text-foreground ${valueClassName}`}>{value}</p>
+      <p className={`text-2xl font-semibold tracking-tight text-foreground ${valueClassName}`}>{value}</p>
     </div>
   )
 }
@@ -796,9 +792,15 @@ function BotsTab({ figureTypes }) {
       setBots(prev => prev.map(b => b.id === botId ? { ...b, ...editForm } : b))
       setEditingBotId(null)
       const parts = ['Saved!']
-      if (d.visualChanged) parts.push('Changes applied live in hotel.')
+      if (d.visualChanged) {
+        if (d.liveUpdated) {
+          parts.push('Applied live in hotel.')
+        } else {
+          parts.push(`Figure/name will update when the bot next enters the room — ${d.liveUpdateError || 'bot not active'}.`)
+        }
+      }
       if (d.personaUpdated) parts.push('Persona updated.')
-      setBotMessage(botId, parts.join(' '), 'ok', 5000)
+      setBotMessage(botId, parts.join(' '), d.visualChanged && !d.liveUpdated ? 'warn' : 'ok', 7000)
     } catch (err) {
       setBotMessage(botId, err.message || 'Save failed.', 'err')
     }
@@ -844,10 +846,17 @@ function BotsTab({ figureTypes }) {
   }
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-6 space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="font-semibold text-foreground">My Bots</h2>
-        <div className="flex items-center gap-2">
+    <div className="max-w-5xl mx-auto px-4 py-6 space-y-4">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="font-semibold text-foreground">My Bots</h2>
+          <p className="text-xs text-muted-foreground mt-0.5 max-w-lg">
+            These are your <span className="text-foreground">Habbo hotel bots</span> — physical avatars that walk around rooms in the hotel.
+            Editing a bot updates it <span className="text-foreground">live in the hotel</span> (name, motto &amp; appearance change instantly).
+            <span className="ml-1 opacity-80">Agents (under <em>My Agents</em>) are the AI brains that can be assigned to control these bots.</span>
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
           {syncMsg && <span className="text-xs text-muted-foreground">{syncMsg}</span>}
           <button onClick={syncBots} disabled={syncing}
             className="flex items-center gap-1.5 text-xs px-3 py-1.5 border border-border rounded-lg hover:bg-secondary transition-colors disabled:opacity-50">
@@ -886,7 +895,7 @@ function BotsTab({ figureTypes }) {
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {bots.map(bot => {
             const isBusy = !!botBusy[bot.id]
             const msg = botMsg[bot.id]
@@ -953,7 +962,7 @@ function BotsTab({ figureTypes }) {
                       <p className="text-xs text-muted-foreground italic truncate">"{bot.motto}"</p>
                     )}
                     {msg && (
-                      <p className={`text-xs ${msg.type === 'err' ? 'text-destructive' : 'text-success'}`}>
+                      <p className={`text-xs ${msg.type === 'err' ? 'text-destructive' : msg.type === 'warn' ? 'text-warning' : 'text-success'}`}>
                         {msg.text}
                       </p>
                     )}
@@ -978,15 +987,21 @@ function BotsTab({ figureTypes }) {
         </p>
       )}
 
-      {/* Edit Bot Modal */}
+      {/* Edit Bot Modal — rendered via portal so fixed positioning is never
+          clipped by ancestor transforms, backdrop-filters, or stacking contexts */}
       {editingBotId !== null && (() => {
         const isBusy = !!botBusy[editingBotId]
-        return (
+        return createPortal(
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm"
             onClick={cancelEditBot}>
             <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-lg shadow-2xl"
               onClick={e => e.stopPropagation()}>
-              <h2 className="text-base font-semibold mb-4">Edit Bot</h2>
+              <div className="mb-4">
+                <h2 className="text-base font-semibold">Edit Bot</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Changes to name, motto &amp; appearance apply <span className="text-foreground font-medium">live in the hotel</span> immediately after saving.
+                </p>
+              </div>
               <div className="flex gap-5">
                 {editForm.figure && (
                   <div className="flex flex-col items-center gap-2 flex-shrink-0">
@@ -1041,7 +1056,8 @@ function BotsTab({ figureTypes }) {
                 </button>
               </div>
             </div>
-          </div>
+          </div>,
+          document.body
         )
       })()}
     </div>
@@ -1191,7 +1207,7 @@ function UpgradeRequestsTab({ onCountChange }) {
   }
 
   return (
-    <div className="max-w-3xl mx-auto px-4 py-6 space-y-4">
+    <div className="max-w-5xl mx-auto px-4 py-6 space-y-4">
       <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="font-semibold text-foreground">Tier Upgrade Requests</h2>
@@ -1374,7 +1390,7 @@ function McpTab({ me }) {
   }
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
+    <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
       <div>
         <h2 className="font-semibold text-foreground">MCP Connect</h2>
         <p className="text-xs text-muted-foreground mt-1">

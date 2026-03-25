@@ -9,25 +9,44 @@ const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID ?? "";
 const TWILIO_FROM_NUMBER = process.env.TWILIO_FROM_NUMBER ?? "";
 const PUBLIC_WEBHOOK_URL = process.env.HABBO_PUBLIC_URL ?? "http://localhost:3004";
 const PROJECT_DIR = (process.env.HABBO_PROJECT_DIR ?? "").trim() || join(import.meta.dir, "../..");
-const ALLOWED_NUMBERS = (process.env.HABBO_ALLOWED_PHONE_NUMBERS ?? "")
-  .split(",")
-  .map((n) => n.trim())
-  .filter(Boolean);
-const STOP_FILE = "/tmp/hotel-team-stop";
 // Write logs to the mounted project dir so they survive container restarts
 const LOG_FILE = existsSync(PROJECT_DIR) ? join(PROJECT_DIR, "hotel-team.log") : "/tmp/hotel-team.log";
-const NARRATOR_BOTS_MAP = "/tmp/hotel-narrator-bots.json";
+// Max concurrent team runs per server instance (0 = unlimited)
+const MAX_CONCURRENT_RUNS = parseInt(process.env.HABBO_MAX_CONCURRENT_RUNS ?? "0");
+// Auto-kill a run after this many ms (default 20 min)
+const RUN_TIMEOUT_MS = parseInt(process.env.HABBO_RUN_TIMEOUT_MS ?? String(20 * 60 * 1000));
 
-function writeNarratorBotsMap(knownBots: string[]): void {
+// Per-room tmp file paths — all state is namespaced by roomId so runs never interfere
+function taskFile(roomId: number)        { return `/tmp/hotel-team-tasks-${roomId}.json`; }
+function stopFile(roomId: number)        { return `/tmp/hotel-team-stop-${roomId}`; }
+function narratorBotsFile(roomId: number){ return `/tmp/hotel-narrator-bots-${roomId}.json`; }
+
+function cleanupRoomFiles(roomId: number): void {
+  for (const f of [taskFile(roomId), stopFile(roomId), narratorBotsFile(roomId)]) {
+    try { if (existsSync(f)) unlinkSync(f); } catch { /* ignore */ }
+  }
+}
+
+// ── Run registry ─────────────────────────────────────────────────────────────
+
+interface RunContext {
+  roomId: number;
+  startTime: Date;
+  from: string;
+  child: ReturnType<typeof spawn> | null;
+  timeoutHandle: ReturnType<typeof setTimeout> | null;
+}
+
+const activeRuns = new Map<number, RunContext>();
+// Guards against concurrent POST /trigger for the same room
+const triggeringRooms = new Set<number>();
+
+function writeNarratorBotsFile(roomId: number, knownBots: string[]): void {
   try {
-    const existing = existsSync(NARRATOR_BOTS_MAP)
-      ? JSON.parse(readFileSync(NARRATOR_BOTS_MAP, 'utf-8'))
-      : {};
-    writeFileSync(NARRATOR_BOTS_MAP, JSON.stringify({
-      ...existing,
+    writeFileSync(narratorBotsFile(roomId), JSON.stringify({
       known_bots: knownBots,
-      sessions: existing.sessions ?? {},
-      pending: existing.pending ?? [],
+      sessions: {},
+      pending: [],
     }, null, 2));
   } catch { /* non-fatal */ }
 }
@@ -62,18 +81,21 @@ async function mcpCall<T>(toolName: string, args: Record<string, unknown>, token
   try { return JSON.parse(text) as T; } catch { return data.result as T; }
 }
 
-// Bot name → id cache (avoids calling list_bots every tool use)
+// Bot name → id cache, keyed by "<token-suffix>:<name>" to avoid cross-user pollution
 const botIdCache = new Map<string, number>();
 
 async function findBotIdByName(name: string, token?: string): Promise<number | null> {
-  const cacheKey = name.toLowerCase();
+  const effectiveToken = token || MCP_API_KEY;
+  // Use last 12 chars of token as namespace — unique enough, avoids storing full token
+  const tokenKey = effectiveToken ? effectiveToken.slice(-12) : "__shared__";
+  const cacheKey = `${tokenKey}:${name.toLowerCase()}`;
   if (botIdCache.has(cacheKey)) return botIdCache.get(cacheKey)!;
   try {
-    const res = await mcpCall<{ bots?: Array<{ id: number; name: string }> } | Array<{ id: number; name: string }>>("list_bots", {}, token);
+    const res = await mcpCall<{ bots?: Array<{ id: number; name: string }> } | Array<{ id: number; name: string }>>("list_bots", {}, effectiveToken);
     // list_bots returns { count, bots: [...] } — unwrap either shape
     const arr = Array.isArray(res) ? res : (res as any).bots ?? [];
     for (const b of arr) {
-      if (b.name) botIdCache.set(b.name.toLowerCase(), b.id);
+      if (b.name) botIdCache.set(`${tokenKey}:${b.name.toLowerCase()}`, b.id);
     }
     return botIdCache.get(cacheKey) ?? null;
   } catch (err: any) {
@@ -83,6 +105,23 @@ async function findBotIdByName(name: string, token?: string): Promise<number | n
 }
 const PORTAL_URL = (process.env.PORTAL_URL || process.env.portal_url || "http://agent-portal:3000").replace(/\/$/, "");
 const PORTAL_INTERNAL_SECRET = process.env.PORTAL_INTERNAL_SECRET ?? "";
+
+interface PhoneUser {
+  portal_user_id: number;
+  username: string;
+  team: { id: number; name: string; default_room_id: number } | null;
+}
+
+async function fetchUserByPhone(phoneNumber: string): Promise<PhoneUser | null> {
+  try {
+    const res = await fetch(`${PORTAL_URL}/api/internal/user-by-phone/${encodeURIComponent(phoneNumber)}`, {
+      headers: PORTAL_INTERNAL_SECRET ? { "x-internal-secret": PORTAL_INTERNAL_SECRET } : {},
+    });
+    if (!res.ok) return null;
+    const data = await res.json() as PhoneUser & { ok: boolean };
+    return data.ok ? data : null;
+  } catch { return null; }
+}
 
 async function fetchUserAnthropicKey(portalUserId: number): Promise<string | null> {
   if (!portalUserId) return null;
@@ -116,6 +155,10 @@ function log(line: string) {
   const entry = `[${new Date().toISOString()}] ${line}\n`;
   process.stdout.write(entry);
   appendFileSync(LOG_FILE, entry);
+}
+
+function logRoom(roomId: number, line: string) {
+  log(`[room-${roomId}] ${line}`);
 }
 
 // ── Twilio helpers ──────────────────────────────────────────────────────────
@@ -251,7 +294,7 @@ async function fetchUserTeamConfig(userTeamId: number): Promise<TeamConfig> {
   return { team: data.team, members: data.members, flow: data.flow, templates: data.templates ?? [] };
 }
 
-function renderTasksBlock(config: TeamConfig, roomId: number): string {
+function renderTasksBlock(config: TeamConfig, roomId: number, taskFilePath: string): string {
   let tasks: Array<{ id: string; title: string; description?: string; assign_to?: string; depends_on?: string[] }> = []
   try { tasks = JSON.parse(config.team.tasks_json || '[]') } catch { tasks = [] }
   if (!tasks.length) return ''
@@ -271,12 +314,12 @@ function renderTasksBlock(config: TeamConfig, roomId: number): string {
     }))
     return `
 ## Step 2: Write shared task list
-Write this exact JSON to \`/tmp/hotel-team-tasks.json\` using the Write tool:
+Write this exact JSON to \`${taskFilePath}\` using the Write tool:
 \`\`\`json
 ${JSON.stringify({ room_id: roomId, created_at: '<ISO timestamp>', stop: false, tasks: taskObjs, messages: [] }, null, 2)}
 \`\`\`
 
-Each agent must: read \`/tmp/hotel-team-tasks.json\`, find a pending task assigned to them (or unclaimed if assign_to is null) that matches their capabilities and whose dependencies are resolved, atomically set \`claimed_by\` to their bot name, complete the work, write the \`result\` back and set \`status\` to \`done\`. Check \`messages[]\` and completed task results for dependency context.
+Each agent must: read \`${taskFilePath}\`, find a pending task assigned to them (or unclaimed if assign_to is null) that matches their capabilities and whose dependencies are resolved, atomically set \`claimed_by\` to their bot name, complete the work, write the \`result\` back and set \`status\` to \`done\`. Check \`messages[]\` and completed task results for dependency context.
 `
   }
 
@@ -307,7 +350,8 @@ const LANGUAGE_NAMES: Record<string, string> = {
 
 function buildPromptFromConfig(config: TeamConfig, roomId: number, triggeredBy: string): string {
   const mode = config.team.execution_mode || 'concurrent'
-  const tasksBlock = renderTasksBlock(config, roomId)
+  const tf = taskFile(roomId)
+  const tasksBlock = renderTasksBlock(config, roomId, tf)
   const lang = config.team.language || 'en'
   const langName = LANGUAGE_NAMES[lang] || lang
   const langInstruction = `\n\nIMPORTANT: Always communicate in ${langName} when using talk_bot to speak in the hotel room.`
@@ -386,7 +430,7 @@ ${subagentTemplate}
 Replace [INSERT SPECIFIC TASK HERE] with the task(s) claimed from the shared task list that are assigned to that agent (or best match their capabilities).
 
 ## Step 4: Report
-When all agents complete, read \`/tmp/hotel-team-tasks.json\` and summarise results.
+When all agents complete, read \`${tf}\` and summarise results.
 ${doneStep}`
 
   } else if (mode === 'sequential') {
@@ -458,7 +502,9 @@ This ensures each agent is visually represented by their hotel bot in the room.`
 
 function runOrchestratorWithPrompt(prompt: string, roomId: number, from: string, userApiKey?: string | null, onChild?: (child: ReturnType<typeof spawn>) => void, userMcpToken?: string | null): Promise<string> {
   return new Promise((resolve, reject) => {
-    if (existsSync(STOP_FILE)) unlinkSync(STOP_FILE);
+    // Clear any stale stop signal from a previous run in this room
+    const sf = stopFile(roomId);
+    if (existsSync(sf)) unlinkSync(sf);
 
     const claudeBin = process.env.CLAUDE_BIN ?? "claude";
     const child = spawn(claudeBin, ["-p", "--dangerously-skip-permissions", "--no-session-persistence", "--output-format", "stream-json", "--verbose"], {
@@ -472,9 +518,22 @@ function runOrchestratorWithPrompt(prompt: string, roomId: number, from: string,
         HABBO_HOOK_TRANSPORT: process.env.HABBO_HOOK_TRANSPORT ?? "remote",
         HABBO_HOOK_REMOTE_BASE_URL:
           process.env.HABBO_HOOK_REMOTE_BASE_URL ?? "https://hotel-mcp.fixdev.nl",
+        // Passed to hotel_narrator.mjs so it reads the correct room-scoped bots file
+        HABBO_ROOM_ID: String(roomId),
       },
       stdio: ["pipe", "pipe", "pipe"],
     });
+
+    // Auto-kill after RUN_TIMEOUT_MS
+    const timeoutHandle = setTimeout(() => {
+      logRoom(roomId, `[timeout] Run exceeded ${Math.round(RUN_TIMEOUT_MS / 60000)} min — killing`);
+      killRoom(roomId);
+      reject(new Error(`Run timed out after ${Math.round(RUN_TIMEOUT_MS / 60000)} minutes`));
+    }, RUN_TIMEOUT_MS);
+
+    // Store timeout handle so killRoom can cancel it
+    const run = activeRuns.get(roomId);
+    if (run) run.timeoutHandle = timeoutHandle;
 
     onChild?.(child);
     child.stdin.write(prompt);
@@ -490,25 +549,26 @@ function runOrchestratorWithPrompt(prompt: string, roomId: number, from: string,
           const event = JSON.parse(line);
           if (event.type === "assistant" && event.message?.content) {
             for (const block of event.message.content) {
-              if (block.type === "text" && block.text?.trim()) log(`[think] ${block.text.trim().slice(0, 200)}`);
-              if (block.type === "tool_use") log(`[tool→] ${block.name} ${JSON.stringify(block.input).slice(0, 150)}`);
+              if (block.type === "text" && block.text?.trim()) logRoom(roomId, `[think] ${block.text.trim().slice(0, 200)}`);
+              if (block.type === "tool_use") logRoom(roomId, `[tool→] ${block.name} ${JSON.stringify(block.input).slice(0, 150)}`);
             }
           } else if (event.type === "tool_result") {
             const content = Array.isArray(event.content) ? event.content.map((c: any) => c.text).join("") : String(event.content ?? "");
-            log(`[tool←] ${content.slice(0, 150)}`);
+            logRoom(roomId, `[tool←] ${content.slice(0, 150)}`);
           } else if (event.type === "result") {
-            log(`[done] ${event.result?.slice(0, 200) ?? "complete"}`);
+            logRoom(roomId, `[done] ${event.result?.slice(0, 200) ?? "complete"}`);
           }
-        } catch { log(`[claude] ${line.slice(0, 200)}`); }
+        } catch { logRoom(roomId, `[claude] ${line.slice(0, 200)}`); }
       }
     });
     child.stderr.on("data", (d: Buffer) => {
       const text = d.toString();
       stderr += text;
-      log(`[claude:err] ${text.trim()}`);
+      logRoom(roomId, `[claude:err] ${text.trim()}`);
     });
 
     child.on("close", (code: number | null) => {
+      clearTimeout(timeoutHandle);
       if (code === 0) {
         resolve(stdout.trim().slice(-200) || "Team session complete.");
       } else {
@@ -519,89 +579,31 @@ function runOrchestratorWithPrompt(prompt: string, roomId: number, from: string,
 }
 
 function runOrchestrator(roomId: number, from: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    // Remove any stale stop signal
-    if (existsSync(STOP_FILE)) unlinkSync(STOP_FILE);
-
-    const claudeBin = process.env.CLAUDE_BIN ?? "claude";
-    const child = spawn(claudeBin, ["-p", "--dangerously-skip-permissions", "--no-session-persistence", "--output-format", "stream-json", "--verbose"], {
-      cwd: PROJECT_DIR,
-      env: {
-        ...process.env,
-        ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? "",
-        MCP_API_KEY: process.env.MCP_API_KEY ?? "",
-        HABBO_HOOK_ENABLED: "true",
-        HABBO_HOOK_TRANSPORT: process.env.HABBO_HOOK_TRANSPORT ?? "remote",
-        HABBO_HOOK_REMOTE_BASE_URL:
-          process.env.HABBO_HOOK_REMOTE_BASE_URL ?? "https://hotel-mcp.fixdev.nl",
-      },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    child.stdin.write(buildPrompt(roomId, from));
-    child.stdin.end();
-
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (d: Buffer) => {
-      const text = d.toString();
-      stdout += text;
-      // Parse stream-json events for readable logging
-      for (const line of text.split("\n").filter(Boolean)) {
-        try {
-          const event = JSON.parse(line);
-          if (event.type === "assistant" && event.message?.content) {
-            for (const block of event.message.content) {
-              if (block.type === "text" && block.text?.trim()) log(`[think] ${block.text.trim().slice(0, 200)}`);
-              if (block.type === "tool_use") log(`[tool→] ${block.name} ${JSON.stringify(block.input).slice(0, 150)}`);
-            }
-          } else if (event.type === "tool_result") {
-            const content = Array.isArray(event.content) ? event.content.map((c: any) => c.text).join("") : String(event.content ?? "");
-            log(`[tool←] ${content.slice(0, 150)}`);
-          } else if (event.type === "result") {
-            log(`[done] ${event.result?.slice(0, 200) ?? "complete"}`);
-          }
-        } catch { log(`[claude] ${line.slice(0, 200)}`); }
-      }
-    });
-    child.stderr.on("data", (d: Buffer) => {
-      const text = d.toString();
-      stderr += text;
-      log(`[claude:err] ${text.trim()}`);
-    });
-
-    child.on("close", (code: number | null) => {
-      if (code === 0) {
-        // Return last 200 chars as summary for SMS
-        resolve(stdout.trim().slice(-200) || "Team session complete.");
-      } else {
-        reject(new Error(`claude exited ${code}: ${stderr.slice(0, 300)}`));
-      }
-    });
-  });
+  return runOrchestratorWithPrompt(buildPrompt(roomId, from), roomId, from, null, undefined, null);
 }
 
-// ── State ───────────────────────────────────────────────────────────────────
+// ── Run lifecycle ────────────────────────────────────────────────────────────
 
-let activeTeam: { roomId: number; startTime: Date; from: string; child: ReturnType<typeof spawn> | null } | null = null;
-
-function killActiveTeam() {
-  if (!activeTeam) return;
-  writeFileSync(STOP_FILE, new Date().toISOString());
-  // Update shared task file so subagents stop claiming new tasks
+function killRoom(roomId: number): void {
+  const run = activeRuns.get(roomId);
+  if (!run) return;
+  if (run.timeoutHandle) clearTimeout(run.timeoutHandle);
+  // Signal subagents to stop claiming new tasks
+  try { writeFileSync(stopFile(roomId), new Date().toISOString()); } catch { /* ignore */ }
   try {
-    const taskFile = "/tmp/hotel-team-tasks.json";
-    if (existsSync(taskFile)) {
-      const tasks = JSON.parse(readFileSync(taskFile, "utf8"));
-      writeFileSync(taskFile, JSON.stringify({ ...tasks, stop: true }, null, 2));
+    const tf = taskFile(roomId);
+    if (existsSync(tf)) {
+      const tasks = JSON.parse(readFileSync(tf, "utf8"));
+      writeFileSync(tf, JSON.stringify({ ...tasks, stop: true }, null, 2));
     }
   } catch { /* ignore */ }
-  // Kill the main orchestrator process — subagent claude processes will be orphaned
-  // but they'll exit when they check stop: true in the task file
-  if (activeTeam.child) {
-    try { activeTeam.child.kill("SIGTERM"); } catch { /* already dead */ }
+  // Kill the orchestrator process (subagents are separate claude -p processes;
+  // they will exit when they poll stop:true from the task file)
+  if (run.child) {
+    try { run.child.kill("SIGTERM"); } catch { /* already dead */ }
   }
-  activeTeam = null;
+  activeRuns.delete(roomId);
+  cleanupRoomFiles(roomId);
 }
 
 // ── Server ──────────────────────────────────────────────────────────────────
@@ -612,7 +614,12 @@ const server = Bun.serve({
     const url = new URL(req.url);
 
     if (url.pathname === "/health") {
-      return Response.json({ ok: true, activeTeam });
+      const runs = [...activeRuns.values()].map(r => ({
+        roomId: r.roomId, from: r.from,
+        startTime: r.startTime,
+        runningForMs: Date.now() - r.startTime.getTime(),
+      }));
+      return Response.json({ ok: true, activeRuns: runs, count: runs.length });
     }
 
     // ── Log tail ──────────────────────────────────────────────────────────────
@@ -666,30 +673,43 @@ const server = Bun.serve({
     }
 
     if (url.pathname === "/reset" && req.method === "POST") {
-      killActiveTeam();
-      return Response.json({ ok: true, message: "Team stopped." });
+      let body: { room_id?: number } = {};
+      try { body = await req.json(); } catch { /* no body is fine */ }
+      if (body.room_id) {
+        const roomId = Number(body.room_id);
+        if (!activeRuns.has(roomId)) {
+          return Response.json({ ok: false, error: `No active run in room ${roomId}` }, { status: 404 });
+        }
+        killRoom(roomId);
+        return Response.json({ ok: true, message: `Room ${roomId} stopped.` });
+      }
+      // No room_id → stop all active runs
+      const stopped = [...activeRuns.keys()];
+      stopped.forEach(killRoom);
+      return Response.json({ ok: true, message: `Stopped ${stopped.length} run(s).`, rooms: stopped });
     }
 
     // ── Hotel narrator endpoint (called by hotel_narrator.mjs hook) ─────────
     if (url.pathname === "/narrator" && req.method === "POST") {
-      let body: { bot_name?: string; message?: string; event?: string; session_id?: string; tool_name?: string; mcp_token?: string };
+      let body: { bot_name?: string; message?: string; event?: string; session_id?: string; tool_name?: string; mcp_token?: string; room_id?: number };
       try { body = await req.json(); } catch { return Response.json({ ok: false }, { status: 400 }); }
 
-      const { bot_name, message, mcp_token } = body;
+      const { bot_name, message, mcp_token, room_id } = body;
       if (!bot_name || !message) return Response.json({ ok: false, error: "bot_name and message required" }, { status: 400 });
 
       // Prefer the user's own MCP token, fall back to static system key
       const effectiveMcpToken = mcp_token || MCP_API_KEY;
+      const logFn = room_id ? (s: string) => logRoom(room_id, s) : log;
 
       // Fire-and-forget: resolve bot_id then talk
       (async () => {
         try {
           const botId = await findBotIdByName(bot_name, effectiveMcpToken);
-          if (botId == null) { log(`[narrator] Bot "${bot_name}" not found in hotel`); return; }
+          if (botId == null) { logFn(`[narrator] Bot "${bot_name}" not found in hotel`); return; }
           await mcpCall("talk_bot", { bot_id: botId, message: message.slice(0, 240), type: "talk" }, effectiveMcpToken);
-          log(`[narrator] ${bot_name}: ${message.slice(0, 80)}`);
+          logFn(`[narrator] ${bot_name}: ${message.slice(0, 80)}`);
         } catch (err: any) {
-          log(`[narrator] error for ${bot_name}: ${err.message}`);
+          logFn(`[narrator] error for ${bot_name}: ${err.message}`);
         }
       })();
 
@@ -723,40 +743,56 @@ const server = Bun.serve({
           room_id: Number(body.room_id) || 50,
           triggered_by: body.triggered_by ?? 'portal',
         };
+        const packRoomId = packConfig.room_id;
 
-        if (activeTeam) {
-          return Response.json({ ok: false, error: `Team already active in room ${activeTeam.roomId}. Stop it first.` }, { status: 409 });
+        if (activeRuns.has(packRoomId) || triggeringRooms.has(packRoomId)) {
+          return Response.json({ ok: false, error: `Team already active in room ${packRoomId}. Stop it first.` }, { status: 409 });
         }
+        if (MAX_CONCURRENT_RUNS > 0 && activeRuns.size >= MAX_CONCURRENT_RUNS) {
+          return Response.json({ ok: false, error: `Server at capacity (${MAX_CONCURRENT_RUNS} concurrent runs). Try again later.` }, { status: 429 });
+        }
+        triggeringRooms.add(packRoomId);
 
         let prompt: string;
         try {
           prompt = await buildPromptFromPack(packConfig);
         } catch (err: any) {
-          log(`[trigger] Failed to build pack prompt: ${err.message}`);
+          triggeringRooms.delete(packRoomId);
+          logRoom(packRoomId, `[trigger] Failed to build pack prompt: ${err.message}`);
           return Response.json({ ok: false, error: err.message }, { status: 502 });
         }
 
         const knownBots = Object.values(packConfig.role_assignments).filter(Boolean);
-        writeNarratorBotsMap(knownBots);
+        writeNarratorBotsFile(packRoomId, knownBots);
 
         const packPortalUserId = Number(body.portal_user_id) || 0;
         const [packUserApiKey, packUserMcpToken] = await Promise.all([
           fetchUserAnthropicKey(packPortalUserId),
           fetchUserMcpToken(packPortalUserId),
         ]);
-        if (packUserApiKey) log(`[trigger] Pack using API key from portal user ${body.portal_user_id}`);
-        if (packUserMcpToken) log(`[trigger] Pack using MCP token from portal user ${body.portal_user_id}`);
+        if (packUserApiKey) logRoom(packRoomId, `[trigger] Pack using API key from portal user ${body.portal_user_id}`);
+        if (packUserMcpToken) logRoom(packRoomId, `[trigger] Pack using MCP token from portal user ${body.portal_user_id}`);
 
-        activeTeam = { roomId: packConfig.room_id, startTime: new Date(), from: packConfig.triggered_by, child: null };
-        log(`[trigger] Pack ${packConfig.pack_id} started in room ${packConfig.room_id} by ${packConfig.triggered_by}`);
+        const packRun: RunContext = { roomId: packRoomId, startTime: new Date(), from: packConfig.triggered_by, child: null, timeoutHandle: null };
+        activeRuns.set(packRoomId, packRun);
+        triggeringRooms.delete(packRoomId);
+        logRoom(packRoomId, `[trigger] Pack ${packConfig.pack_id} started by ${packConfig.triggered_by}`);
 
-        runOrchestratorWithPrompt(prompt, packConfig.room_id, packConfig.triggered_by, packUserApiKey, (child) => {
-          if (activeTeam) activeTeam.child = child;
+        runOrchestratorWithPrompt(prompt, packRoomId, packConfig.triggered_by, packUserApiKey, (child) => {
+          const r = activeRuns.get(packRoomId); if (r) r.child = child;
         }, packUserMcpToken)
-          .then((summary) => { activeTeam = null; log(`[trigger] Pack ${packConfig.pack_id} completed: ${summary.slice(0, 100)}`); })
-          .catch((err: Error) => { activeTeam = null; log(`[trigger] Pack ${packConfig.pack_id} error: ${err.message}`); });
+          .then((summary) => {
+            activeRuns.delete(packRoomId);
+            cleanupRoomFiles(packRoomId);
+            logRoom(packRoomId, `[trigger] Pack ${packConfig.pack_id} completed: ${summary.slice(0, 100)}`);
+          })
+          .catch((err: Error) => {
+            activeRuns.delete(packRoomId);
+            cleanupRoomFiles(packRoomId);
+            logRoom(packRoomId, `[trigger] Pack ${packConfig.pack_id} error: ${err.message}`);
+          });
 
-        return Response.json({ ok: true, message: `Pack launched in room ${packConfig.room_id}` });
+        return Response.json({ ok: true, message: `Pack launched in room ${packRoomId}` });
       }
       // else fall through to existing team_id logic below
 
@@ -770,9 +806,13 @@ const server = Bun.serve({
         return Response.json({ ok: false, error: "team_id required" }, { status: 400 });
       }
 
-      if (activeTeam) {
-        return Response.json({ ok: false, error: `Team already active in room ${activeTeam.roomId}. Stop it first.` }, { status: 409 });
+      if (activeRuns.has(roomId) || triggeringRooms.has(roomId)) {
+        return Response.json({ ok: false, error: `Team already active in room ${roomId}. Stop it first.` }, { status: 409 });
       }
+      if (MAX_CONCURRENT_RUNS > 0 && activeRuns.size >= MAX_CONCURRENT_RUNS) {
+        return Response.json({ ok: false, error: `Server at capacity (${MAX_CONCURRENT_RUNS} concurrent runs). Try again later.` }, { status: 429 });
+      }
+      triggeringRooms.add(roomId);
 
       // Fetch team config + user API key + user MCP token in parallel
       const isUserTeam = body.user_team === true;
@@ -786,36 +826,36 @@ const server = Bun.serve({
           fetchUserMcpToken(portalUserId),
         ]);
       } catch (err: any) {
-        log(`[trigger] Failed to fetch team config: ${err.message}`);
+        triggeringRooms.delete(roomId);
+        logRoom(roomId, `[trigger] Failed to fetch team config: ${err.message}`);
         return Response.json({ ok: false, error: `Could not load team config: ${err.message}` }, { status: 502 });
       }
 
-      if (userApiKey) {
-        log(`[trigger] Using API key from portal user ${portalUserId}`);
-      }
-      if (userMcpToken) {
-        log(`[trigger] Using MCP token from portal user ${portalUserId}`);
-      }
+      if (userApiKey) logRoom(roomId, `[trigger] Using API key from portal user ${portalUserId}`);
+      if (userMcpToken) logRoom(roomId, `[trigger] Using MCP token from portal user ${portalUserId}`);
 
       const prompt = buildPromptFromConfig(config, roomId, triggeredBy);
-      activeTeam = { roomId, startTime: new Date(), from: triggeredBy, child: null };
-      log(`[trigger] Team "${config.team.name}" started in room ${roomId} by ${triggeredBy}`);
+      const run: RunContext = { roomId, startTime: new Date(), from: triggeredBy, child: null, timeoutHandle: null };
+      activeRuns.set(roomId, run);
+      triggeringRooms.delete(roomId);
+      logRoom(roomId, `[trigger] Team "${config.team.name}" started by ${triggeredBy}`);
 
       // Write known bot names so hotel_narrator.mjs can map subagent prompts → personas
-      const knownBots = config.members.map(m => m.bot_name).filter(Boolean);
-      writeNarratorBotsMap(knownBots);
+      writeNarratorBotsFile(roomId, config.members.map(m => m.bot_name).filter(Boolean));
 
       // Run in background
       runOrchestratorWithPrompt(prompt, roomId, triggeredBy, userApiKey, (child) => {
-        if (activeTeam) activeTeam.child = child;
+        const r = activeRuns.get(roomId); if (r) r.child = child;
       }, userMcpToken)
         .then((summary) => {
-          activeTeam = null;
-          log(`[trigger] Team "${config.team.name}" completed: ${summary.slice(0, 100)}`);
+          activeRuns.delete(roomId);
+          cleanupRoomFiles(roomId);
+          logRoom(roomId, `[trigger] Team "${config.team.name}" completed: ${summary.slice(0, 100)}`);
         })
         .catch((err: Error) => {
-          activeTeam = null;
-          log(`[trigger] Team "${config.team.name}" error: ${err.message}`);
+          activeRuns.delete(roomId);
+          cleanupRoomFiles(roomId);
+          logRoom(roomId, `[trigger] Team "${config.team.name}" error: ${err.message}`);
         });
 
       return Response.json({ ok: true, message: `Team "${config.team.name}" launched in room ${roomId}` });
@@ -826,21 +866,40 @@ const server = Bun.serve({
       const formData = await req.formData();
       const from = formData.get("From")?.toString() ?? "";
 
-      if (ALLOWED_NUMBERS.length > 0 && !ALLOWED_NUMBERS.includes(from)) {
-        return voiceSay("Onbevoegd nummer. Verbinding verbroken.");
+      const phoneUser = await fetchUserByPhone(from);
+      if (!phoneUser) return voiceSay("Onbevoegd nummer. Verbinding verbroken.");
+      if (!phoneUser.team) return voiceSay("Geen team gevonden. Maak eerst een team aan in de portal.");
+
+      const roomId = phoneUser.team.default_room_id;
+      if (activeRuns.has(roomId)) {
+        return voiceSay(`Team is al actief in kamer ${roomId}. Stuur een SMS met stop team om te stoppen.`);
       }
 
-      if (activeTeam) {
-        return voiceSay(`Team is al actief in kamer ${activeTeam.roomId}. Stuur een SMS met stop team om te stoppen.`);
-      }
+      const voiceRun: RunContext = { roomId, startTime: new Date(), from: phoneUser.username, child: null, timeoutHandle: null };
+      activeRuns.set(roomId, voiceRun);
+      logRoom(roomId, `[voice] Team gestart door ${phoneUser.username}`);
 
-      const roomId = 50;
-      activeTeam = { roomId, startTime: new Date(), from, child: null };
-      log(`[voice] Team gestart door ${from}`);
+      const [userApiKey, userMcpToken] = await Promise.all([
+        fetchUserAnthropicKey(phoneUser.portal_user_id),
+        fetchUserMcpToken(phoneUser.portal_user_id),
+      ]);
+      const config = await fetchUserTeamConfig(phoneUser.team.id);
+      const prompt = buildPromptFromConfig(config, roomId, phoneUser.username);
 
-      runOrchestrator(roomId, from)
-        .then((summary) => { activeTeam = null; sendSms(from, `Team klaar. ${summary.slice(0, 140)}`); })
-        .catch((err: Error) => { activeTeam = null; sendSms(from, `Team fout: ${err.message.slice(0, 140)}`); });
+      writeNarratorBotsFile(roomId, config.members.map(m => m.bot_name).filter(Boolean));
+      runOrchestratorWithPrompt(prompt, roomId, phoneUser.username, userApiKey, (child) => {
+        const r = activeRuns.get(roomId); if (r) r.child = child;
+      }, userMcpToken)
+        .then((summary) => {
+          activeRuns.delete(roomId);
+          cleanupRoomFiles(roomId);
+          sendSms(from, `Team klaar. ${summary.slice(0, 140)}`);
+        })
+        .catch((err: Error) => {
+          activeRuns.delete(roomId);
+          cleanupRoomFiles(roomId);
+          sendSms(from, `Team fout: ${err.message.slice(0, 140)}`);
+        });
 
       return voiceSay("Team wordt gestart. Je ontvangt een SMS als ze klaar zijn. Tot ziens!");
     }
@@ -862,57 +921,70 @@ const server = Bun.serve({
       const from = params.From ?? "";
       const body = (params.Body ?? "").trim().toLowerCase();
 
-      // Allowlist check
-      if (ALLOWED_NUMBERS.length > 0 && !ALLOWED_NUMBERS.includes(from)) {
-        return twiml("Unauthorized number.");
-      }
+      // Look up portal user by the calling number
+      const smsUser = await fetchUserByPhone(from);
+      if (!smsUser) return twiml("Unauthorized number.");
 
       // ── Commands ─────────────────────────────────────────────────────────
 
-      if (body.startsWith("start team")) {
-        const roomMatch = body.match(/start team\s+(\d+)/);
-        const roomId = roomMatch ? parseInt(roomMatch[1]) : 50;
+      if (body === "start team" || body === "start") {
+        if (!smsUser.team) return twiml("No team found. Create one in the portal first.");
 
-        if (activeTeam) {
-          return twiml(`Team already active in room ${activeTeam.roomId}. Send "stop team" first.`);
+        const smsRoomId = smsUser.team.default_room_id;
+        if (activeRuns.has(smsRoomId)) {
+          return twiml(`Team already active in room ${smsRoomId}. Send "stop" to stop it.`);
         }
 
-        activeTeam = { roomId, startTime: new Date(), from, child: null };
-        log(`[trigger] Team started in room ${roomId} by ${from}`);
+        const smsRun: RunContext = { roomId: smsRoomId, startTime: new Date(), from: smsUser.username, child: null, timeoutHandle: null };
+        activeRuns.set(smsRoomId, smsRun);
+        logRoom(smsRoomId, `[sms] Team started by ${smsUser.username}`);
 
-        // Run orchestrator in background — reply to Twilio immediately
-        runOrchestrator(roomId, from)
-          .then((summary) => {
-            activeTeam = null;
-            sendSms(from, `Team done in room ${roomId}. ${summary.slice(0, 140)}`);
-          })
-          .catch((err: Error) => {
-            activeTeam = null;
+        (async () => {
+          try {
+            const [userApiKey, userMcpToken, config] = await Promise.all([
+              fetchUserAnthropicKey(smsUser.portal_user_id),
+              fetchUserMcpToken(smsUser.portal_user_id),
+              fetchUserTeamConfig(smsUser.team!.id),
+            ]);
+            const prompt = buildPromptFromConfig(config, smsRoomId, smsUser.username);
+            writeNarratorBotsFile(smsRoomId, config.members.map(m => m.bot_name).filter(Boolean));
+            await runOrchestratorWithPrompt(prompt, smsRoomId, smsUser.username, userApiKey, (child) => {
+              const r = activeRuns.get(smsRoomId); if (r) r.child = child;
+            }, userMcpToken);
+            activeRuns.delete(smsRoomId);
+            cleanupRoomFiles(smsRoomId);
+            sendSms(from, `Team "${smsUser.team!.name}" done in room ${smsRoomId}.`);
+          } catch (err: any) {
+            activeRuns.delete(smsRoomId);
+            cleanupRoomFiles(smsRoomId);
             sendSms(from, `Team error: ${err.message.slice(0, 140)}`);
-          });
+          }
+        })();
 
-        return twiml(`Spawning team in room ${roomId}... Confirmation SMS incoming.`);
+        return twiml(`Starting team "${smsUser.team.name}" in room ${smsRoomId}. SMS incoming when done.`);
       }
 
-      if (body.startsWith("stop team")) {
-        if (!activeTeam) {
-          return twiml("No active team to stop.");
-        }
-        // Write stop signal — agents poll this file each iteration
-        writeFileSync(STOP_FILE, new Date().toISOString());
-        const room = activeTeam.roomId;
-        return twiml(`Stop signal sent. Agents in room ${room} will finish their current action and clean up.`);
+      if (body === "stop") {
+        // Stop only the rooms owned by this user
+        const userRooms = [...activeRuns.values()]
+          .filter(r => r.from === smsUser.username)
+          .map(r => r.roomId);
+        if (userRooms.length === 0) return twiml("No active team to stop.");
+        userRooms.forEach(killRoom);
+        return twiml(`Stop signal sent for room${userRooms.length > 1 ? 's' : ''}: ${userRooms.join(", ")}.`);
       }
 
       if (body === "status") {
-        if (activeTeam) {
-          const mins = Math.round((Date.now() - activeTeam.startTime.getTime()) / 60000);
-          return twiml(`Team active in room ${activeTeam.roomId} for ${mins} min.`);
-        }
-        return twiml("No active team.");
+        const userRooms = [...activeRuns.values()].filter(r => r.from === smsUser.username);
+        if (userRooms.length === 0) return twiml("No active teams.");
+        const lines = userRooms.map(r => {
+          const mins = Math.round((Date.now() - r.startTime.getTime()) / 60000);
+          return `Room ${r.roomId}: ${mins} min`;
+        });
+        return twiml(lines.join(" | "));
       }
 
-      return twiml('Commands: "start team [room_id]" | "stop team" | "status"');
+      return twiml('Commands: "start" | "stop" | "status"');
     }
 
     return new Response("Not found", { status: 404 });
@@ -921,5 +993,5 @@ const server = Bun.serve({
 
 console.log(`agent-trigger running on http://localhost:${PORT}`);
 console.log(`Project dir: ${PROJECT_DIR}`);
-console.log(`Stop file: ${STOP_FILE}`);
-console.log(ALLOWED_NUMBERS.length ? `Allowed numbers: ${ALLOWED_NUMBERS.join(", ")}` : "No number allowlist (set HABBO_ALLOWED_PHONE_NUMBERS)");
+console.log(`Stop files: /tmp/hotel-team-stop-{roomId} (per room)`);
+console.log("Phone-based auth: users must register their number in the portal to use SMS/voice.");
