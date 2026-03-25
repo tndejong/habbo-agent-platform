@@ -1,13 +1,14 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { HabboFigure } from './HabboFigure'
+import { api } from '../utils/api'
 import { friendlyFetchError } from '../utils/fetchError'
 import { useTheme } from '../ThemeContext'
 import {
   Bot, Edit2, Trash2, Plus, X, Check,
   Loader2, AlertCircle, AlertTriangle, Users, Zap, ChevronDown, ChevronUp, ChevronLeft, Square,
   Shield, Wifi, WifiOff, Key, ServerCog, Terminal, RefreshCw, User, Eye, EyeOff,
-  Sun, Moon, Phone,
+  Sun, Moon, Phone, Copy,
   Bold, Italic, Code, Heading2, List, ListOrdered, Link, Minus,
 } from 'lucide-react'
 
@@ -134,22 +135,9 @@ function MarkdownEditor({ value, onChange, placeholder, rows = 16 }) {
   )
 }
 
-// ── API helper ────────────────────────────────────────────────────────────
-
-async function api(url, opts = {}) {
-  const res = await fetch(url, {
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json', ...opts.headers },
-    ...opts,
-  })
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
-  return data
-}
-
 // ── Account View ──────────────────────────────────────────────────────────
 
-export function AccountView({ me, onKeyUpdated }) {
+export function AccountView({ me, onKeyUpdated, onTokenChange }) {
   const { theme, toggleTheme } = useTheme()
   const [keys, setKeys] = useState([])
   const [loading, setLoading] = useState(true)
@@ -172,6 +160,85 @@ export function AccountView({ me, onKeyUpdated }) {
   const [phoneSaving, setPhoneSaving] = useState(false)
   const [phoneDeleting, setPhoneDeleting] = useState(false)
   const [phoneMsg, setPhoneMsg] = useState(null) // { type: 'success'|'error', text }
+
+  // MCP tokens + Habbo MCP connection status — dev only
+  const [mcpTokens, setMcpTokens] = useState([])
+  const [mcpCalls, setMcpCalls] = useState([])
+  const [mcpLoading, setMcpLoading] = useState(false)
+  const [mcpBusy, setMcpBusy] = useState(false)
+  const [mcpMsg, setMcpMsg] = useState(null) // { type: 'success'|'error', text }
+  const [tokenLabel, setTokenLabel] = useState('')
+  const [newMcpToken, setNewMcpToken] = useState(null) // revealed token value (shown once)
+  const [copiedToken, setCopiedToken] = useState(false)
+  const [habboMcpStatus, setHabboMcpStatus] = useState(null) // null = loading, object = result
+
+  // Fetch Habbo MCP status once on mount (dev only)
+  useEffect(() => {
+    if (!me?.is_developer) return
+    fetch('/api/agents/status', { credentials: 'include' })
+      .then(r => r.json())
+      .then(d => setHabboMcpStatus(d.mcp ?? { error: 'No MCP data returned' }))
+      .catch(() => setHabboMcpStatus({ error: 'Could not reach agent-trigger' }))
+  }, [me?.is_developer])
+
+  const loadMcpTokens = useCallback(async () => {
+    if (!me?.is_developer) return
+    setMcpLoading(true)
+    try {
+      const [tokenData, callData] = await Promise.all([
+        api('/api/mcp/tokens'),
+        api('/api/mcp/calls?limit=30'),
+      ])
+      setMcpTokens(tokenData.tokens || [])
+      setMcpCalls(callData.calls || [])
+    } catch {
+      // non-blocking — tokens section will be empty
+    } finally {
+      setMcpLoading(false)
+    }
+  }, [me?.is_developer])
+
+  useEffect(() => { loadMcpTokens() }, [loadMcpTokens])
+
+  async function handleCreateToken() {
+    setMcpBusy(true); setMcpMsg(null)
+    try {
+      const data = await api('/api/mcp/tokens', {
+        method: 'POST',
+        body: JSON.stringify({ label: tokenLabel }),
+      })
+      setNewMcpToken(data.token?.value ?? null)
+      setTokenLabel('')
+      setMcpMsg({ type: 'success', text: 'Token generated — copy it now, it is only shown once.' })
+      await loadMcpTokens()
+      onTokenChange?.()
+    } catch (err) {
+      setMcpMsg({ type: 'error', text: err.message })
+    } finally {
+      setMcpBusy(false)
+    }
+  }
+
+  async function handleRevokeToken(tokenId) {
+    setMcpBusy(true); setMcpMsg(null)
+    try {
+      await api(`/api/mcp/tokens/${tokenId}`, { method: 'DELETE' })
+      setMcpMsg({ type: 'success', text: 'Token revoked.' })
+      await loadMcpTokens()
+      onTokenChange?.()
+    } catch (err) {
+      setMcpMsg({ type: 'error', text: err.message })
+    } finally {
+      setMcpBusy(false)
+    }
+  }
+
+  function copyMcpToken(value) {
+    navigator.clipboard.writeText(value).then(() => {
+      setCopiedToken(true)
+      setTimeout(() => setCopiedToken(false), 2000)
+    })
+  }
 
   useEffect(() => {
     api('/api/account/phone').then(d => {
@@ -543,19 +610,182 @@ export function AccountView({ me, onKeyUpdated }) {
           </div>
         </div>
       </section>
+
+      {/* Row 4: MCP Tokens — developer only */}
+      {me?.is_developer && (
+        <section className="space-y-3">
+          <h2 className="text-sm font-semibold text-foreground flex items-center gap-2.5">
+            <span className="w-6 h-6 rounded-md bg-secondary flex items-center justify-center flex-shrink-0"><Key className="w-3.5 h-3.5" /></span>
+            MCP Tokens
+            <span className="ml-auto text-[10px] bg-primary/10 text-primary border border-primary/20 rounded px-1.5 py-0.5">Developer</span>
+          </h2>
+
+          {/* Feedback message */}
+          {mcpMsg && (
+            <div className={`text-xs rounded-lg px-3 py-2 flex items-center gap-2 ${mcpMsg.type === 'success' ? 'bg-success/10 text-success border border-success/20' : 'bg-destructive/10 text-destructive border border-destructive/20'}`}>
+              {mcpMsg.type === 'success' ? <Check className="w-3.5 h-3.5 flex-shrink-0" /> : <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />}
+              {mcpMsg.text}
+            </div>
+          )}
+
+          {/* Habbo MCP connection status */}
+          {(() => {
+            const loadingStatus = habboMcpStatus === null
+            const habboServer = habboMcpStatus?.servers?.find(s =>
+              s.name?.toLowerCase().includes('hotel') ||
+              s.name?.toLowerCase().includes('habbo') ||
+              s.name?.toLowerCase().includes('mcp')
+            ) ?? habboMcpStatus?.servers?.[0] ?? null
+            return (
+              <div className="bg-card border border-border rounded-xl p-4 space-y-2">
+                <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                  <ServerCog className="w-3.5 h-3.5" />
+                  Habbo MCP Connection
+                </h3>
+                {loadingStatus ? (
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span className="text-xs">Checking…</span>
+                  </div>
+                ) : habboMcpStatus?.error ? (
+                  <div className="flex items-center gap-2 text-warning">
+                    <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+                    <span className="text-xs">{habboMcpStatus.error}</span>
+                  </div>
+                ) : habboServer ? (
+                  <div className="flex items-center gap-3">
+                    <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${habboServer.reachable ? 'bg-success' : 'bg-destructive'}`} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-foreground">{habboServer.name}</p>
+                      <p className="text-xs text-muted-foreground truncate">{habboServer.url}</p>
+                    </div>
+                    <div className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md border font-medium flex-shrink-0 ${
+                      habboServer.reachable
+                        ? 'text-success border-success/30 bg-success/10'
+                        : 'text-destructive border-destructive/30 bg-destructive/10'
+                    }`}>
+                      {habboServer.reachable
+                        ? <><Wifi className="w-3 h-3 mr-1" />Connected</>
+                        : <><WifiOff className="w-3 h-3 mr-1" />Unreachable</>
+                      }
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">No Habbo MCP server detected. Configure it in agent-trigger.</p>
+                )}
+              </div>
+            )
+          })()}
+
+          {/* Revealed new token (shown once) */}
+          {newMcpToken && (
+            <div className="bg-success/10 border border-success/20 rounded-xl p-4 space-y-2">
+              <p className="text-xs font-medium text-success">Copy this token now — it is only shown once!</p>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 font-mono text-xs bg-background/50 border border-border rounded-lg px-3 py-2 break-all">
+                  {newMcpToken}
+                </code>
+                <button onClick={() => copyMcpToken(newMcpToken)}
+                  className="h-8 w-8 flex-shrink-0 flex items-center justify-center border border-border rounded-lg hover:bg-secondary transition-colors">
+                  {copiedToken ? <Check className="w-3.5 h-3.5 text-success" /> : <Copy className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Generate token */}
+          <div className="bg-card border border-border rounded-xl p-4 space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Tokens authenticate your Habbo hotel MCP server. Required before deploying agent teams.
+              Endpoint: <code className="font-mono bg-muted px-1 py-0.5 rounded">/mcp</code> on your hosted <code className="font-mono bg-muted px-1 py-0.5 rounded">hotel-mcp</code> domain.
+            </p>
+            <div className="flex gap-2">
+              <input
+                placeholder="Token label (optional)"
+                value={tokenLabel}
+                onChange={e => setTokenLabel(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleCreateToken()}
+                className="flex-1 h-9 rounded-md border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+              <button onClick={handleCreateToken} disabled={mcpBusy}
+                className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm hover:bg-primary/90 disabled:opacity-50 flex items-center gap-2 flex-shrink-0">
+                {mcpBusy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                Generate
+              </button>
+            </div>
+          </div>
+
+          {/* Token list */}
+          <div className="bg-card border border-border rounded-xl p-4 space-y-3">
+            <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Your Tokens</h3>
+            {mcpLoading ? (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…
+              </div>
+            ) : mcpTokens.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No tokens generated yet.</p>
+            ) : (
+              <div className="space-y-2">
+                {mcpTokens.map(token => (
+                  <div key={token.id} className="flex items-center gap-3 p-3 rounded-lg border border-border bg-background">
+                    <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${token.status === 'active' ? 'bg-success' : 'bg-muted-foreground/40'}`} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-foreground">#{token.id} {token.token_label || '(no label)'}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {token.status} · expires {new Date(token.expires_at).toLocaleDateString()} · last used {token.last_used_at ? new Date(token.last_used_at).toLocaleDateString() : 'never'}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => handleRevokeToken(token.id)}
+                      disabled={mcpBusy || token.status !== 'active'}
+                      className="h-7 px-3 text-xs border border-destructive/30 text-destructive rounded-md hover:bg-destructive/10 disabled:opacity-40 transition-colors flex-shrink-0">
+                      Revoke
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Recent MCP calls */}
+          <div className="bg-card border border-border rounded-xl p-4 space-y-3">
+            <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Recent MCP Calls</h3>
+            {mcpCalls.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No MCP calls yet.</p>
+            ) : (
+              <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                {mcpCalls.map(call => (
+                  <div key={call.id} className="flex items-start gap-2.5 p-2.5 rounded-lg border border-border bg-background/50">
+                    <div className={`w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0 ${call.success ? 'bg-success' : 'bg-destructive'}`} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium text-foreground">
+                        {call.tool_name}
+                        <span className="text-muted-foreground font-normal ml-1">({call.channel})</span>
+                      </p>
+                      <p className="text-xs text-muted-foreground">{call.duration_ms}ms · {new Date(call.created_at).toLocaleString()}</p>
+                    </div>
+                    <span className={`text-xs flex-shrink-0 ${call.success ? 'text-success' : 'text-destructive'}`}>
+                      {call.success ? 'ok' : call.error_code || 'err'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+      )}
     </div>
   )
 }
 
 // ── Main Dashboard Component ───────────────────────────────────────────────
 
-export function AgentDashboard({ me, onActiveTeamChange, onStopTeam }) {
-  const [tab, setTab] = useState('integrated')
+export function AgentDashboard({ me, onActiveTeamChange, onStopTeam, mcpTokenVersion }) {
+  const [tab, setTab] = useState('teams')
   const [activeTeam, setActiveTeam] = useState(null)  // my own active run
   const [stopping, setStopping] = useState(false)
 
   const [liveBots, setLiveBots] = useState([])
-  const [mcpStatus, setMcpStatus] = useState(null)
   const [logLines, setLogLines] = useState([])
   const [logPaused, setLogPaused] = useState(false)
   const [teamError, setTeamError] = useState(null)
@@ -573,7 +803,6 @@ export function AgentDashboard({ me, onActiveTeamChange, onStopTeam }) {
         setActiveTeam(myRun)
         onActiveTeamChange?.(myRun)
         setLiveBots((d.bots || []).filter(b => b.room_id > 0))
-        if (d.mcp) setMcpStatus(d.mcp)
       } catch { setActiveTeam(null) }
     }
     poll()
@@ -626,12 +855,9 @@ export function AgentDashboard({ me, onActiveTeamChange, onStopTeam }) {
     finally { setStopping(false) }
   }
 
-  const agentBotsInRooms = liveBots.filter(b => b.is_agent)
-
   const tabs = [
-    { id: 'integrated', label: 'My Teams', icon: Users },
-    { id: 'online', label: 'Online', icon: Wifi, badge: agentBotsInRooms.length > 0 ? agentBotsInRooms.length : null },
-    ...(me?.is_developer ? [{ id: 'developer', label: 'Developer', icon: Shield }] : []),
+    { id: 'teams', label: 'Teams', icon: Users },
+    { id: 'personas', label: 'Personas', icon: User },
   ]
 
   return (
@@ -687,11 +913,10 @@ export function AgentDashboard({ me, onActiveTeamChange, onStopTeam }) {
 
       {/* Content */}
       <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
-        {tab === 'integrated' && <IntegratedView me={me} onAfterTrigger={fetchLogs} liveBots={liveBots} />}
-        {tab === 'online' && <OnlineView me={me} liveBots={liveBots} />}
-        {tab === 'developer' && me?.is_developer && <DeveloperView mcpStatus={mcpStatus} logLines={logLines} logPaused={logPaused} setLogPaused={setLogPaused} />}
-        {/* Live log panel — shown on all tabs when a team is running */}
-        {activeTeam && tab !== 'developer' && (
+        {/* IntegratedView is always mounted so state (teams, personas, modals) persists across tab switches */}
+        <IntegratedView me={me} onAfterTrigger={fetchLogs} liveBots={liveBots} mcpTokenVersion={mcpTokenVersion} activeSection={tab} />
+        {/* Live log panel — shown when a team is running */}
+        {activeTeam && (
           <LogPanel lines={logLines} paused={logPaused} onTogglePause={() => setLogPaused(p => !p)} />
         )}
       </div>
@@ -721,7 +946,7 @@ function logColor(line) {
   return 'text-muted-foreground'
 }
 
-function LogPanel({ lines, paused, onTogglePause }) {
+export function LogPanel({ lines, paused, onTogglePause }) {
   const bottomRef = useRef(null)
   const [autoScroll, setAutoScroll] = useState(true)
 
@@ -732,8 +957,8 @@ function LogPanel({ lines, paused, onTogglePause }) {
   }, [lines, autoScroll, paused])
 
   return (
-    <div className="rounded-xl border border-border bg-[#0d0d0d] overflow-hidden">
-      <div className="px-4 py-2.5 border-b border-border flex items-center gap-2">
+    <div className="rounded-xl border border-border overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-border bg-card flex items-center gap-2">
         <Terminal className="w-3.5 h-3.5 text-primary" />
         <span className="text-xs font-semibold text-foreground">Agent Logs</span>
         <span className="text-xs text-muted-foreground ml-1">— live output from running team</span>
@@ -751,7 +976,7 @@ function LogPanel({ lines, paused, onTogglePause }) {
           </button>
         </div>
       </div>
-      <div className="h-72 overflow-y-auto font-mono text-xs px-4 py-3 space-y-0.5">
+      <div className="h-72 overflow-y-auto font-mono text-xs px-4 py-3 space-y-0.5 bg-[#0d0d0d]">
         {lines.length === 0 && (
           <p className="text-muted-foreground/50 italic">No log entries yet — trigger a team to see output here.</p>
         )}
@@ -771,105 +996,27 @@ function LogPanel({ lines, paused, onTogglePause }) {
   )
 }
 
-// ── Developer View ────────────────────────────────────────────────────────
-
-function DeveloperView({ mcpStatus, logLines, logPaused, setLogPaused }) {
-  const servers = mcpStatus?.servers ?? []
-  const loading = mcpStatus === null
-
-  return (
-    <div className="space-y-6">
-      {/* MCP Servers */}
-      <div className="rounded-xl border border-border bg-card/50 overflow-hidden">
-        <div className="px-5 py-4 border-b border-border flex items-center gap-2">
-          <ServerCog className="w-4 h-4 text-primary" />
-          <h2 className="text-sm font-semibold text-foreground">Connected MCP Servers</h2>
-          <span className="ml-auto text-xs text-muted-foreground">
-            {loading ? 'Loading…' : `${servers.filter(s => s.reachable).length} / ${servers.length} reachable`}
-          </span>
-        </div>
-
-        {loading && (
-          <div className="px-5 py-8 flex items-center justify-center gap-2 text-muted-foreground">
-            <Loader2 className="w-4 h-4 animate-spin" />
-            <span className="text-sm">Checking MCP servers…</span>
-          </div>
-        )}
-
-        {!loading && mcpStatus?.error && (
-          <div className="px-5 py-4 flex items-center gap-2 text-warning">
-            <AlertCircle className="w-4 h-4 flex-shrink-0" />
-            <span className="text-sm">{mcpStatus.error}</span>
-          </div>
-        )}
-
-        {!loading && !mcpStatus?.error && servers.length === 0 && (
-          <div className="px-5 py-8 text-center text-sm text-muted-foreground">
-            No MCP servers configured in <code className="text-xs bg-muted px-1 py-0.5 rounded">.mcp.json</code>
-          </div>
-        )}
-
-        {!loading && servers.length > 0 && (
-          <div className="divide-y divide-border">
-            {servers.map(server => (
-              <div key={server.name} className="px-5 py-4 flex items-center gap-4">
-                {/* Status dot */}
-                <div className={`w-2 h-2 rounded-full flex-shrink-0 ${server.reachable ? 'bg-success' : 'bg-destructive'}`} />
-
-                {/* Name + URL */}
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-foreground">{server.name}</p>
-                  <p className="text-xs text-muted-foreground truncate">{server.url}</p>
-                </div>
-
-                {/* Auth badge */}
-                <div className={`flex items-center gap-1 text-xs px-2 py-1 rounded-md border ${
-                  server.hasKey
-                    ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'
-                    : 'text-muted-foreground border-border bg-muted/30'
-                }`}>
-                  <Key className="w-3 h-3" />
-                  {server.hasKey ? server.keyPreview : 'No key'}
-                </div>
-
-                {/* Reachable badge */}
-                <div className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md border font-medium ${
-                  server.reachable
-                    ? 'text-success border-success/30 bg-success/10'
-                    : 'text-destructive border-destructive/30 bg-destructive/10'
-                }`}>
-                  {server.reachable
-                    ? <><Wifi className="w-3 h-3" /> {server.statusCode ?? 'OK'}</>
-                    : <><WifiOff className="w-3 h-3" /> Unreachable</>
-                  }
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {!loading && mcpStatus?.mcpJsonPath && (
-          <div className="px-5 py-2 border-t border-border bg-muted/20">
-            <p className="text-xs text-muted-foreground">
-              Config: <code className="text-xs">{mcpStatus.mcpJsonPath}</code>
-            </p>
-          </div>
-        )}
-      </div>
-
-      {/* Log panel always visible in Developer tab */}
-      <LogPanel lines={logLines} paused={logPaused} onTogglePause={() => setLogPaused(p => !p)} />
-    </div>
-  )
-}
-
 // ── Online View ───────────────────────────────────────────────────────────
 
-function OnlineView({ me, liveBots }) {
+export function OnlineView({ me }) {
   const [personas, setPersonas] = useState([])
+  const [liveBots, setLiveBots] = useState([])
 
+  // Self-contained polling — works when mounted outside AgentDashboard
   useEffect(() => {
-    api('/api/my/personas').then(d => setPersonas(d.personas || [])).catch(() => {})
+    async function poll() {
+      try {
+        const [pd, statusData] = await Promise.all([
+          api('/api/my/personas'),
+          fetch('/api/agents/status', { credentials: 'include' }).then(r => r.json().catch(() => ({}))),
+        ])
+        setPersonas(pd.personas || [])
+        setLiveBots((statusData.bots || []).filter(b => b.room_id > 0))
+      } catch { /* non-blocking */ }
+    }
+    poll()
+    const id = setInterval(poll, 5000)
+    return () => clearInterval(id)
   }, [])
 
   const onlineAgentNames = new Set(liveBots.filter(b => b.is_agent).map(b => b.name?.toLowerCase()))
@@ -967,7 +1114,7 @@ function OnlineView({ me, liveBots }) {
 
 // ── Integrated View ───────────────────────────────────────────────────────
 
-function IntegratedView({ me, onAfterTrigger, liveBots = [] }) {
+function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0, activeSection = 'teams' }) {
   const [personas, setPersonas] = useState([])
   const [teams, setTeams] = useState([])
   const [bots, setBots] = useState([])
@@ -1014,7 +1161,8 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [] }) {
     }
   }, [])
 
-  useEffect(() => { load() }, [load])
+  // Re-load when mcpTokenVersion bumps (token generated/revoked in Settings while view is mounted)
+  useEffect(() => { load() }, [load, mcpTokenVersion])
 
   function showToast(msg, type = 'success') {
     setToast({ msg, type })
@@ -1159,7 +1307,7 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [] }) {
             className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors group"
           >
             <ChevronLeft className="w-3.5 h-3.5 group-hover:-translate-x-0.5 transition-transform" />
-            My Teams
+            Teams
           </button>
           <span className="text-muted-foreground/40 text-sm">/</span>
           <span className="text-sm text-foreground font-medium">
@@ -1206,11 +1354,8 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [] }) {
         </div>
       )}
 
-      {/* ── Teams + Agents — side by side on wide screens ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-8 items-start">
-
-      {/* ── Teams ── */}
-      <section className="space-y-4">
+      {/* ── Teams or Personas — controlled by activeSection prop ── */}
+      {activeSection === 'teams' && <section className="space-y-4">
         <div className="flex items-center justify-between">
           <div>
             <h2 className="font-semibold text-foreground">Teams</h2>
@@ -1247,20 +1392,19 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [] }) {
             ))}
           </div>
         )}
-      </section>
+      </section>}
 
-      {/* ── Agents ── */}
-      <section className="space-y-4">
+      {activeSection === 'personas' && <section className="space-y-4">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="font-semibold text-foreground">Agents</h2>
-            <p className="text-xs text-muted-foreground mt-0.5">Individual hotel personas</p>
+            <h2 className="font-semibold text-foreground">Personas</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">Individual hotel agent personas</p>
           </div>
           <button
             onClick={() => setPersonaPage({ persona: null })}
             className="flex items-center gap-1.5 text-xs bg-primary text-primary-foreground px-3 py-1.5 rounded-md hover:opacity-80 transition-opacity"
           >
-            <Plus className="w-3 h-3" /> Add Agent
+            <Plus className="w-3 h-3" /> Add Persona
           </button>
         </div>
 
@@ -1279,9 +1423,7 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [] }) {
             ))}
           </div>
         )}
-      </section>
-
-      </div>{/* end Teams + Agents grid */}
+      </section>}
 
       {/* Confirm modal */}
       {confirmModal && (

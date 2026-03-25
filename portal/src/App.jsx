@@ -1,29 +1,18 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { HabboFigure } from './components/HabboFigure'
-import { AgentDashboard, AccountView } from './components/AgentDashboard'
+import { AgentDashboard, AccountView, LogPanel, OnlineView } from './components/AgentDashboard'
 import { MarketplaceView } from './components/MarketplaceView'
 import { useTheme } from './ThemeContext'
+import { api } from './utils/api'
 import {
   Home, Bot, Key, Users, LogOut, Hotel, ShoppingBag,
   Eye, EyeOff, Loader2, AlertCircle, CheckCircle,
   Wifi, WifiOff, Copy, Check, Trash2, RefreshCw,
   Edit, Settings, Square, User, ArrowUpCircle, Bell,
-  ClipboardList, X, Sun, Moon,
+  ClipboardList, X, Sun, Moon, Network, Plus,
+  Terminal, ChevronDown, ChevronLeft, ChevronRight, Wrench, PanelLeft,
 } from 'lucide-react'
-
-// ── API helper ────────────────────────────────────────────────────────────
-
-async function api(path, options = {}) {
-  const res = await fetch(path, {
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-    ...options,
-  })
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(data.error || data.message || `Request failed (${res.status})`)
-  return data
-}
 
 // ── Fallback figure types (if API is unavailable) ─────────────────────────
 
@@ -374,6 +363,34 @@ function Dashboard({ me, setMe }) {
   const [stopping, setStopping] = useState(false)
   const [busy, setBusy] = useState(false)
   const [pendingRequestCount, setPendingRequestCount] = useState(0)
+  // Bumped when a MCP token is created/revoked in AccountView, so IntegratedView re-fetches hasMcpToken
+  const [mcpTokenVersion, setMcpTokenVersion] = useState(0)
+  const handleTokenChange = useCallback(() => setMcpTokenVersion(v => v + 1), [])
+
+  // Sidebar collapsed state (persisted)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return localStorage.getItem('sidebar-collapsed') === 'true' } catch { return false }
+  })
+  function toggleSidebar() {
+    setSidebarCollapsed(v => {
+      try { localStorage.setItem('sidebar-collapsed', String(!v)) } catch { /* ignore */ }
+      return !v
+    })
+  }
+
+  // User menu dropdown (top-right avatar area)
+  const [showUserMenu, setShowUserMenu] = useState(false)
+  const userMenuRef = useRef(null)
+  useEffect(() => {
+    if (!showUserMenu) return
+    function handleClickOutside(e) {
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target)) {
+        setShowUserMenu(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [showUserMenu])
 
   // Poll for pending upgrade requests (developers only)
   useEffect(() => {
@@ -451,65 +468,82 @@ function Dashboard({ me, setMe }) {
     { id: 'agents', label: 'My Agents', icon: Bot },
     { id: 'marketplace', label: 'Marketplace', icon: ShoppingBag },
     { id: 'bots', label: 'Bots', icon: Users },
-    { id: 'mcp', label: 'MCP', icon: Key },
+    { id: 'integrations', label: 'Integrations', icon: Network },
     ...(me?.is_developer ? [{ id: 'requests', label: 'Requests', icon: ClipboardList, badge: pendingRequestCount }] : []),
   ]
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
-      {/* Top nav */}
-      <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-20">
-        <div className="max-w-7xl mx-auto px-4 h-14 flex items-center gap-4">
-          {/* Logo */}
-          <span className="text-base font-semibold tracking-tight text-foreground flex-shrink-0">AgentHotel</span>
+    <div className="h-screen bg-background flex overflow-hidden">
 
-          {/* Tabs — desktop */}
-          <nav className="hidden md:flex items-center h-14 ml-2">
-            {tabs.map(({ id, label, icon: Icon, badge }) => (
-              <button key={id} onClick={() => setActiveTab(id)}
-                className={`relative flex items-center gap-1.5 px-3 h-full text-sm font-medium transition-colors border-b-2 ${
-                  activeTab === id
-                    ? 'border-foreground text-foreground'
-                    : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
-                }`}>
-                <Icon className="w-3.5 h-3.5" />
-                {label}
-                {badge > 0 && (
-                  <span className="ml-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[9px] font-bold text-primary-foreground">
-                    {badge}
-                  </span>
-                )}
-              </button>
-            ))}
-          </nav>
+      {/* ── Collapsible Sidebar ── */}
+      <aside className={`hidden md:flex flex-col flex-shrink-0 border-r border-border bg-card/60 backdrop-blur-sm transition-all duration-200 z-30 ${sidebarCollapsed ? 'w-14' : 'w-56'}`}>
+        {/* Sidebar header / logo */}
+        <div className="h-14 flex items-center px-3 border-b border-border flex-shrink-0 gap-2.5 overflow-hidden">
+          <div className="w-7 h-7 rounded-lg bg-primary flex items-center justify-center flex-shrink-0">
+            <Hotel className="w-3.5 h-3.5 text-primary-foreground" />
+          </div>
+          {!sidebarCollapsed && (
+            <span className="text-sm font-semibold tracking-tight text-foreground whitespace-nowrap">AgentHotel</span>
+          )}
+        </div>
 
-          {/* Right side */}
-          <div className="ml-auto flex items-center gap-3">
-            {/* Hotel status */}
-            <div className="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground">
-              {hotelStatus.loading ? (
-                <Loader2 className="w-3 h-3 animate-spin" />
-              ) : hotelStatus.socket_online ? (
-                <Wifi className="w-3 h-3 text-success" />
-              ) : (
-                <WifiOff className="w-3 h-3 text-muted-foreground" />
+        {/* Nav items */}
+        <nav className="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto overflow-x-hidden">
+          {tabs.map(({ id, label, icon: Icon, badge }) => (
+            <button
+              key={id}
+              onClick={() => setActiveTab(id)}
+              title={sidebarCollapsed ? label : undefined}
+              className={`w-full flex items-center gap-2.5 px-2.5 h-9 rounded-lg text-sm font-medium transition-colors relative ${
+                activeTab === id
+                  ? 'bg-primary/10 text-primary'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
+              }`}
+            >
+              <Icon className="w-4 h-4 flex-shrink-0" />
+              {!sidebarCollapsed && <span className="truncate">{label}</span>}
+              {badge > 0 && (
+                <span className={`flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[9px] font-bold text-primary-foreground flex-shrink-0 ${sidebarCollapsed ? 'absolute top-1 right-1' : 'ml-auto'}`}>
+                  {badge}
+                </span>
               )}
-              <span>{hotelStatus.loading ? 'Checking...' : hotelStatus.socket_online ? 'Online' : 'Offline'}</span>
+            </button>
+          ))}
+        </nav>
+
+        {/* Collapse toggle */}
+        <div className="p-2 border-t border-border flex-shrink-0">
+          <button
+            onClick={toggleSidebar}
+            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            className="w-full h-8 flex items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+          >
+            {sidebarCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+          </button>
+        </div>
+      </aside>
+
+      {/* ── Main area (navbar + content) ── */}
+      <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+
+        {/* Top navbar — slim, right-side controls only */}
+        <header className="h-14 border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-20 flex-shrink-0">
+          <div className="h-full px-4 flex items-center gap-3">
+
+            {/* Mobile: logo + hamburger */}
+            <div className="md:hidden flex items-center gap-2 mr-auto">
+              <div className="w-7 h-7 rounded-lg bg-primary flex items-center justify-center">
+                <Hotel className="w-3.5 h-3.5 text-primary-foreground" />
+              </div>
+              <span className="text-sm font-semibold text-foreground">AgentHotel</span>
             </div>
 
-            {/* Join hotel button */}
-            <button
-              onClick={handleJoinHotel}
-              disabled={busy || !hotelStatus.socket_online}
-              className="hidden sm:flex items-center gap-1.5 h-8 px-3 text-xs font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50 transition-colors"
-            >
-              <Hotel className="w-3 h-3" />
-              Join Hotel
-            </button>
+            {/* Spacer — pushes right-side controls to the right on desktop */}
+            <div className="hidden md:block flex-1" />
 
             {/* Active team indicator */}
             {activeTeam && (
-              <div className="hidden sm:flex items-center gap-2 bg-success/10 border border-success/30 rounded-lg px-2.5 py-1">
+              <div className="flex items-center gap-2 bg-success/10 border border-success/30 rounded-lg px-2.5 py-1">
                 <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse flex-shrink-0" />
                 <span className="text-xs text-success font-medium">Room {activeTeam.roomId}</span>
                 <button
@@ -523,37 +557,98 @@ function Dashboard({ me, setMe }) {
               </div>
             )}
 
-            {/* User avatar + account settings */}
-            {me.figure && <HabboFigure figure={me.figure} size="sm" animate={false} className="hidden sm:block" />}
+            {/* Hotel status — click to open Online page */}
             <button
-              onClick={() => setActiveTab('account')}
-              className="hidden sm:flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors group"
-              title="Account settings"
+              onClick={() => setActiveTab('online')}
+              className={`flex items-center gap-1.5 text-xs transition-colors hover:text-foreground ${activeTab === 'online' ? 'text-foreground' : 'text-muted-foreground'}`}
+              title="View online agents"
             >
-              {me.username}
-              <Settings className="w-3.5 h-3.5 opacity-40 group-hover:opacity-100 transition-opacity" />
+              {hotelStatus.loading ? (
+                <Loader2 className="w-3 h-3 animate-spin" />
+              ) : hotelStatus.socket_online ? (
+                <Wifi className="w-3 h-3 text-success" />
+              ) : (
+                <WifiOff className="w-3 h-3 text-muted-foreground" />
+              )}
+              <span className="hidden sm:inline">{hotelStatus.loading ? 'Checking...' : hotelStatus.socket_online ? 'Online' : 'Offline'}</span>
             </button>
 
-            {/* Theme toggle */}
+            {/* Join hotel button */}
             <button
-              onClick={toggleTheme}
-              className="h-8 w-8 flex items-center justify-center rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-              aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-              title={theme === 'dark' ? 'Light mode' : 'Dark mode'}
+              onClick={handleJoinHotel}
+              disabled={busy || !hotelStatus.socket_online}
+              className="flex items-center gap-1.5 h-8 px-3 text-xs font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50 transition-colors"
             >
-              {theme === 'dark' ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
+              <Hotel className="w-3 h-3" />
+              <span className="hidden sm:inline">Join Hotel</span>
             </button>
 
-            <button onClick={handleLogout} disabled={busy}
-              className="flex items-center gap-1.5 h-8 px-3 text-xs border border-border rounded-md hover:bg-secondary transition-colors text-muted-foreground hover:text-foreground">
-              <LogOut className="w-3 h-3" />
-              <span className="hidden sm:inline">Logout</span>
-            </button>
+            {/* User figure */}
+            {me.figure && <HabboFigure figure={me.figure} size="sm" animate={false} className="hidden sm:block flex-shrink-0" />}
+
+            {/* User dropdown */}
+            <div className="relative" ref={userMenuRef}>
+              <button
+                onClick={() => setShowUserMenu(v => !v)}
+                className={`flex items-center gap-1.5 text-sm transition-colors group ${showUserMenu ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+              >
+                <span className="hidden sm:inline">{me.username}</span>
+                <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showUserMenu ? 'rotate-180 opacity-100' : 'opacity-40 group-hover:opacity-100'}`} />
+              </button>
+
+              {showUserMenu && (
+                <div className="absolute right-0 top-full mt-2 w-48 bg-card border border-border rounded-xl shadow-xl overflow-hidden z-50">
+                  {/* Account */}
+                  <button
+                    onClick={() => { setActiveTab('account'); setShowUserMenu(false) }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-foreground hover:bg-secondary transition-colors"
+                  >
+                    <Settings className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+                    Settings
+                  </button>
+                  {me?.is_developer && (
+                    <button
+                      onClick={() => { setActiveTab('devtools'); setShowUserMenu(false) }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-foreground hover:bg-secondary transition-colors"
+                    >
+                      <Wrench className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+                      Dev Tools
+                    </button>
+                  )}
+
+                  <div className="border-t border-border my-0.5" />
+
+                  {/* Theme toggle */}
+                  <button
+                    onClick={() => { toggleTheme(); setShowUserMenu(false) }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-foreground hover:bg-secondary transition-colors"
+                  >
+                    {theme === 'dark'
+                      ? <Sun className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+                      : <Moon className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+                    }
+                    {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+                  </button>
+
+                  <div className="border-t border-border my-0.5" />
+
+                  {/* Logout */}
+                  <button
+                    onClick={() => { handleLogout(); setShowUserMenu(false) }}
+                    disabled={busy}
+                    className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50"
+                  >
+                    <LogOut className="w-3.5 h-3.5 flex-shrink-0" />
+                    Logout
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        </header>
 
-        {/* Mobile tabs */}
-        <div className="md:hidden flex border-t border-border">
+        {/* Mobile bottom nav */}
+        <div className="md:hidden fixed bottom-0 left-0 right-0 flex border-t border-border bg-card/95 backdrop-blur-sm z-20">
           {tabs.map(({ id, label, icon: Icon, badge }) => (
             <button key={id} onClick={() => setActiveTab(id)}
               className={`relative flex-1 flex flex-col items-center gap-0.5 py-2 text-xs transition-colors ${
@@ -569,11 +664,10 @@ function Dashboard({ me, setMe }) {
             </button>
           ))}
         </div>
-      </header>
 
-      {/* Content */}
-      <main className="flex-1">
-        <div key={activeTab} className="animate-fade-up">
+        {/* Page content */}
+        <main className="flex-1 overflow-y-auto">
+          <div key={activeTab} className="animate-fade-up">
           {activeTab === 'home' && (
             <HomeTab me={me} hotelStatus={hotelStatus} onJoinHotel={handleJoinHotel} busy={busy} />
           )}
@@ -581,7 +675,7 @@ function Dashboard({ me, setMe }) {
             <UpgradeRequestsTab onCountChange={setPendingRequestCount} />
           )}
           {activeTab === 'agents' && (
-            <AgentDashboard me={me} onActiveTeamChange={setActiveTeam} />
+            <AgentDashboard me={me} onActiveTeamChange={setActiveTeam} mcpTokenVersion={mcpTokenVersion} />
           )}
         {activeTab === 'marketplace' && (
           <div className="max-w-5xl mx-auto px-4 py-6">
@@ -590,18 +684,65 @@ function Dashboard({ me, setMe }) {
         )}
 
           {activeTab === 'account' && (
-            <AccountView me={me} />
+            <AccountView me={me} onTokenChange={handleTokenChange} />
           )}
           {activeTab === 'bots' && (
             <BotsTab figureTypes={figureTypes} />
           )}
-          {activeTab === 'mcp' && (
-            <McpTab me={me} />
+          {activeTab === 'integrations' && (
+            <IntegrationsTab />
           )}
-        </div>
-      </main>
+          {activeTab === 'online' && (
+            <div className="max-w-5xl mx-auto px-4 py-6">
+              <OnlineView me={me} />
+            </div>
+          )}
+          {activeTab === 'devtools' && me?.is_developer && (
+            <DevToolsView me={me} />
+          )}
+          </div>
+        </main>
 
-      <UiBuildFooter />
+        <UiBuildFooter />
+      </div>{/* end main area */}
+    </div>
+  )
+}
+
+// ── Dev Tools Tab ─────────────────────────────────────────────────────────
+
+function DevToolsView({ me }) {
+  const [logLines, setLogLines] = useState([])
+  const [logPaused, setLogPaused] = useState(false)
+
+  useEffect(() => {
+    if (!me?.is_developer) return
+    async function fetchLogs() {
+      if (logPaused) return
+      try {
+        const res = await fetch('/api/agents/logs?lines=200', { credentials: 'include' })
+        const d = await res.json().catch(() => ({}))
+        if (d.lines) setLogLines(d.lines)
+      } catch { /* non-blocking */ }
+    }
+    fetchLogs()
+    const id = setInterval(fetchLogs, 3000)
+    return () => clearInterval(id)
+  }, [me?.is_developer, logPaused])
+
+  return (
+    <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
+      <div className="flex items-center gap-3">
+        <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
+          <Terminal className="w-4 h-4 text-primary" />
+        </div>
+        <div>
+          <h1 className="text-base font-semibold text-foreground">Dev Tools</h1>
+          <p className="text-xs text-muted-foreground">Live agent output and system logs</p>
+        </div>
+        <span className="ml-auto text-[10px] bg-primary/10 text-primary border border-primary/20 rounded px-1.5 py-0.5 font-medium">Developer</span>
+      </div>
+      <LogPanel lines={logLines} paused={logPaused} onTogglePause={() => setLogPaused(p => !p)} />
     </div>
   )
 }
@@ -1337,187 +1478,259 @@ function UpgradeRequestsTab({ onCountChange }) {
   )
 }
 
-// ── MCP Tab ───────────────────────────────────────────────────────────────
+// ── Integrations Tab ──────────────────────────────────────────────────────
 
-function McpTab({ me }) {
-  const activeTier = me?.ai_tier || 'basic'
-  const [mcpData, setMcpData] = useState({ loading: true, tier: activeTier, tokens: [], calls: [] })
-  const [newMcpToken, setNewMcpToken] = useState(null)
-  const [tokenLabel, setTokenLabel] = useState('')
+const BLANK_INTEGRATION = { name: '', url: '', api_key: '' }
+
+function IntegrationsTab() {
+  const [integrations, setIntegrations] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [toast, setToast] = useState(null)
+  const [showForm, setShowForm] = useState(false)
+  const [form, setForm] = useState(BLANK_INTEGRATION)
+  const [editingId, setEditingId] = useState(null)
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const [message, setMessage] = useState('')
-  const [copiedId, setCopiedId] = useState(null)
+  const [pingStatus, setPingStatus] = useState({}) // { [id]: 'checking'|'online'|'offline' }
+  const [showApiKey, setShowApiKey] = useState({}) // { [id]: bool }
 
-  useEffect(() => {
-    if (activeTier === 'basic') { setMcpData(d => ({ ...d, loading: false })); return }
-    Promise.all([api('/api/mcp/tokens'), api('/api/mcp/calls?limit=30')])
-      .then(([tokenData, callData]) => {
-        setMcpData({ loading: false, tier: tokenData.tier || activeTier, tokens: tokenData.tokens || [], calls: callData.calls || [] })
+  function showToast(text, type = 'success') {
+    setToast({ text, type })
+    setTimeout(() => setToast(null), 3500)
+  }
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const data = await api('/api/my/integrations')
+      setIntegrations(data.integrations || [])
+    } catch (err) {
+      showToast(err.message, 'error')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  async function pingIntegration(id, url) {
+    setPingStatus(s => ({ ...s, [id]: 'checking' }))
+    try {
+      const data = await api('/api/my/integrations/ping', {
+        method: 'POST',
+        body: JSON.stringify({ url }),
       })
-      .catch(() => setMcpData(d => ({ ...d, loading: false })))
-  }, [activeTier])
-
-  async function handleCreateToken() {
-    setBusy(true); setError(''); setMessage('')
-    try {
-      const data = await api('/api/mcp/tokens', { method: 'POST', body: JSON.stringify({ label: tokenLabel }) })
-      setNewMcpToken(data.token || null)
-      setTokenLabel('')
-      const [tokenData, callData] = await Promise.all([api('/api/mcp/tokens'), api('/api/mcp/calls?limit=30')])
-      setMcpData(d => ({ ...d, tier: tokenData.tier || d.tier, tokens: tokenData.tokens || [], calls: callData.calls || [] }))
-      setMessage('MCP token generated. Copy it now — it is only shown once.')
-    } catch (err) { setError(err.message) }
-    finally { setBusy(false) }
+      setPingStatus(s => ({ ...s, [id]: data.online ? 'online' : 'offline' }))
+    } catch {
+      setPingStatus(s => ({ ...s, [id]: 'offline' }))
+    }
   }
 
-  async function handleRevokeToken(tokenId) {
-    setBusy(true); setError(''); setMessage('')
+  async function handleSubmit(e) {
+    e.preventDefault()
+    setBusy(true)
     try {
-      await api(`/api/mcp/tokens/${tokenId}`, { method: 'DELETE' })
-      const tokenData = await api('/api/mcp/tokens')
-      setMcpData(d => ({ ...d, tier: tokenData.tier || d.tier, tokens: tokenData.tokens || [] }))
-      setMessage('MCP token revoked.')
-    } catch (err) { setError(err.message) }
-    finally { setBusy(false) }
+      if (editingId) {
+        await api(`/api/my/integrations/${editingId}`, {
+          method: 'PUT',
+          body: JSON.stringify(form),
+        })
+        showToast('Integration updated.')
+      } else {
+        await api('/api/my/integrations', {
+          method: 'POST',
+          body: JSON.stringify(form),
+        })
+        showToast('Integration added.')
+      }
+      setForm(BLANK_INTEGRATION)
+      setEditingId(null)
+      setShowForm(false)
+      await load()
+    } catch (err) {
+      showToast(err.message, 'error')
+    } finally {
+      setBusy(false)
+    }
   }
 
-  function copyToken(value) {
-    navigator.clipboard.writeText(value).then(() => {
-      setCopiedId(value)
-      setTimeout(() => setCopiedId(null), 2000)
-    })
+  async function handleDelete(id) {
+    setBusy(true)
+    try {
+      await api(`/api/my/integrations/${id}`, { method: 'DELETE' })
+      setIntegrations(prev => prev.filter(i => i.id !== id))
+      showToast('Integration removed.')
+    } catch (err) {
+      showToast(err.message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function startEdit(integration) {
+    setForm({ name: integration.name, url: integration.url, api_key: '' })
+    setEditingId(integration.id)
+    setShowForm(true)
+  }
+
+  function cancelForm() {
+    setForm(BLANK_INTEGRATION)
+    setEditingId(null)
+    setShowForm(false)
   }
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
-      <div>
-        <h2 className="font-semibold text-foreground">MCP Connect</h2>
-        <p className="text-xs text-muted-foreground mt-1">
-          Endpoint: <code className="font-mono bg-muted px-1.5 py-0.5 rounded text-foreground">/mcp</code> on your hosted{' '}
-          <code className="font-mono bg-muted px-1.5 py-0.5 rounded text-foreground">hotel-mcp</code> domain.
-        </p>
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="font-semibold text-foreground">Integrations</h2>
+          <p className="text-xs text-muted-foreground mt-1">
+            Connect external MCP servers to your agent teams. Each server is available per-run.
+          </p>
+        </div>
+        {!showForm && (
+          <button
+            onClick={() => { setShowForm(true); setEditingId(null); setForm(BLANK_INTEGRATION) }}
+            className="flex items-center gap-1.5 h-8 px-3 text-xs font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            Add server
+          </button>
+        )}
       </div>
 
-      {/* Messages */}
-      {error && (
-        <div className="flex items-start gap-2 p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-sm">
-          <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-          {error}
-        </div>
-      )}
-      {message && (
-        <div className="flex items-start gap-2 p-3 rounded-lg bg-success/10 border border-success/20 text-success text-sm">
-          <CheckCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-          {message}
+      {/* Toast */}
+      {toast && (
+        <div className={`flex items-start gap-2 p-3 rounded-lg text-sm border ${
+          toast.type === 'error'
+            ? 'bg-destructive/10 border-destructive/20 text-destructive'
+            : 'bg-success/10 border-success/20 text-success'
+        }`}>
+          {toast.type === 'error'
+            ? <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+            : <CheckCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />}
+          {toast.text}
         </div>
       )}
 
-      {activeTier === 'basic' ? (
+      {/* Add/Edit form */}
+      {showForm && (
+        <form onSubmit={handleSubmit} className="bg-card border border-border rounded-2xl p-4 space-y-3">
+          <h3 className="text-sm font-medium">{editingId ? 'Edit integration' : 'Add MCP server'}</h3>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Name</label>
+              <input
+                required
+                placeholder="e.g. My Notion MCP"
+                value={form.name}
+                onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Server URL</label>
+              <input
+                required
+                type="url"
+                placeholder="https://mcp.example.com"
+                value={form.url}
+                onChange={e => setForm(f => ({ ...f, url: e.target.value }))}
+                className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs text-muted-foreground mb-1">
+              API key <span className="text-muted-foreground/60">(optional — leave blank to keep existing)</span>
+            </label>
+            <input
+              type="password"
+              placeholder={editingId ? '••••••• (leave blank to keep current)' : 'API key or bearer token'}
+              value={form.api_key}
+              onChange={e => setForm(f => ({ ...f, api_key: e.target.value }))}
+              className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+          </div>
+          <div className="flex gap-2 pt-1">
+            <button type="submit" disabled={busy}
+              className="h-8 px-4 rounded-md bg-primary text-primary-foreground text-sm hover:bg-primary/90 disabled:opacity-50 flex items-center gap-2">
+              {busy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              {editingId ? 'Save changes' : 'Add server'}
+            </button>
+            <button type="button" onClick={cancelForm}
+              className="h-8 px-3 rounded-md border border-border text-sm text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+
+      {/* Integration list */}
+      {loading ? (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+        </div>
+      ) : integrations.length === 0 ? (
         <div className="bg-card border border-border rounded-2xl p-8 text-center">
           <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-3">
-            <Key className="w-5 h-5 text-primary" />
+            <Network className="w-5 h-5 text-primary" />
           </div>
-          <p className="text-sm font-medium text-foreground">Pro Plan Required</p>
-          <p className="text-xs text-muted-foreground mt-1">Upgrade to Pro to enable MCP token generation.</p>
+          <p className="text-sm font-medium text-foreground">No integrations yet</p>
+          <p className="text-xs text-muted-foreground mt-1">Add an external MCP server to make it available to your agent teams.</p>
         </div>
       ) : (
-        <>
-          {/* New token */}
-          {newMcpToken?.value && (
-            <div className="bg-success/10 border border-success/20 rounded-xl p-4 space-y-2">
-              <p className="text-sm font-medium text-success">Copy this token now — it is only shown once!</p>
-              <div className="flex items-center gap-2">
-                <code className="flex-1 font-mono text-xs bg-background/50 border border-border rounded-lg px-3 py-2 break-all">
-                  {newMcpToken.value}
-                </code>
-                <button onClick={() => copyToken(newMcpToken.value)}
-                  className="h-9 w-9 flex-shrink-0 flex items-center justify-center border border-border rounded-lg hover:bg-secondary transition-colors">
-                  {copiedId === newMcpToken.value ? <Check className="w-4 h-4 text-success" /> : <Copy className="w-4 h-4" />}
-                </button>
-              </div>
-            </div>
-          )}
+        <div className="space-y-2">
+          {integrations.map(integration => {
+            const ping = pingStatus[integration.id]
+            return (
+              <div key={integration.id} className="flex items-center gap-3 p-4 rounded-xl border border-border bg-card">
+                {/* Ping dot */}
+                <div className="flex-shrink-0">
+                  {ping === 'checking' ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
+                  ) : ping === 'online' ? (
+                    <span className="w-2 h-2 rounded-full bg-success block" title="Reachable" />
+                  ) : ping === 'offline' ? (
+                    <span className="w-2 h-2 rounded-full bg-destructive block" title="Unreachable" />
+                  ) : (
+                    <span className="w-2 h-2 rounded-full bg-muted-foreground/30 block" title="Not pinged yet" />
+                  )}
+                </div>
 
-          {/* Generate token */}
-          <div className="bg-card border border-border rounded-2xl p-4 space-y-3">
-            <h3 className="text-sm font-medium">Generate New Token</h3>
-            <div className="flex gap-2">
-              <input
-                placeholder="Token label (optional)"
-                value={tokenLabel}
-                onChange={e => setTokenLabel(e.target.value)}
-                className="flex-1 h-9 rounded-md border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
-              />
-              <button onClick={handleCreateToken} disabled={busy}
-                className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm hover:bg-primary/90 disabled:opacity-50 flex items-center gap-2 flex-shrink-0">
-                {busy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                Generate
-              </button>
-            </div>
-          </div>
+                {/* Info */}
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-foreground">{integration.name}</p>
+                  <p className="text-xs text-muted-foreground truncate">{integration.url}</p>
+                </div>
 
-          {/* Token list */}
-          <div className="space-y-3">
-            <h3 className="text-sm font-medium text-foreground">Your Tokens</h3>
-            {mcpData.loading ? (
-              <div className="flex items-center justify-center py-8">
-                <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+                {/* Actions */}
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <button
+                    onClick={() => pingIntegration(integration.id, integration.url)}
+                    disabled={ping === 'checking'}
+                    title="Test connection"
+                    className="h-7 w-7 flex items-center justify-center rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40">
+                    <Wifi className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => startEdit(integration)}
+                    title="Edit"
+                    className="h-7 w-7 flex items-center justify-center rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
+                    <Edit className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => handleDelete(integration.id)}
+                    disabled={busy}
+                    title="Remove"
+                    className="h-7 w-7 flex items-center justify-center rounded-md border border-destructive/30 text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-40">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
-            ) : mcpData.tokens.length === 0 ? (
-              <p className="text-xs text-muted-foreground">No tokens generated yet.</p>
-            ) : (
-              <div className="space-y-2">
-                {mcpData.tokens.map(token => (
-                  <div key={token.id} className="flex items-center gap-3 p-3 rounded-xl border border-border bg-card">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-foreground">
-                        #{token.id} {token.token_label || '(no label)'}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        Status: {token.status} &middot; Last used: {token.last_used_at || 'never'}
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => handleRevokeToken(token.id)}
-                      disabled={busy || token.status !== 'active'}
-                      className="h-7 px-3 text-xs border border-destructive/30 text-destructive rounded-md hover:bg-destructive/10 disabled:opacity-40 transition-colors flex-shrink-0">
-                      Revoke
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Recent calls */}
-          <div className="space-y-3">
-            <h3 className="text-sm font-medium text-foreground">Recent MCP Calls</h3>
-            {mcpData.calls.length === 0 ? (
-              <p className="text-xs text-muted-foreground">No MCP calls yet.</p>
-            ) : (
-              <div className="space-y-2 max-h-80 overflow-y-auto">
-                {mcpData.calls.map(call => (
-                  <div key={call.id} className="flex items-start gap-3 p-3 rounded-xl border border-border bg-card/50">
-                    <div className={`w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0 ${call.success ? 'bg-success' : 'bg-destructive'}`} />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-foreground">
-                        {call.tool_name}
-                        <span className="text-xs text-muted-foreground font-normal ml-1">({call.channel})</span>
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {call.duration_ms}ms &middot; {call.created_at}
-                      </p>
-                    </div>
-                    <span className={`text-xs ${call.success ? 'text-success' : 'text-destructive'}`}>
-                      {call.success ? 'ok' : 'error'}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </>
+            )
+          })}
+        </div>
       )}
     </div>
   )

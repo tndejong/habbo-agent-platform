@@ -174,6 +174,14 @@ function tierGate(minTier) {
   };
 }
 
+function requireInternalSecret(req, res, next) {
+  const secret = req.headers['x-internal-secret'];
+  if (PORTAL_INTERNAL_SECRET && secret !== PORTAL_INTERNAL_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  return next();
+}
+
 function getSessionUser(req) {
   const token = req.cookies.agent_portal_session;
   if (!token) return null;
@@ -531,6 +539,21 @@ async function ensurePortalSchema() {
       KEY idx_tur_user (portal_user_id),
       KEY idx_tur_status (status),
       CONSTRAINT fk_tur_user FOREIGN KEY (portal_user_id) REFERENCES portal_users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS portal_user_integrations (
+      id INT NOT NULL AUTO_INCREMENT,
+      portal_user_id INT NOT NULL,
+      name VARCHAR(64) NOT NULL,
+      url VARCHAR(512) NOT NULL,
+      api_key_encrypted TEXT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_pui_user (portal_user_id),
+      CONSTRAINT fk_pui_user FOREIGN KEY (portal_user_id) REFERENCES portal_users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 }
@@ -1258,11 +1281,7 @@ app.post('/api/account/password', authRequired, async (req, res) => {
 });
 
 // ─── Internal: get decrypted API key for a portal user ────────────────────────
-app.get('/api/internal/user/:portalUserId/api-key/:provider', async (req, res) => {
-  const secret = req.headers['x-internal-secret'];
-  if (PORTAL_INTERNAL_SECRET && secret !== PORTAL_INTERNAL_SECRET) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+app.get('/api/internal/user/:portalUserId/api-key/:provider', requireInternalSecret, async (req, res) => {
 
   const [rows] = await db.execute(
     'SELECT api_key_encrypted FROM portal_user_api_keys WHERE portal_user_id = ? AND provider = ? LIMIT 1',
@@ -1275,11 +1294,7 @@ app.get('/api/internal/user/:portalUserId/api-key/:provider', async (req, res) =
   res.json({ ok: true, api_key: plain });
 });
 
-app.get('/api/internal/user/:portalUserId/mcp-token', async (req, res) => {
-  const secret = req.headers['x-internal-secret'];
-  if (PORTAL_INTERNAL_SECRET && secret !== PORTAL_INTERNAL_SECRET) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+app.get('/api/internal/user/:portalUserId/mcp-token', requireInternalSecret, async (req, res) => {
 
   const [rows] = await db.execute(
     `SELECT token_raw_encrypted FROM portal_mcp_tokens
@@ -1295,11 +1310,7 @@ app.get('/api/internal/user/:portalUserId/mcp-token', async (req, res) => {
 });
 
 // ─── Internal: look up a portal user + their first team by phone number ───────
-app.get('/api/internal/user-by-phone/:number', async (req, res) => {
-  const secret = req.headers['x-internal-secret'];
-  if (PORTAL_INTERNAL_SECRET && secret !== PORTAL_INTERNAL_SECRET) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+app.get('/api/internal/user-by-phone/:number', requireInternalSecret, async (req, res) => {
 
   try {
     const [[user]] = await db.execute(
@@ -1447,6 +1458,118 @@ app.get('/api/mcp/calls', authRequired, async (req, res) => {
     ok: true,
     calls: rows
   });
+});
+
+// ─── User integrations (external MCP servers) ────────────────────────────────
+
+app.get('/api/my/integrations', authRequired, async (req, res) => {
+  try {
+    const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
+    if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
+
+    const [rows] = await db.execute(
+      'SELECT id, name, url, created_at, updated_at FROM portal_user_integrations WHERE portal_user_id = ? ORDER BY created_at ASC',
+      [portalUser.id]
+    );
+    res.json({ ok: true, integrations: rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/my/integrations', authRequired, async (req, res) => {
+  try {
+    const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
+    if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
+
+    const name = String(req.body?.name || '').trim().slice(0, 64);
+    const url = String(req.body?.url || '').trim().slice(0, 512);
+    const apiKey = String(req.body?.api_key || '').trim();
+
+    if (!name) return res.status(400).json({ error: 'name is required' });
+    if (!url) return res.status(400).json({ error: 'url is required' });
+
+    const apiKeyEncrypted = apiKey ? encryptApiKey(apiKey) : null;
+
+    const [result] = await db.execute(
+      'INSERT INTO portal_user_integrations (portal_user_id, name, url, api_key_encrypted) VALUES (?, ?, ?, ?)',
+      [portalUser.id, name, url, apiKeyEncrypted]
+    );
+    res.json({ ok: true, integration: { id: result.insertId, name, url, created_at: new Date() } });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/my/integrations/:id', authRequired, async (req, res) => {
+  try {
+    const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
+    if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
+
+    const [[existing]] = await db.execute(
+      'SELECT id FROM portal_user_integrations WHERE id = ? AND portal_user_id = ?',
+      [req.params.id, portalUser.id]
+    );
+    if (!existing) return res.status(404).json({ error: 'Integration not found' });
+
+    const name = String(req.body?.name || '').trim().slice(0, 64);
+    const url = String(req.body?.url || '').trim().slice(0, 512);
+    const apiKey = req.body?.api_key !== undefined ? String(req.body.api_key).trim() : undefined;
+
+    if (!name) return res.status(400).json({ error: 'name is required' });
+    if (!url) return res.status(400).json({ error: 'url is required' });
+
+    if (apiKey !== undefined) {
+      const apiKeyEncrypted = apiKey ? encryptApiKey(apiKey) : null;
+      await db.execute(
+        'UPDATE portal_user_integrations SET name = ?, url = ?, api_key_encrypted = ? WHERE id = ?',
+        [name, url, apiKeyEncrypted, req.params.id]
+      );
+    } else {
+      await db.execute(
+        'UPDATE portal_user_integrations SET name = ?, url = ? WHERE id = ?',
+        [name, url, req.params.id]
+      );
+    }
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/my/integrations/:id', authRequired, async (req, res) => {
+  try {
+    const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
+    if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
+
+    const [result] = await db.execute(
+      'DELETE FROM portal_user_integrations WHERE id = ? AND portal_user_id = ?',
+      [req.params.id, portalUser.id]
+    );
+    if (result.affectedRows === 0) return res.status(404).json({ error: 'Integration not found' });
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ─── Internal: get integrations for a portal user (for agent-trigger) ─────────
+app.get('/api/internal/user/:portalUserId/integrations', requireInternalSecret, async (req, res) => {
+  try {
+    const [rows] = await db.execute(
+      'SELECT id, name, url, api_key_encrypted FROM portal_user_integrations WHERE portal_user_id = ? ORDER BY created_at ASC',
+      [req.params.portalUserId]
+    );
+    const integrations = rows.map(row => ({
+      id: row.id,
+      name: row.name,
+      url: row.url,
+      api_key: row.api_key_encrypted ? decryptApiKey(row.api_key_encrypted) : null,
+    }));
+    res.json({ ok: true, integrations });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ─── Ping an integration URL (server-side socket check) ───────────────────────
+app.post('/api/my/integrations/ping', authRequired, async (req, res) => {
+  try {
+    const url = String(req.body?.url || '').trim();
+    if (!url) return res.status(400).json({ error: 'url is required' });
+    const result = await checkSocketOnline(url, 3000);
+    res.json({ ok: true, ...result });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/hotel/join', authRequired, async (req, res) => {
@@ -2740,12 +2863,8 @@ app.post('/api/marketplace/teams/:id/install', authRequired, tierGate('pro'), as
 
 // ── User team config for agent-trigger ────────────────────────────────────────
 
-app.get('/api/internal/user-teams/:id/config', async (req, res) => {
+app.get('/api/internal/user-teams/:id/config', requireInternalSecret, async (req, res) => {
   try {
-    const secret = req.headers['x-internal-secret'];
-    if (PORTAL_INTERNAL_SECRET && secret !== PORTAL_INTERNAL_SECRET) {
-      return res.status(403).json({ error: 'Forbidden' });
-    }
     const userTeamId = Number(req.params.id);
     const [[team]] = await db.execute('SELECT * FROM user_teams WHERE id=?', [userTeamId]);
     if (!team) return res.status(404).json({ error: 'User team not found' });
@@ -2755,6 +2874,168 @@ app.get('/api/internal/user-teams/:id/config', async (req, res) => {
        WHERE utm.user_team_id = ?`, [userTeamId]
     );
     res.json({ ok: true, team, members, flow: null, templates: [] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Marketplace Export / Import (dev only) ────────────────────────────────────
+
+// Export a marketplace team as a complete portable JSON bundle
+app.get('/api/dev/marketplace/teams/:id/export', authRequired, devRequired, async (req, res) => {
+  try {
+    const [[team]] = await db.execute('SELECT * FROM agent_teams WHERE id = ?', [req.params.id]);
+    if (!team) return res.status(404).json({ error: 'Team not found' });
+
+    // Personas + their team-member role
+    const [members] = await db.execute(
+      `SELECT p.name, p.role, p.capabilities, p.description, p.prompt, p.figure_type, p.figure,
+              atm.role AS member_role
+       FROM agent_team_members atm
+       JOIN agent_personas p ON p.id = atm.persona_id
+       WHERE atm.team_id = ?`, [team.id]
+    );
+
+    // Flows linked to this team
+    const [flows] = await db.execute(
+      `SELECT f.name, f.description, f.tasks_json, f.allowed_tools_json
+       FROM agent_flows f
+       JOIN agent_team_flows atf ON atf.flow_id = f.id
+       WHERE atf.team_id = ?`, [team.id]
+    );
+
+    // Room templates
+    const [templates] = await db.execute(
+      'SELECT bot_name, room_id, x, y, rot FROM agent_room_templates WHERE team_id = ?',
+      [team.id]
+    );
+
+    const safeParse = (v) => { try { return JSON.parse(v || '[]'); } catch { return []; } };
+
+    const bundle = {
+      version: '1.0',
+      exported_at: new Date().toISOString(),
+      team: {
+        name: team.name,
+        description: team.description || '',
+        orchestrator_prompt: team.orchestrator_prompt || '',
+        execution_mode: team.execution_mode || 'concurrent',
+        tasks_json: safeParse(team.tasks_json),
+        language: team.language || 'en',
+      },
+      personas: members.map(m => ({
+        name: m.name,
+        role: m.role || '',
+        capabilities: m.capabilities || '',
+        description: m.description || '',
+        prompt: m.prompt || '',
+        figure_type: m.figure_type || 'agent-m',
+        figure: m.figure || '',
+        member_role: m.member_role || '',
+      })),
+      flows: flows.map(f => ({
+        name: f.name,
+        description: f.description || '',
+        tasks_json: safeParse(f.tasks_json),
+        allowed_tools_json: safeParse(f.allowed_tools_json),
+      })),
+      room_templates: templates.map(t => ({
+        bot_name: t.bot_name || '',
+        room_id: t.room_id,
+        x: t.x, y: t.y, rot: t.rot,
+      })),
+    };
+
+    const filename = team.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}-team.json"`);
+    res.setHeader('Content-Type', 'application/json');
+    res.send(JSON.stringify(bundle, null, 2));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Import a marketplace team bundle (upsert — safe to run multiple times)
+app.post('/api/dev/marketplace/teams/import', authRequired, devRequired, async (req, res) => {
+  try {
+    const { team: t, personas = [], flows = [], room_templates = [] } = req.body;
+    if (!t?.name) return res.status(400).json({ error: 'Bundle missing team.name' });
+
+    const devUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
+    const userId = devUser?.id ?? null;
+
+    const tasksJson = JSON.stringify(Array.isArray(t.tasks_json) ? t.tasks_json : []);
+
+    // ── Upsert team ──
+    await db.execute(
+      `INSERT INTO agent_teams (name, description, orchestrator_prompt, execution_mode, tasks_json, language, created_by_user_id)
+       VALUES (?,?,?,?,?,?,?)
+       ON DUPLICATE KEY UPDATE
+         description=VALUES(description), orchestrator_prompt=VALUES(orchestrator_prompt),
+         execution_mode=VALUES(execution_mode), tasks_json=VALUES(tasks_json),
+         language=VALUES(language), updated_at=CURRENT_TIMESTAMP`,
+      [t.name, t.description||'', t.orchestrator_prompt||'', t.execution_mode||'concurrent', tasksJson, t.language||'en', userId]
+    );
+    const [[teamRow]] = await db.execute('SELECT id FROM agent_teams WHERE name = ?', [t.name]);
+    const teamId = teamRow.id;
+
+    // ── Upsert personas + link to team ──
+    const linkedPersonaIds = [];
+    for (const p of personas) {
+      if (!p.name) continue;
+      await db.execute(
+        `INSERT INTO agent_personas (name, role, capabilities, description, prompt, figure_type, figure, created_by_user_id)
+         VALUES (?,?,?,?,?,?,?,?)
+         ON DUPLICATE KEY UPDATE
+           role=VALUES(role), capabilities=VALUES(capabilities), description=VALUES(description),
+           prompt=VALUES(prompt), figure_type=VALUES(figure_type), figure=VALUES(figure),
+           updated_at=CURRENT_TIMESTAMP`,
+        [p.name, p.role||'', p.capabilities||'', p.description||'', p.prompt||'', p.figure_type||'agent-m', p.figure||'', userId]
+      );
+      const [[pRow]] = await db.execute('SELECT id FROM agent_personas WHERE name = ?', [p.name]);
+      linkedPersonaIds.push({ id: pRow.id, member_role: p.member_role || '' });
+    }
+
+    // Re-link members
+    await db.execute('DELETE FROM agent_team_members WHERE team_id = ?', [teamId]);
+    for (const { id: personaId, member_role } of linkedPersonaIds) {
+      await db.execute(
+        'INSERT IGNORE INTO agent_team_members (team_id, persona_id, role) VALUES (?,?,?)',
+        [teamId, personaId, member_role]
+      );
+    }
+
+    // ── Upsert flows + link to team ──
+    await db.execute('DELETE FROM agent_team_flows WHERE team_id = ?', [teamId]);
+    let flowsUpserted = 0;
+    for (const f of flows) {
+      if (!f.name) continue;
+      await db.execute(
+        `INSERT INTO agent_flows (name, description, tasks_json, allowed_tools_json, created_by_user_id)
+         VALUES (?,?,?,?,?)
+         ON DUPLICATE KEY UPDATE
+           description=VALUES(description), tasks_json=VALUES(tasks_json),
+           allowed_tools_json=VALUES(allowed_tools_json), updated_at=CURRENT_TIMESTAMP`,
+        [f.name, f.description||'', JSON.stringify(f.tasks_json||[]), JSON.stringify(f.allowed_tools_json||[]), userId]
+      );
+      const [[fRow]] = await db.execute('SELECT id FROM agent_flows WHERE name = ?', [f.name]);
+      if (fRow) {
+        await db.execute('INSERT IGNORE INTO agent_team_flows (team_id, flow_id) VALUES (?,?)', [teamId, fRow.id]);
+        flowsUpserted++;
+      }
+    }
+
+    // ── Upsert room templates ──
+    let templatesUpserted = 0;
+    if (room_templates.length > 0) {
+      await db.execute('DELETE FROM agent_room_templates WHERE team_id = ?', [teamId]);
+      for (const rt of room_templates) {
+        if (!rt.bot_name) continue;
+        await db.execute(
+          'INSERT INTO agent_room_templates (team_id, bot_name, room_id, x, y, rot) VALUES (?,?,?,?,?,?)',
+          [teamId, rt.bot_name, rt.room_id||0, rt.x||0, rt.y||0, rt.rot||0]
+        );
+        templatesUpserted++;
+      }
+    }
+
+    res.json({ ok: true, team_id: teamId, personas_upserted: linkedPersonaIds.length, flows_upserted: flowsUpserted, templates_upserted: templatesUpserted });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -2872,12 +3153,8 @@ app.get('/api/agents/status', authRequired, async (req, res) => {
 
 // ── Internal endpoint for agent-trigger ────────────────────────────────────
 
-app.get('/api/internal/teams/:id/config', async (req, res) => {
+app.get('/api/internal/teams/:id/config', requireInternalSecret, async (req, res) => {
   try {
-    const secret = req.headers['x-internal-secret'];
-    if (PORTAL_INTERNAL_SECRET && secret !== PORTAL_INTERNAL_SECRET) {
-      return res.status(403).json({ error: 'Forbidden' });
-    }
     const teamId = Number(req.params.id);
     const flowId = req.query.flow_id ? Number(req.query.flow_id) : null;
     const [[team]] = await db.execute('SELECT * FROM agent_teams WHERE id=?', [teamId]);

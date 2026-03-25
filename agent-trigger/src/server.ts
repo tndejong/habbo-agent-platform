@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { spawn } from "node:child_process";
-import { readFileSync, writeFileSync, existsSync, unlinkSync, appendFileSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, unlinkSync, appendFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 const PORT = parseInt(process.env.HABBO_AGENT_TRIGGER_PORT ?? "3004");
@@ -149,6 +149,62 @@ async function fetchUserMcpToken(portalUserId: number): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+interface IntegrationRow {
+  id: number;
+  name: string;
+  url: string;
+  api_key: string | null;
+}
+
+async function fetchUserIntegrations(portalUserId: number): Promise<IntegrationRow[]> {
+  if (!portalUserId) return [];
+  try {
+    const res = await fetch(`${PORTAL_URL}/api/internal/user/${portalUserId}/integrations`, {
+      headers: { "X-Internal-Secret": PORTAL_INTERNAL_SECRET },
+    });
+    if (!res.ok) return [];
+    const data = await res.json() as { ok: boolean; integrations: IntegrationRow[] };
+    return data.integrations ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Builds a per-run temp directory with a .mcp.json that merges:
+ * - The hotel MCP server (authenticated with the user's MCP token)
+ * - Any external integrations the user has configured
+ * Returns the temp dir path; caller is responsible for cleanup.
+ */
+function createRunMcpDir(roomId: number, userMcpToken: string | null, integrations: IntegrationRow[]): string {
+  const runDir = `/tmp/hotel-run-${roomId}-${Date.now()}`;
+  mkdirSync(runDir, { recursive: true });
+
+  const mcpServers: Record<string, unknown> = {};
+
+  // Hotel MCP server — always included; token determines per-user access
+  const effectiveToken = userMcpToken || MCP_API_KEY;
+  const hotelMcpEntry: Record<string, unknown> = { url: MCP_ENDPOINT };
+  if (effectiveToken) {
+    hotelMcpEntry.headers = { Authorization: `Bearer ${effectiveToken}` };
+  }
+  mcpServers["hotel-mcp"] = hotelMcpEntry;
+
+  // User's external integrations
+  for (const integration of integrations) {
+    const entry: Record<string, unknown> = { url: integration.url };
+    if (integration.api_key) {
+      entry.headers = { Authorization: `Bearer ${integration.api_key}` };
+    }
+    // Sanitize name to a valid key (no spaces / special chars)
+    const key = integration.name.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-");
+    mcpServers[key] = entry;
+  }
+
+  writeFileSync(join(runDir, ".mcp.json"), JSON.stringify({ mcpServers }, null, 2));
+  return runDir;
 }
 
 function log(line: string) {
@@ -500,15 +556,18 @@ This ensures each agent is visually represented by their hotel bot in the room.`
   return basePrompt + injectionBlock;
 }
 
-function runOrchestratorWithPrompt(prompt: string, roomId: number, from: string, userApiKey?: string | null, onChild?: (child: ReturnType<typeof spawn>) => void, userMcpToken?: string | null): Promise<string> {
+function runOrchestratorWithPrompt(prompt: string, roomId: number, from: string, userApiKey?: string | null, onChild?: (child: ReturnType<typeof spawn>) => void, userMcpToken?: string | null, integrations: IntegrationRow[] = []): Promise<string> {
   return new Promise((resolve, reject) => {
     // Clear any stale stop signal from a previous run in this room
     const sf = stopFile(roomId);
     if (existsSync(sf)) unlinkSync(sf);
 
+    // Build a per-run temp dir with .mcp.json so each run gets its own MCP config
+    const runDir = createRunMcpDir(roomId, userMcpToken ?? null, integrations);
+
     const claudeBin = process.env.CLAUDE_BIN ?? "claude";
     const child = spawn(claudeBin, ["-p", "--dangerously-skip-permissions", "--no-session-persistence", "--output-format", "stream-json", "--verbose"], {
-      cwd: PROJECT_DIR,
+      cwd: runDir,
       env: {
         ...process.env,
         ANTHROPIC_API_KEY: userApiKey || (process.env.ANTHROPIC_API_KEY ?? ""),
@@ -523,6 +582,11 @@ function runOrchestratorWithPrompt(prompt: string, roomId: number, from: string,
       },
       stdio: ["pipe", "pipe", "pipe"],
     });
+
+    // Cleanup run dir when the child exits
+    const cleanupRunDir = () => {
+      try { rmSync(runDir, { recursive: true, force: true }); } catch { /* non-fatal */ }
+    };
 
     // Auto-kill after RUN_TIMEOUT_MS
     const timeoutHandle = setTimeout(() => {
@@ -569,6 +633,7 @@ function runOrchestratorWithPrompt(prompt: string, roomId: number, from: string,
 
     child.on("close", (code: number | null) => {
       clearTimeout(timeoutHandle);
+      cleanupRunDir();
       if (code === 0) {
         resolve(stdout.trim().slice(-200) || "Team session complete.");
       } else {
@@ -814,16 +879,18 @@ const server = Bun.serve({
       }
       triggeringRooms.add(roomId);
 
-      // Fetch team config + user API key + user MCP token in parallel
+      // Fetch team config + user credentials + user integrations in parallel
       const isUserTeam = body.user_team === true;
       let config: TeamConfig;
       let userApiKey: string | null = null;
       let userMcpToken: string | null = null;
+      let userIntegrations: IntegrationRow[] = [];
       try {
-        [config, userApiKey, userMcpToken] = await Promise.all([
+        [config, userApiKey, userMcpToken, userIntegrations] = await Promise.all([
           isUserTeam ? fetchUserTeamConfig(teamId) : fetchTeamConfig(teamId, flowId),
           fetchUserAnthropicKey(portalUserId),
           fetchUserMcpToken(portalUserId),
+          fetchUserIntegrations(portalUserId),
         ]);
       } catch (err: any) {
         triggeringRooms.delete(roomId);
@@ -833,6 +900,7 @@ const server = Bun.serve({
 
       if (userApiKey) logRoom(roomId, `[trigger] Using API key from portal user ${portalUserId}`);
       if (userMcpToken) logRoom(roomId, `[trigger] Using MCP token from portal user ${portalUserId}`);
+      if (userIntegrations.length > 0) logRoom(roomId, `[trigger] Loaded ${userIntegrations.length} integration(s) for user ${portalUserId}`);
 
       const prompt = buildPromptFromConfig(config, roomId, triggeredBy);
       const run: RunContext = { roomId, startTime: new Date(), from: triggeredBy, child: null, timeoutHandle: null };
@@ -846,7 +914,7 @@ const server = Bun.serve({
       // Run in background
       runOrchestratorWithPrompt(prompt, roomId, triggeredBy, userApiKey, (child) => {
         const r = activeRuns.get(roomId); if (r) r.child = child;
-      }, userMcpToken)
+      }, userMcpToken, userIntegrations)
         .then((summary) => {
           activeRuns.delete(roomId);
           cleanupRoomFiles(roomId);
