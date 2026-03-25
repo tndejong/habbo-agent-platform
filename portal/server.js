@@ -766,128 +766,109 @@ async function ensureAgentSeedData() {
   const [[{ cnt }]] = await db.execute('SELECT COUNT(*) AS cnt FROM agent_teams');
   if (cnt > 0) return;
 
-  console.log('Seeding agent personas and Sprint Team...');
+  console.log('Seeding agent personas and Waitlist Team...');
 
-  const TOM_PROMPT = `You are Tom, a senior backend developer at The Pixel Office. You're hanging out in Habbo Hotel between sprints.
+  const SANDER_PROMPT = `You are Sander, a researcher at The Pixel Office. Your job is to read data sources and extract structured information for your teammates.
 
-Personality: pragmatic, direct, occasionally cryptic. Short sentences. Gets excited about clean code and good data models. Drops into Dutch occasionally.
+Your task: read the Notion page named "Waitlist" and extract all entries from it.
+- Use the available Notion MCP tools to find and read the "Waitlist" page.
+- Extract every entry: at minimum the name and email address of each person.
+- Write your findings as the result of your task in the shared task file — a clean JSON array of objects with at least { name, email } per entry.
+- Be thorough: do not skip entries. If a field is missing for an entry, include it as null.
+- Once done, return your extracted list as your final output.`;
 
-Setup:
-1. Find your bot: call list_bots and find the bot named "Tom". If not found, use deploy_bot to create it in the target room with figure_type "agent-m".
-2. Note the room_id and bot_id for all further calls.
+  const TOM_PROMPT = `You are Tom, an outreach specialist at The Pixel Office. Your job is to take a waitlist and send a personalised email to each person on it.
 
-Behavior loop (repeat until /tmp/hotel-team-stop exists):
-1. Call get_room_chat_log (room_id from above, limit 20)
-2. Find messages newer than your last-seen timestamp
-3. React to: Sander's messages, players mentioning "code"/"backend"/"sprint"/"API"/your name
-4. Every 5 iterations: share something you're working on (keep it brief, 1-2 sentences)
-5. Check if /tmp/hotel-team-stop exists — if yes, say a short goodbye via talk_bot and EXIT
+Your task: use the waitlist data provided by Sander (available in the shared task context) and send an email to each person via SMTP.
+- For each entry in the waitlist, send a personalised email welcoming them and letting them know they are on the waitlist.
+- Use the SMTP credentials available in your environment to send the emails.
+- Keep emails short, warm, and personal — address the recipient by name.
+- After sending all emails, report how many were sent successfully and list any failures.`;
 
-Rules:
-- Keep all messages SHORT (1-3 sentences max)
-- Do NOT call delete_bot when stopping — bots stay deployed
-- Track last-seen timestamp to avoid reacting to old messages`;
-
-  const SANDER_PROMPT = `You are Sander, a frontend developer at The Pixel Office. You love design systems and clean UX.
-
-Personality: enthusiastic, asks lots of questions, collaborative. Builds on what Tom says. Mentions React, CSS, design. Occasional Dutch phrases.
-
-Setup:
-1. Find your bot: call list_bots and find the bot named "Sander". If not found, use deploy_bot to create it in the target room with figure_type "citizen-m".
-2. Note the room_id and bot_id for all further calls.
-
-Behavior loop (repeat until /tmp/hotel-team-stop exists):
-1. Call get_room_chat_log (room_id from above, limit 20)
-2. Find messages newer than your last-seen timestamp
-3. React to: Tom's messages, players mentioning "design"/"frontend"/"UI"/"CSS"/your name
-4. Every 5 iterations: ask Tom a question about his work, or share a frontend insight
-5. Check if /tmp/hotel-team-stop exists — if yes, say a short goodbye via talk_bot and EXIT
-
-Rules:
-- Keep all messages SHORT (1-3 sentences max)
-- Do NOT call delete_bot when stopping — bots stay deployed
-- Track last-seen timestamp to avoid reacting to old messages`;
-
-  const SPRINT_ORCHESTRATOR = `You are the orchestrator for the Sprint Team at The Pixel Office Hotel.
-Target room: {{ROOM_ID}}
+  const WAITLIST_ORCHESTRATOR = `You are the orchestrator for the Waitlist Team.
 Triggered by: {{TRIGGERED_BY}}
 
-Launch ALL agents CONCURRENTLY in a single Agent tool call. Do not launch them one by one.
+{{TASKS}}
 
 {{PERSONAS}}
 
-Launch now — all agents in ONE message.`;
+Run the tasks in order. Each agent receives the previous task's output as context.`;
 
   // Insert personas
-  const [tomResult] = await db.execute(
-    'INSERT IGNORE INTO agent_personas (name, description, prompt, figure_type, bot_name) VALUES (?,?,?,?,?)',
-    ['Tom', 'Backend developer — pragmatic, direct', TOM_PROMPT, 'agent-m', 'Tom']
+  await db.execute(
+    'INSERT IGNORE INTO agent_personas (name, role, capabilities, description, prompt, figure_type, bot_name) VALUES (?,?,?,?,?,?,?)',
+    [
+      'Sander',
+      'Researcher',
+      '- Read and extract data from Notion pages\n- Structure raw data into clean JSON\n- Identify names, emails and other contact details',
+      'Researcher — reads Notion pages and extracts structured data',
+      SANDER_PROMPT,
+      'citizen-m',
+      ''
+    ]
   );
-  const [sanderResult] = await db.execute(
-    'INSERT IGNORE INTO agent_personas (name, description, prompt, figure_type, bot_name) VALUES (?,?,?,?,?)',
-    ['Sander', 'Frontend developer — enthusiastic, design-focused', SANDER_PROMPT, 'citizen-m', 'Sander']
+  await db.execute(
+    'INSERT IGNORE INTO agent_personas (name, role, capabilities, description, prompt, figure_type, bot_name) VALUES (?,?,?,?,?,?,?)',
+    [
+      'Tom',
+      'Outreach specialist',
+      '- Send personalised emails via SMTP\n- Write warm, concise outreach messages\n- Handle email delivery and report results',
+      'Outreach specialist — sends personalised emails to waitlist entries',
+      TOM_PROMPT,
+      'agent-m',
+      ''
+    ]
   );
 
-  // Get actual IDs (in case INSERT IGNORE skipped due to existing)
-  const [[tomRow]] = await db.execute('SELECT id FROM agent_personas WHERE name=?', ['Tom']);
-  const [[sanderRow]] = await db.execute('SELECT id FROM agent_personas WHERE name=?', ['Sander']);
+  // Get actual IDs
+  const [[sander]] = await db.execute('SELECT id FROM agent_personas WHERE name=?', ['Sander']);
+  const [[tom]]    = await db.execute('SELECT id FROM agent_personas WHERE name=?', ['Tom']);
 
-  // Insert Sprint Team
-  const [teamResult] = await db.execute(
-    'INSERT IGNORE INTO agent_teams (name, description, orchestrator_prompt) VALUES (?,?,?)',
-    ['Sprint Team', 'Tom & Sander discuss sprint work in the hotel', SPRINT_ORCHESTRATOR]
+  // Insert Waitlist Team
+  await db.execute(
+    'INSERT IGNORE INTO agent_teams (name, description, orchestrator_prompt, execution_mode) VALUES (?,?,?,?)',
+    ['Waitlist Team', 'Sander reads the Notion waitlist, Tom emails everyone on it', WAITLIST_ORCHESTRATOR, 'shared']
   );
 
-  const [[teamRow]] = await db.execute('SELECT id FROM agent_teams WHERE name=?', ['Sprint Team']);
+  const [[teamRow]] = await db.execute('SELECT id FROM agent_teams WHERE name=?', ['Waitlist Team']);
   if (!teamRow) return;
 
   // Link members
-  if (tomRow) {
-    await db.execute(
-      'INSERT IGNORE INTO agent_team_members (team_id, persona_id, role) VALUES (?,?,?)',
-      [teamRow.id, tomRow.id, 'backend']
-    );
-  }
-  if (sanderRow) {
-    await db.execute(
-      'INSERT IGNORE INTO agent_team_members (team_id, persona_id, role) VALUES (?,?,?)',
-      [teamRow.id, sanderRow.id, 'frontend']
-    );
-  }
+  if (sander) await db.execute('INSERT IGNORE INTO agent_team_members (team_id, persona_id, role) VALUES (?,?,?)', [teamRow.id, sander.id, 'researcher']);
+  if (tom)    await db.execute('INSERT IGNORE INTO agent_team_members (team_id, persona_id, role) VALUES (?,?,?)', [teamRow.id, tom.id, 'outreach']);
 
-  // Insert Daily Sprint Review flow
+  // Insert Waitlist flow
   await db.execute(
-    'INSERT IGNORE INTO agent_flows (name, description, tasks_json) VALUES (?,?,?)',
-    ['Daily Sprint Review', 'Tom and Sander discuss current sprint progress', JSON.stringify([
-      { id: 1, title: 'Standup', description: 'Share what you worked on yesterday and today' },
-      { id: 2, title: 'Blockers', description: 'Mention any blockers or open questions' },
-      { id: 3, title: 'Player interaction', description: 'Engage with hotel visitors who join the conversation' }
-    ])]
+    'INSERT IGNORE INTO agent_flows (name, description, tasks_json, allowed_tools_json) VALUES (?,?,?,?)',
+    [
+      'Waitlist Outreach',
+      'Read the Notion waitlist and send a welcome email to everyone on it',
+      JSON.stringify([
+        {
+          id: 't1',
+          title: 'Read Notion waitlist',
+          description: 'Find the Notion page named "Waitlist" and extract all entries as a JSON array with at minimum { name, email } per entry.',
+          assign_to: 'Sander',
+          depends_on: []
+        },
+        {
+          id: 't2',
+          title: 'Send welcome emails',
+          description: 'Take the waitlist extracted by Sander and send a personalised welcome email to each person via SMTP. Report how many were sent successfully.',
+          assign_to: 'Tom',
+          depends_on: ['t1']
+        }
+      ]),
+      JSON.stringify(['notion', 'smtp'])
+    ]
   );
 
-  const [[flowRow]] = await db.execute('SELECT id FROM agent_flows WHERE name=?', ['Daily Sprint Review']);
+  const [[flowRow]] = await db.execute('SELECT id FROM agent_flows WHERE name=?', ['Waitlist Outreach']);
   if (flowRow) {
-    await db.execute(
-      'INSERT IGNORE INTO agent_team_flows (team_id, flow_id) VALUES (?,?)',
-      [teamRow.id, flowRow.id]
-    );
+    await db.execute('INSERT IGNORE INTO agent_team_flows (team_id, flow_id) VALUES (?,?)', [teamRow.id, flowRow.id]);
   }
 
-  console.log('Sprint Team seeded with Tom & Sander personas.');
-
-  const [[{ packCnt }]] = await db.execute('SELECT COUNT(*) AS packCnt FROM agent_packs');
-  if (packCnt === 0) {
-    await db.execute(
-      'INSERT IGNORE INTO agent_packs (name, description, room_id, pack_source_url, role_assignments) VALUES (?,?,?,?,?)',
-      [
-        'Sprint Team',
-        'Daily sprint review with Jira integration',
-        50,
-        'https://raw.githubusercontent.com/tndejong/habbo-agent-platform/main/agents/sprint-team.md',
-        JSON.stringify({ sprint_planner: 'Tom', issue_tracker: 'Sander' })
-      ]
-    );
-  }
+  console.log('Waitlist Team seeded with Sander & Tom personas.');
 }
 
 async function createHabboUser(username) {
