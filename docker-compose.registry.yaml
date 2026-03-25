@@ -139,6 +139,7 @@ services:
   nitro-imager:
     container_name: nitro-imager
     image: ghcr.io/${HABBO_OWNER_OR_ORG}/nitro-imager:latest
+    platform: ${HOTEL_NITRO_IMAGER_PLATFORM:-${HABBO_NITRO_IMAGER_PLATFORM:-linux/amd64}}
     volumes:
       - volume-nitro-assets:/assets:ro
     environment:
