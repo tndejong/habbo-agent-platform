@@ -7,6 +7,7 @@ description: >
 category: hotel
 tags: [hotel, setup, deploy, bot]
 mcp_tools: [list_bots, deploy_bot]
+requires_integration: habbo-mcp
 difficulty: beginner
 version: "1.0"
 ---

@@ -15,18 +15,6 @@
         ]
       }
     ],
-    "PostToolUse": [
-      {
-        "matcher": ".*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node /app/hooks/hotel_narrator.mjs post_tool_use",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
     "SubagentStart": [
       {
         "matcher": ".*",

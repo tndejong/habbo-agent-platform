@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
 import { HabboFigure } from './HabboFigure'
 import { SkillDetail } from './MarketplaceView'
+import { SkillChip } from './SkillChip'
 import { api } from '../utils/api'
 import { friendlyFetchError } from '../utils/fetchError'
 import { useToast } from '../ToastContext'
@@ -16,6 +17,7 @@ import {
   Shield, Wifi, WifiOff, Key, ServerCog, Terminal, RefreshCw, User, Eye, EyeOff,
   Phone, Copy, Sparkles, LinkIcon,
   Bold, Italic, Code, Heading2, List, ListOrdered, Link, Minus,
+  FileText, Building2, Workflow, ExternalLink,
 } from 'lucide-react'
 
 // ── Markdown Editor ───────────────────────────────────────────────────────
@@ -801,6 +803,7 @@ export function AccountView({ me, onKeyUpdated, onTokenChange }) {
 
 export function AgentDashboard({ me, onActiveTeamChange, onStopTeam, mcpTokenVersion }) {
   const [tab, setTab] = useState('teams')
+  const [inSubpage, setInSubpage] = useState(false)
   const [activeTeam, setActiveTeam] = useState(null)  // my own active run
   const [stopping, setStopping] = useState(false)
 
@@ -881,8 +884,8 @@ export function AgentDashboard({ me, onActiveTeamChange, onStopTeam, mcpTokenVer
 
   return (
     <div className="bg-background">
-      {/* Sub-tabs */}
-      <div className="border-b border-border bg-card/30">
+      {/* Sub-tabs — hidden when inside a team/persona detail page */}
+      {!inSubpage && <div className="border-b border-border bg-card/30">
         <div className="max-w-5xl mx-auto px-4 flex gap-1">
           {tabs.map(({ id, label, icon: Icon, badge }) => (
             <button
@@ -904,7 +907,7 @@ export function AgentDashboard({ me, onActiveTeamChange, onStopTeam, mcpTokenVer
             </button>
           ))}
         </div>
-      </div>
+      </div>}
 
       {/* Error banner */}
       {teamError && (
@@ -933,7 +936,7 @@ export function AgentDashboard({ me, onActiveTeamChange, onStopTeam, mcpTokenVer
       {/* Content */}
       <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
         {/* IntegratedView is always mounted so state (teams, personas, modals) persists across tab switches */}
-        <IntegratedView me={me} onAfterTrigger={fetchLogs} liveBots={liveBots} mcpTokenVersion={mcpTokenVersion} activeSection={tab} />
+        <IntegratedView me={me} onAfterTrigger={fetchLogs} liveBots={liveBots} mcpTokenVersion={mcpTokenVersion} activeSection={tab} onSubpageChange={setInSubpage} />
         {/* Live log panel — shown when a team is running */}
         {activeTeam && (
           <LogPanel lines={logLines} paused={logPaused} onTogglePause={() => setLogPaused(p => !p)} />
@@ -946,7 +949,9 @@ export function AgentDashboard({ me, onActiveTeamChange, onStopTeam, mcpTokenVer
 // ── Log Panel ─────────────────────────────────────────────────────────────
 
 const LOG_COLORS = {
-  '[tool→]':    'text-info',
+  '[session]':  'text-violet-400 font-medium',
+  '[mcp:ok]':   'text-emerald-400',
+  '[mcp:err]':  'text-destructive',
   '[tool←]':    'text-emerald-400',
   '[think]':    'text-warning/80',
   '[done]':     'text-green-400 font-semibold',
@@ -958,7 +963,60 @@ const LOG_COLORS = {
   '[timeout]':  'text-destructive',
 }
 
+// Claude CLI emits MCP tools as mcp__<server-name>__<tool-name>
+// Map server-name substrings → integration display key
+const MCP_SERVER_INTEGRATION_MAP = [
+  ['hotel',      'habbo'],
+  ['habbo',      'habbo'],
+  ['atlassian',  'atlassian'],
+  ['jira',       'atlassian'],
+  ['confluence', 'atlassian'],
+  ['notion',     'notion'],
+  ['resend',     'resend'],
+  ['email',      'resend'],
+  ['web',        'web'],
+  ['browser',    'web'],
+]
+
+const INTEGRATION_DISPLAY = {
+  habbo:     { label: 'Habbo MCP',      color: 'text-amber-400',   bg: 'bg-amber-500/10 border-amber-500/20',   toolColor: 'text-amber-300' },
+  atlassian: { label: 'Jira/Confluence', color: 'text-blue-400',   bg: 'bg-blue-500/10 border-blue-500/20',     toolColor: 'text-blue-300' },
+  notion:    { label: 'Notion',          color: 'text-neutral-300', bg: 'bg-neutral-500/10 border-neutral-500/20', toolColor: 'text-neutral-300' },
+  resend:    { label: 'Email',           color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20', toolColor: 'text-emerald-300' },
+  web:       { label: 'Web',             color: 'text-sky-400',     bg: 'bg-sky-500/10 border-sky-500/20',       toolColor: 'text-sky-300' },
+  mcp:       { label: 'MCP',            color: 'text-violet-400',   bg: 'bg-violet-500/10 border-violet-500/20', toolColor: 'text-violet-300' },
+}
+
+function extractToolName(line) {
+  const m = line.match(/\[tool→\]\s+(\S+)/)
+  return m ? m[1] : null
+}
+
+/**
+ * Given a raw tool name from the log (e.g. "mcp__hotel-mcp__talk_bot" or "Read"),
+ * returns the integration key or null for built-in tools.
+ */
+function toolToIntegrationKey(toolName) {
+  if (!toolName) return null
+  // Claude CLI prefixes MCP tools as mcp__<server-name>__<tool>
+  const mcpMatch = toolName.match(/^mcp__(.+?)__/)
+  if (mcpMatch) {
+    const server = mcpMatch[1].toLowerCase()
+    for (const [keyword, key] of MCP_SERVER_INTEGRATION_MAP) {
+      if (server.includes(keyword)) return key
+    }
+    return 'mcp' // unknown MCP server — still colour it distinctly
+  }
+  return null // built-in tool (Read, Write, Bash, Agent…) — no integration
+}
+
 function logColor(line) {
+  if (line.includes('[tool→]')) {
+    const tool = extractToolName(line)
+    const intKey = toolToIntegrationKey(tool)
+    if (intKey) return INTEGRATION_DISPLAY[intKey].toolColor
+    return 'text-info'
+  }
   for (const [key, cls] of Object.entries(LOG_COLORS)) {
     if (line.includes(key)) return cls
   }
@@ -975,12 +1033,78 @@ export function LogPanel({ lines, paused, onTogglePause }) {
     }
   }, [lines, autoScroll, paused])
 
+  // Derive which MCP servers were configured at session start from [session] line
+  const configuredServers = useMemo(() => {
+    const sessionLine = lines.find(l => l.includes('[session]'))
+    const match = sessionLine?.match(/configured:\s*(.+)/)
+    if (!match) return []
+    return match[1].split(',').map(s => s.trim()).filter(Boolean)
+  }, [lines])
+
+  // Derive which integrations appeared in this run from [tool→] lines
+  const usedIntegrations = useMemo(() => {
+    const seen = new Set()
+    for (const line of lines) {
+      if (!line.includes('[tool→]')) continue
+      const intKey = toolToIntegrationKey(extractToolName(line))
+      if (intKey) seen.add(intKey)
+    }
+    return [...seen]
+  }, [lines])
+
+  // Count tool calls per integration for tooltip
+  const toolCallCounts = useMemo(() => {
+    const counts = {}
+    for (const line of lines) {
+      if (!line.includes('[tool→]')) continue
+      const intKey = toolToIntegrationKey(extractToolName(line))
+      if (intKey) counts[intKey] = (counts[intKey] || 0) + 1
+    }
+    return counts
+  }, [lines])
+
   return (
     <div className="rounded-xl border border-border overflow-hidden">
-      <div className="px-4 py-2.5 border-b border-border bg-card flex items-center gap-2">
-        <Terminal className="w-3.5 h-3.5 text-primary" />
+      <div className="px-4 py-2.5 border-b border-border bg-card flex items-center gap-2 flex-wrap">
+        <Terminal className="w-3.5 h-3.5 text-primary flex-shrink-0" />
         <span className="text-xs font-semibold text-foreground">Agent Logs</span>
-        <span className="text-xs text-muted-foreground ml-1">— live output from running team</span>
+        <span className="text-xs text-muted-foreground">— live output from running team</span>
+
+        {/* Configured MCP server badges — shown as soon as session starts */}
+        {configuredServers.length > 0 && (
+          <div className="flex items-center gap-1 flex-wrap">
+            <span className="text-[10px] text-violet-400/60 uppercase tracking-wider font-medium">MCP</span>
+            {configuredServers.map(server => (
+              <span
+                key={server}
+                className="inline-flex items-center text-[10px] font-medium px-1.5 py-0.5 rounded border bg-violet-500/10 border-violet-500/20 text-violet-400"
+              >
+                {server}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {/* Integration call badges — appear as tools are called */}
+        {usedIntegrations.length > 0 && (
+          <div className="flex items-center gap-1 flex-wrap">
+            {usedIntegrations.map(key => {
+              const meta = INTEGRATION_DISPLAY[key]
+              const count = toolCallCounts[key] || 0
+              return (
+                <span
+                  key={key}
+                  title={`${count} ${key} tool call${count !== 1 ? 's' : ''}`}
+                  className={`inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded border ${meta.bg} ${meta.color}`}
+                >
+                  {meta.label}
+                  <span className="opacity-60">×{count}</span>
+                </span>
+              )
+            })}
+          </div>
+        )}
+
         <div className="ml-auto flex items-center gap-2">
           <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
             <input type="checkbox" checked={autoScroll} onChange={e => setAutoScroll(e.target.checked)} className="w-3 h-3 accent-primary" />
@@ -1002,9 +1126,18 @@ export function LogPanel({ lines, paused, onTogglePause }) {
         {lines.map((line, i) => {
           const ts = line.slice(0, 24)
           const rest = line.slice(25)
+          // For tool→ lines, annotate with a tiny integration tag
+          const toolName = line.includes('[tool→]') ? extractToolName(line) : null
+          const intKey = toolToIntegrationKey(toolName)
+          const intMeta = intKey ? INTEGRATION_DISPLAY[intKey] : null
           return (
             <div key={i} className="flex gap-2 leading-5">
               <span className="text-muted-foreground/40 flex-shrink-0 select-none">{ts.slice(11, 23)}</span>
+              {intMeta && (
+                <span className={`flex-shrink-0 text-[9px] font-medium px-1 rounded border self-center ${intMeta.bg} ${intMeta.color}`}>
+                  {intMeta.label}
+                </span>
+              )}
               <span className={logColor(line)}>{rest}</span>
             </div>
           )
@@ -1135,7 +1268,7 @@ export function OnlineView() {
 
 // ── Integrated View ───────────────────────────────────────────────────────
 
-function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0, activeSection = 'teams' }) {
+function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0, activeSection = 'teams', onSubpageChange }) {
   const [personas, setPersonas] = useState([])
   const [teams, setTeams] = useState([])
   const [bots, setBots] = useState([])
@@ -1146,11 +1279,18 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0
   // teamPage / personaPage: null = list view, { item: null } = new, { item: {...} } = edit
   const [teamPage, setTeamPage] = useState(null)
   const [personaPage, setPersonaPage] = useState(null)
+
+  // Tell the parent whether we're inside a subpage so it can hide the tab navbar
+  useEffect(() => {
+    onSubpageChange?.(teamPage !== null || personaPage !== null)
+  }, [teamPage, personaPage, onSubpageChange])
+
   // confirmModal: null | { title, message, onConfirm }
   const [confirmModal, setConfirmModal] = useState(null)
   const [deployingIds, setDeployingIds] = useState(new Set())
   const [hasApiKey, setHasApiKey] = useState(true)
   const [hasMcpToken, setHasMcpToken] = useState(true)
+  const [integrations, setIntegrations] = useState([])
 
   useEscapeKey(() => {
     if (personaPage) { setPersonaPage(null); return }
@@ -1167,13 +1307,14 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0
     setLoading(true)
     setError(null)
     try {
-      const [pd, bd, td, rd, kd, md] = await Promise.all([
+      const [pd, bd, td, rd, kd, md, intd] = await Promise.all([
         api('/api/my/personas'),
         api('/api/agents/bots?mine=true'),
         api('/api/my/teams'),
         api('/api/hotel/rooms'),
         api('/api/account/api-keys'),
         api('/api/mcp/tokens'),
+        api('/api/my/integrations'),
       ])
       setPersonas(pd.personas || [])
       setBots(bd.bots || [])
@@ -1183,6 +1324,7 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0
       setHasApiKey(!!(kd.keys || []).find(k => k.provider === 'anthropic'))
       const now = new Date()
       setHasMcpToken(!!(md.tokens || []).find(t => t.status === 'active' && new Date(t.expires_at) > now))
+      setIntegrations(intd.integrations || [])
     } catch (e) {
       setError(friendlyFetchError(e))
     } finally {
@@ -1349,6 +1491,7 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0
           isDev={canManageTeams}
           onSave={saveTeam}
           onCancel={() => setTeamPage(null)}
+          onViewPersona={canManagePersonas ? (persona) => { setTeamPage(null); setPersonaPage({ persona }) } : undefined}
         />
       </div>
     )
@@ -1406,6 +1549,7 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0
                 deploying={deployingIds.has(team.id)}
                 hasApiKey={hasApiKey}
                 hasMcpToken={hasMcpToken}
+                integrations={integrations}
                 onDeploy={(roomId) => deployTeam(team, roomId)}
                 onRoomChange={(roomId) => saveTeamRoomId(team.id, roomId)}
                 onEdit={canManageTeams ? () => setTeamPage({ team }) : undefined}
@@ -1496,7 +1640,34 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0
 
 // ── Integrated Team Card ───────────────────────────────────────────────────
 
-function IntegratedTeamCard({ team, canManage = false, bots = [], liveBots = [], rooms = [], deploying, hasApiKey = true, hasMcpToken = true, onDeploy, onRoomChange, onEdit, onDelete }) {
+// Must match the server-side INTEGRATION_KEYWORDS map in portal/server.js
+const INTEGRATION_KEYWORDS = {
+  notion:    ['notion'],
+  plane:     ['plane.so', 'plane mcp', 'planemcp'],
+  linear:    ['linear.app', 'linear mcp'],
+  atlassian: ['atlassian', 'jira', 'confluence'],
+  airtable:  ['airtable'],
+  supabase:  ['supabase'],
+  resend:    ['resend'],
+  github:    ['github'],
+  slack:     ['slack mcp', 'slack integration'],
+}
+
+function detectRequiredIntegrations(team, members) {
+  const texts = []
+  try {
+    const tasks = JSON.parse(team.tasks_json || '[]')
+    texts.push(...tasks.map(t => `${t.title || ''} ${t.description || ''}`))
+  } catch { /* skip */ }
+  if (members) texts.push(...members.map(m => `${m.capabilities || ''} ${m.prompt || ''}`))
+  if (team.orchestrator_prompt) texts.push(team.orchestrator_prompt)
+  const combined = texts.join(' ').toLowerCase()
+  return Object.entries(INTEGRATION_KEYWORDS)
+    .filter(([, kws]) => kws.some(kw => combined.includes(kw)))
+    .map(([name]) => name)
+}
+
+function IntegratedTeamCard({ team, canManage = false, bots = [], liveBots = [], rooms = [], deploying, hasApiKey = true, hasMcpToken = true, integrations = [], onDeploy, onRoomChange, onEdit, onDelete }) {
   const [members, setMembers] = useState(team.members || null)
   const [selectedRoomId, setSelectedRoomId] = useState(team.default_room_id || rooms[0]?.id || null)
 
@@ -1532,7 +1703,24 @@ function IntegratedTeamCard({ team, canManage = false, bots = [], liveBots = [],
   const hasUnlinked = useMemo(() => members !== null && members.some(m => !m.bot_name?.trim()), [members])
   const noKey = !hasApiKey
   const noMcpToken = !hasMcpToken
-  const blocked = !!roomConflict || hasUnlinked || noKey || noMcpToken
+
+  // Members whose bot_name is set but no longer exists in the hotel bot list
+  const missingBots = useMemo(() => {
+    if (!members || !bots) return []
+    return members
+      .filter(m => m.bot_name?.trim() && !bots.some(b => b.name?.toLowerCase() === m.bot_name.toLowerCase()))
+      .map(m => m.bot_name)
+  }, [members, bots])
+
+  // Detect which integrations the team tasks/capabilities require and cross-check
+  // against the user's connected integrations (by name substring match).
+  const missingIntegrations = useMemo(() => {
+    const required = detectRequiredIntegrations(team, members)
+    const connectedNames = integrations.map(i => i.name?.toLowerCase() ?? '')
+    return required.filter(svc => !connectedNames.some(n => n.includes(svc)))
+  }, [team, members, integrations])
+
+  const blocked = !!roomConflict || hasUnlinked || missingBots.length > 0 || noKey || noMcpToken || missingIntegrations.length > 0
 
   const memberCount = team.member_count ?? (members || []).length
 
@@ -1540,33 +1728,43 @@ function IntegratedTeamCard({ team, canManage = false, bots = [], liveBots = [],
     <div className={`rounded-xl border bg-card overflow-hidden card-lift flex flex-col ${roomConflict ? 'border-warning/40' : 'border-border'}`}>
 
       {/* Status banner */}
-      {(roomConflict || hasUnlinked || noKey || noMcpToken) && (
+      {(roomConflict || hasUnlinked || missingBots.length > 0 || noKey || noMcpToken || missingIntegrations.length > 0) && (
         <div className="flex items-center gap-2 px-4 py-2 bg-warning/10 border-b border-warning/20 text-xs text-warning">
           <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
           {roomConflict
             ? `${roomConflict} — can't deploy to room ${selectedRoomId}`
             : hasUnlinked ? 'Some agents are missing a bot link'
+            : missingBots.length > 0 ? `Bot${missingBots.length > 1 ? 's' : ''} deleted from hotel: ${missingBots.join(', ')} — reassign or recreate them`
             : noKey ? 'Add an Anthropic API key in Settings'
-            : 'Generate an MCP token in Settings → MCP Tokens'}
+            : noMcpToken ? 'Generate an MCP token in Settings → MCP Tokens'
+            : `Missing integrations: ${missingIntegrations.map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(', ')} — connect them in Settings → Integrations`}
         </div>
       )}
 
       {/* Card body */}
       <div className="p-4 flex flex-col gap-4 flex-1">
 
-        {/* Header */}
-        <div className="flex items-start gap-3">
+        {/* Header — clicking the header area navigates to edit */}
+        <div
+          className={`flex items-start gap-3 ${onEdit ? 'cursor-pointer group/header' : ''}`}
+          onClick={onEdit}
+          role={onEdit ? 'button' : undefined}
+          tabIndex={onEdit ? 0 : undefined}
+          onKeyDown={onEdit ? (e) => { if (e.key === 'Enter' || e.key === ' ') onEdit() } : undefined}
+        >
           <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center flex-shrink-0">
             <Users className="w-5 h-5 text-primary" />
           </div>
           <div className="flex-1 min-w-0">
-            <p className="font-semibold text-sm text-foreground leading-tight">{team.name}</p>
+            <p className={`font-semibold text-sm leading-tight transition-colors ${onEdit ? 'text-foreground group-hover/header:text-primary' : 'text-foreground'}`}>
+              {team.name}
+            </p>
             {team.description && (
               <p className="text-xs text-muted-foreground mt-1 line-clamp-2 leading-relaxed">{team.description}</p>
             )}
           </div>
           {canManage && (
-            <div className="flex items-center gap-0.5 flex-shrink-0">
+            <div className="flex items-center gap-0.5 flex-shrink-0" onClick={e => e.stopPropagation()}>
               <button onClick={onEdit} aria-label="Edit team"
                 className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
                 <Edit2 className="w-3.5 h-3.5" />
@@ -1579,8 +1777,8 @@ function IntegratedTeamCard({ team, canManage = false, bots = [], liveBots = [],
           )}
         </div>
 
-        {/* Members strip */}
-        <div className="flex-1">
+        {/* Members strip — also part of the clickable area */}
+        <div className={`flex-1 ${onEdit ? 'cursor-pointer' : ''}`} onClick={onEdit}>
           {members === null ? (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading agents…
@@ -1641,7 +1839,13 @@ function IntegratedTeamCard({ team, canManage = false, bots = [], liveBots = [],
           <button
             onClick={() => onDeploy(selectedRoomId)}
             disabled={deploying || blocked}
-            title={noKey ? 'Add an Anthropic API key in Settings' : noMcpToken ? 'Generate an MCP token in Settings → MCP Tokens' : roomConflict || undefined}
+            title={
+              noKey ? 'Add an Anthropic API key in Settings'
+              : noMcpToken ? 'Generate an MCP token in Settings → MCP Tokens'
+              : missingBots.length > 0 ? `Bots deleted from hotel: ${missingBots.join(', ')}`
+              : missingIntegrations.length > 0 ? `Connect integrations first: ${missingIntegrations.join(', ')}`
+              : roomConflict || undefined
+            }
             className={`flex items-center gap-1.5 text-xs px-4 py-1.5 rounded-md font-medium transition-colors flex-shrink-0 ${
               blocked
                 ? 'bg-warning/20 text-warning border border-warning/30 cursor-not-allowed'
@@ -1675,12 +1879,21 @@ const TEAM_LANGUAGES = [
   { code: 'sv', label: '🇸🇪 Swedish' },
 ]
 
-function IntegratedTeamForm({ team, personas, rooms = [], isDev, onSave, onCancel }) {
+const VERBOSITY_LABELS = [
+  { value: 3,  label: 'Minimal', desc: 'Start/finish announcements only. Very few mid-session updates.' },
+  { value: 6,  label: 'Normal',  desc: 'Start/finish plus key actions narrated in the room.' },
+  { value: 10, label: 'Verbose', desc: 'Everything narrated — every action reported in the room.' },
+]
+
+function IntegratedTeamForm({ team, personas, rooms = [], isDev, onSave, onCancel, onViewPersona }) {
   const [name, setName] = useState(team?.name || '')
   const [description, setDescription] = useState(team?.description || '')
   const [orchestratorPrompt, setOrchestratorPrompt] = useState(team?.orchestrator_prompt || '')
   const [executionMode, setExecutionMode] = useState(team?.execution_mode || 'shared')
   const [language, setLanguage] = useState(team?.language || 'en')
+  const [narratorVerbosity, setNarratorVerbosity] = useState(
+    typeof team?.narrator_verbosity === 'number' ? Math.max(3, team.narrator_verbosity) : 3
+  )
   const [defaultRoomId, setDefaultRoomId] = useState(team?.default_room_id || '')
   const parsedTasks = (() => {
     try {
@@ -1728,7 +1941,7 @@ function IntegratedTeamForm({ team, personas, rooms = [], isDev, onSave, onCance
     setSaving(true)
     setFormError(null)
     try {
-      const savedTeam = await onSave({ name: name.trim(), description: description.trim(), orchestrator_prompt: orchestratorPrompt.trim(), execution_mode: executionMode, tasks_json: tasks, language, default_room_id: defaultRoomId || undefined })
+      const savedTeam = await onSave({ name: name.trim(), description: description.trim(), orchestrator_prompt: orchestratorPrompt.trim(), execution_mode: executionMode, tasks_json: tasks, language, narrator_verbosity: narratorVerbosity, default_room_id: defaultRoomId || undefined })
       const teamId = savedTeam?.id || team?.id
       if (teamId) {
         // Sync members: fetch current from server, diff, add/remove
@@ -1740,6 +1953,15 @@ function IntegratedTeamForm({ team, personas, rooms = [], isDev, onSave, onCance
         for (const sm of serverMembers) {
           if (!members.find(m => m.id === sm.id)) {
             await api(`/api/my/teams/${teamId}/members/${sm.id}`, { method: 'DELETE' })
+          }
+        }
+        // Update role for existing members whose role changed
+        for (const m of members) {
+          if (m.id) {
+            const server = serverMembers.find(s => s.id === m.id)
+            if (server && server.role !== m.role) {
+              await api(`/api/my/teams/${teamId}/members/${m.id}`, { method: 'PATCH', body: { role: m.role } })
+            }
           }
         }
         // Add new members (those without an id yet)
@@ -1770,311 +1992,489 @@ function IntegratedTeamForm({ team, personas, rooms = [], isDev, onSave, onCance
     setMembers(prev => prev.filter((_, i) => i !== idx))
   }
 
+  const [activeTab, setActiveTab] = useState('general')
+  const [skillDetail, setSkillDetail] = useState(null)
+  const { catalog } = useSkillsCatalog()
+
+  const TABS = [
+    { id: 'general',        label: 'General',       icon: FileText },
+    { id: 'hotel',          label: 'Hotel',         icon: Building2 },
+    { id: 'orchestration',  label: 'Orchestration', icon: Workflow },
+    { id: 'members',        label: 'Members',       icon: Users },
+  ]
+
   return (
-    <div className="rounded-xl border border-border bg-card p-5 space-y-4">
-      <h3 className="font-semibold text-sm text-foreground">{team ? 'Edit Team' : 'New Team'}</h3>
+    <div className="rounded-xl border border-border bg-card overflow-hidden">
 
-      {formError && (
-        <div className="flex items-center gap-2 text-xs text-destructive bg-destructive/10 border border-destructive/20 px-3 py-2 rounded-lg">
-          <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" /> {formError}
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div className="space-y-1">
-          <label className="text-xs font-medium text-foreground">Team Name</label>
-          <input
-            value={name}
-            onChange={e => setName(e.target.value)}
-            placeholder="Sprint Team"
-            className="w-full text-sm bg-background border border-border rounded-md px-3 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
-          />
-        </div>
-        <div className="space-y-1">
-          <label className="text-xs font-medium text-foreground">Description</label>
-          <input
-            value={description}
-            onChange={e => setDescription(e.target.value)}
-            placeholder="What does this team do?"
-            className="w-full text-sm bg-background border border-border rounded-md px-3 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
-          />
-        </div>
-      </div>
-
-      {/* Execution mode */}
-      <div className="space-y-1.5">
-        <label className="text-xs font-medium text-foreground">Execution Mode</label>
-        <div className="flex gap-2 flex-wrap">
-          {[
-            { value: 'shared', label: 'Shared Task List', desc: 'Agents collaborate via a shared task file, claiming tasks as they go' },
-            { value: 'concurrent', label: 'Concurrent', desc: 'All agents start at the same time, work independently' },
-            { value: 'sequential', label: 'Sequential', desc: 'Tasks run one after another, each waits for the previous' },
-          ].map(m => (
+      {/* Tab bar */}
+      <div className="flex border-b border-border bg-muted/20">
+        {TABS.map(tab => {
+          const Icon = tab.icon
+          return (
             <button
-              key={m.value}
+              key={tab.id}
               type="button"
-              title={m.desc}
-              onClick={() => setExecutionMode(m.value)}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium border transition-colors ${executionMode === m.value ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted/40 text-muted-foreground border-border hover:border-primary/40 hover:text-foreground'}`}
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium border-b-2 transition-colors ${
+                activeTab === tab.id
+                  ? 'border-primary text-foreground'
+                  : 'border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/40'
+              }`}
             >
-              {m.label}
+              <Icon className="w-3.5 h-3.5" />
+              {tab.label}
             </button>
-          ))}
-        </div>
-        <p className="text-xs text-muted-foreground/60">
-          {executionMode === 'concurrent' && 'Each agent receives their full persona prompt and works independently. Best for parallel, independent tasks.'}
-          {executionMode === 'sequential' && 'The orchestrator spawns one agent at a time and waits for each to finish before starting the next.'}
-          {executionMode === 'shared' && 'The orchestrator writes a shared task JSON file. Agents read it, claim tasks matching their capabilities, and write results back. Best for team collaboration.'}
-        </p>
+          )
+        })}
       </div>
 
-      {/* Language selector */}
-      <div className="space-y-1.5">
-        <label className="text-xs font-medium text-foreground">
-          Hotel language
-          <span className="ml-1.5 text-muted-foreground font-normal">— bots will speak this language in the room</span>
-        </label>
-        <select
-          value={language}
-          onChange={e => setLanguage(e.target.value)}
-          className="w-full bg-muted/40 border border-border rounded-md px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-        >
-          {TEAM_LANGUAGES.map(l => (
-            <option key={l.code} value={l.code}>{l.label}</option>
-          ))}
-        </select>
-      </div>
+      <div className="p-5 space-y-4">
 
-      {/* Default room */}
-      <div className="space-y-1.5">
-        <label className="text-xs font-medium text-foreground">
-          Default room
-          <span className="ml-1.5 text-muted-foreground font-normal">— used when triggered by phone or SMS</span>
-        </label>
-        {rooms.length > 0 ? (
-          <select
-            value={defaultRoomId ?? ''}
-            onChange={e => setDefaultRoomId(Number(e.target.value))}
-            className="w-full bg-muted/40 border border-border rounded-md px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-          >
-            <option value="">— pick a room —</option>
-            {rooms.map(r => (
-              <option key={r.id} value={r.id}>#{r.id} — {r.name}</option>
-            ))}
-          </select>
-        ) : (
-          <input
-            type="number"
-            min="1"
-            value={defaultRoomId ?? ''}
-            onChange={e => setDefaultRoomId(Number(e.target.value) || '')}
-            placeholder="Room ID (e.g. 201)"
-            className="w-full bg-muted/40 border border-border rounded-md px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-          />
-        )}
-      </div>
-
-      {/* Task editor — shown for sequential + shared modes */}
-      {executionMode !== 'concurrent' && (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <label className="text-xs font-medium text-foreground">
-              Tasks
-              <span className="ml-1.5 text-muted-foreground font-normal">— define the work steps for this team run</span>
-            </label>
-            <button
-              type="button"
-              onClick={addTask}
-              className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors"
-            >
-              <Plus className="w-3.5 h-3.5" /> Add task
-            </button>
+        {formError && (
+          <div className="flex items-center gap-2 text-xs text-destructive bg-destructive/10 border border-destructive/20 px-3 py-2 rounded-lg">
+            <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" /> {formError}
           </div>
+        )}
 
-          {tasks.length === 0 && (
-            <div className="text-xs text-muted-foreground/60 border border-dashed border-border rounded-lg px-4 py-3 text-center">
-              No tasks yet — click "Add task" to define what this team should do
+        {/* ── General ── */}
+        {activeTab === 'general' && (
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-foreground">Team Name</label>
+              <input
+                value={name}
+                onChange={e => setName(e.target.value)}
+                placeholder="Sprint Team"
+                className="w-full text-sm bg-background border border-border rounded-md px-3 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+              />
             </div>
-          )}
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-foreground">Description</label>
+              <textarea
+                value={description}
+                onChange={e => setDescription(e.target.value)}
+                placeholder="What does this team do?"
+                rows={3}
+                className="w-full text-sm bg-background border border-border rounded-md px-3 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 resize-y"
+              />
+            </div>
+          </div>
+        )}
 
-          <div className="space-y-2">
-            {tasks.map((task, idx) => (
-              <div key={task.id} className="rounded-lg border border-border bg-muted/20 p-3 space-y-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-mono text-muted-foreground w-6 shrink-0">{task.id}</span>
-                  <input
-                    value={task.title}
-                    onChange={e => updateTask(idx, 'title', e.target.value)}
-                    placeholder="Task title…"
-                    className="flex-1 text-sm bg-background border border-border rounded px-2 py-1 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
-                  />
-                  <input
-                    value={task.assign_to || ''}
-                    onChange={e => updateTask(idx, 'assign_to', e.target.value)}
-                    placeholder="Assign to (optional)"
-                    className="w-36 text-sm bg-background border border-border rounded px-2 py-1 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
-                  />
-                  <button type="button" onClick={() => removeTask(idx)} className="text-muted-foreground hover:text-destructive transition-colors shrink-0">
-                    <X className="w-3.5 h-3.5" />
+        {/* ── Hotel ── */}
+        {activeTab === 'hotel' && (
+          <div className="space-y-4">
+            {/* Language */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-foreground">
+                Hotel language
+                <span className="ml-1.5 text-muted-foreground font-normal">— bots will speak this language in the room</span>
+              </label>
+              <select
+                value={language}
+                onChange={e => setLanguage(e.target.value)}
+                className="w-full bg-muted/40 border border-border rounded-md px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              >
+                {TEAM_LANGUAGES.map(l => (
+                  <option key={l.code} value={l.code}>{l.label}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Bot narration verbosity */}
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-foreground">
+                Bot narration
+                <span className="ml-1.5 text-muted-foreground font-normal">— how much bots say in the room</span>
+              </label>
+              <input
+                type="range"
+                min="3"
+                max="10"
+                step="1"
+                value={narratorVerbosity}
+                onChange={e => setNarratorVerbosity(Number(e.target.value))}
+                className="w-full accent-primary"
+              />
+              <div className="flex justify-between text-xs text-muted-foreground">
+                {VERBOSITY_LABELS.map(v => (
+                  <span key={v.value} className={narratorVerbosity >= v.value && (v.value === VERBOSITY_LABELS[VERBOSITY_LABELS.length - 1].value || narratorVerbosity < VERBOSITY_LABELS[VERBOSITY_LABELS.indexOf(v) + 1]?.value) ? 'text-foreground font-medium' : ''}>
+                    {v.label}
+                  </span>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {VERBOSITY_LABELS.reduce((best, v) => narratorVerbosity >= v.value ? v : best, VERBOSITY_LABELS[0]).desc}
+              </p>
+            </div>
+
+            {/* Default room */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-foreground">
+                Default room
+                <span className="ml-1.5 text-muted-foreground font-normal">— used when triggered by phone or SMS</span>
+              </label>
+              {rooms.length > 0 ? (
+                <select
+                  value={defaultRoomId ?? ''}
+                  onChange={e => setDefaultRoomId(Number(e.target.value))}
+                  className="w-full bg-muted/40 border border-border rounded-md px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                >
+                  <option value="">— pick a room —</option>
+                  {rooms.map(r => (
+                    <option key={r.id} value={r.id}>#{r.id} — {r.name}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="number"
+                  min="1"
+                  value={defaultRoomId ?? ''}
+                  onChange={e => setDefaultRoomId(Number(e.target.value) || '')}
+                  placeholder="Room ID (e.g. 201)"
+                  className="w-full bg-muted/40 border border-border rounded-md px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── Orchestration ── */}
+        {activeTab === 'orchestration' && (
+          <div className="space-y-4">
+            {/* Execution mode */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-foreground">Execution Mode</label>
+              <div className="flex gap-2 flex-wrap">
+                {[
+                  { value: 'shared',     label: 'Shared Task List', desc: 'Agents collaborate via a shared task file, claiming tasks as they go' },
+                  { value: 'concurrent', label: 'Concurrent',       desc: 'All agents start at the same time, work independently' },
+                  { value: 'sequential', label: 'Sequential',       desc: 'Tasks run one after another, each waits for the previous' },
+                ].map(m => (
+                  <button
+                    key={m.value}
+                    type="button"
+                    title={m.desc}
+                    onClick={() => setExecutionMode(m.value)}
+                    className={`px-3 py-1.5 rounded-md text-xs font-medium border transition-colors ${executionMode === m.value ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted/40 text-muted-foreground border-border hover:border-primary/40 hover:text-foreground'}`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground/60">
+                {executionMode === 'concurrent' && 'Each agent receives their full persona prompt and works independently. Best for parallel, independent tasks.'}
+                {executionMode === 'sequential' && 'The orchestrator spawns one agent at a time and waits for each to finish before starting the next.'}
+                {executionMode === 'shared' && 'The orchestrator writes a shared task JSON file. Agents read it, claim tasks matching their capabilities, and write results back. Best for team collaboration.'}
+              </p>
+            </div>
+
+            {/* Orchestrator prompt */}
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-foreground">Orchestrator Prompt <span className="text-muted-foreground font-normal">(optional — auto-generated if empty)</span></label>
+              <div className="flex flex-wrap gap-2 mb-1.5">
+                {[
+                  { tag: '{{ROOM_ID}}',      desc: 'Hotel room number (e.g. 201)' },
+                  { tag: '{{TRIGGERED_BY}}', desc: 'Who triggered the run (Habbo username)' },
+                  { tag: '{{TASKS}}',        desc: 'Rendered task instructions (sequential steps or shared task list JSON)' },
+                  { tag: '{{PERSONAS}}',     desc: 'All team members — names, roles, bots & instructions' },
+                ].map(({ tag, desc }) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    title={desc}
+                    onClick={() => setOrchestratorPrompt(p => p + (p.endsWith('\n') || !p ? '' : '\n') + tag)}
+                    className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-muted/60 border border-border hover:border-primary/50 hover:bg-muted transition-colors group"
+                  >
+                    <code className="text-xs text-primary font-mono">{tag}</code>
+                    <span className="text-xs text-muted-foreground group-hover:text-foreground/70 hidden sm:inline">{desc}</span>
+                  </button>
+                ))}
+              </div>
+              <MarkdownEditor
+                value={orchestratorPrompt}
+                onChange={setOrchestratorPrompt}
+                placeholder="You are the orchestrator for this team. Launch all agents CONCURRENTLY…"
+                rows={16}
+              />
+              <p className="text-xs text-muted-foreground/60 mt-1">
+                Variables are replaced by the system before Claude sees the prompt.
+                <code className="text-primary/70 ml-1">{'{{PERSONAS}}'}</code> expands to all team members with their full instructions.
+              </p>
+            </div>
+
+            {/* Task editor — shown for sequential + shared modes */}
+            {executionMode !== 'concurrent' && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-medium text-foreground">
+                    Tasks
+                    <span className="ml-1.5 text-muted-foreground font-normal">— define the work steps for this team run</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={addTask}
+                    className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors"
+                  >
+                    <Plus className="w-3.5 h-3.5" /> Add task
                   </button>
                 </div>
-                <textarea
-                  value={task.description || ''}
-                  onChange={e => updateTask(idx, 'description', e.target.value)}
-                  placeholder="What should the agent do? What input does it need?"
-                  rows={2}
-                  className="w-full text-xs bg-background border border-border rounded px-2 py-1.5 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/40 resize-y"
-                />
-                {idx > 0 && (
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-xs text-muted-foreground">Depends on:</span>
-                    {tasks.slice(0, idx).map(dep => (
-                      <button
-                        key={dep.id}
-                        type="button"
-                        onClick={() => toggleDepend(idx, dep.id)}
-                        className={`text-xs px-2 py-0.5 rounded border transition-colors ${(task.depends_on || []).includes(dep.id) ? 'bg-primary/20 border-primary/50 text-primary' : 'border-border text-muted-foreground hover:border-primary/30'}`}
-                      >
-                        {dep.id}: {dep.title || 'untitled'}
-                      </button>
-                    ))}
+
+                {tasks.length === 0 && (
+                  <div className="text-xs text-muted-foreground/60 border border-dashed border-border rounded-lg px-4 py-3 text-center">
+                    No tasks yet — click "Add task" to define what this team should do
                   </div>
                 )}
+
+                <div className="space-y-2">
+                  {tasks.map((task, idx) => (
+                    <div key={task.id} className="rounded-lg border border-border bg-muted/20 p-3 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-mono text-muted-foreground w-6 shrink-0">{task.id}</span>
+                        <input
+                          value={task.title}
+                          onChange={e => updateTask(idx, 'title', e.target.value)}
+                          placeholder="Task title…"
+                          className="flex-1 text-sm bg-background border border-border rounded px-2 py-1 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+                        />
+                        <select
+                          value={task.assign_to || ''}
+                          onChange={e => updateTask(idx, 'assign_to', e.target.value)}
+                          className="w-36 text-sm bg-background border border-border rounded px-2 py-1 text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+                        >
+                          <option value="">— auto assign —</option>
+                          {members.map(m => (
+                            <option key={m.persona_id} value={m.role || m.name}>
+                              {m.name}{m.role ? ` (${m.role})` : ''}
+                            </option>
+                          ))}
+                        </select>
+                        <button type="button" onClick={() => removeTask(idx)} className="text-muted-foreground hover:text-destructive transition-colors shrink-0">
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                      <textarea
+                        value={task.description || ''}
+                        onChange={e => updateTask(idx, 'description', e.target.value)}
+                        placeholder="What should the agent do? What input does it need?"
+                        rows={4}
+                        className="w-full text-xs bg-background border border-border rounded px-2 py-1.5 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/40 resize-y"
+                      />
+                      {idx > 0 && (
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs text-muted-foreground">Depends on:</span>
+                          {tasks.slice(0, idx).map(dep => (
+                            <button
+                              key={dep.id}
+                              type="button"
+                              onClick={() => toggleDepend(idx, dep.id)}
+                              className={`text-xs px-2 py-0.5 rounded border transition-colors ${(task.depends_on || []).includes(dep.id) ? 'bg-primary/20 border-primary/50 text-primary' : 'border-border text-muted-foreground hover:border-primary/30'}`}
+                            >
+                              {dep.id}: {dep.title || 'untitled'}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {tasks.length > 0 && (
+                  <p className="text-xs text-muted-foreground/60">
+                    {executionMode === 'shared' && 'Use {{TASKS}} in the orchestrator prompt to inject the task file write instructions.'}
+                    {executionMode === 'sequential' && 'Use {{TASKS}} in the orchestrator prompt to inject the ordered task list.'}
+                  </p>
+                )}
               </div>
-            ))}
+            )}
           </div>
+        )}
 
-          {tasks.length > 0 && (
-            <p className="text-xs text-muted-foreground/60">
-              {executionMode === 'shared' && 'Use {{TASKS}} in the orchestrator prompt to inject the task file write instructions.'}
-              {executionMode === 'sequential' && 'Use {{TASKS}} in the orchestrator prompt to inject the ordered task list.'}
-            </p>
-          )}
-        </div>
-      )}
+        {/* ── Members ── */}
+        {activeTab === 'members' && (
+          <div className="space-y-4">
+            {members.length > 0 && (
+              <div className="space-y-3">
+                {members.map((m, idx) => {
+                  const persona = personas.find(p => String(p.id) === String(m.persona_id))
+                  const figure = persona?.figure || ''
+                  const slugs = parseSkillSlugs(persona?.capabilities)
+                  const skillEntries = slugs.slice(0, 6).map(slug => {
+                    const found = catalog.find(s => s.slug === slug)
+                    return found ? { slug: found.slug, title: found.title } : { slug, title: slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) }
+                  })
+                  const requiredIntegrations = [...new Set(
+                    slugs.map(slug => catalog.find(s => s.slug === slug)?.requires_integration).filter(Boolean)
+                  )]
 
-      <div className="space-y-1">
-        <label className="text-xs font-medium text-foreground">Orchestrator Prompt <span className="text-muted-foreground font-normal">(optional — auto-generated if empty)</span></label>
-        <div className="flex flex-wrap gap-2 mb-1.5">
-          {[
-            { tag: '{{ROOM_ID}}', desc: 'Hotel room number (e.g. 201)' },
-            { tag: '{{TRIGGERED_BY}}', desc: 'Who triggered the run (Habbo username)' },
-            { tag: '{{TASKS}}', desc: 'Rendered task instructions (sequential steps or shared task list JSON)' },
-            { tag: '{{PERSONAS}}', desc: 'All team members — names, roles, bots & instructions' },
-          ].map(({ tag, desc }) => (
-            <button
-              key={tag}
-              type="button"
-              title={desc}
-              onClick={() => setOrchestratorPrompt(p => p + (p.endsWith('\n') || !p ? '' : '\n') + tag)}
-              className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-muted/60 border border-border hover:border-primary/50 hover:bg-muted transition-colors group"
-            >
-              <code className="text-xs text-primary font-mono">{tag}</code>
-              <span className="text-xs text-muted-foreground group-hover:text-foreground/70 hidden sm:inline">{desc}</span>
-            </button>
-          ))}
-        </div>
-        <MarkdownEditor
-          value={orchestratorPrompt}
-          onChange={setOrchestratorPrompt}
-          placeholder="You are the orchestrator for this team. Launch all agents CONCURRENTLY…"
-          rows={16}
-        />
-        <p className="text-xs text-muted-foreground/60 mt-1">
-          Variables are replaced by the system before Claude sees the prompt — they are not filled in by AI.
-          <code className="text-primary/70 ml-1">{'{{PERSONAS}}'}</code> expands to all team members with their full instructions.
-        </p>
-      </div>
+                  return (
+                    <div key={idx} className="rounded-xl border border-border bg-muted/10 overflow-hidden flex gap-0">
+                      {/* Figure — click to open persona edit */}
+                      <div
+                        className={`flex flex-col items-center justify-start pt-3 px-3 pb-3 bg-secondary/30 border-r border-border flex-shrink-0 w-20 ${onViewPersona && persona ? 'cursor-pointer hover:bg-secondary/60 transition-colors' : ''}`}
+                        onClick={onViewPersona && persona ? () => onViewPersona(persona) : undefined}
+                        title={onViewPersona && persona ? `Edit ${m.name}` : undefined}
+                      >
+                        <HabboFigure figure={figure} size="lg" animate={true} />
+                        <span className={`mt-1.5 text-[10px] text-center leading-tight truncate w-full text-center ${onViewPersona && persona ? 'text-primary' : 'text-muted-foreground'}`}>
+                          {m.name}
+                        </span>
+                        {onViewPersona && persona && (
+                          <span className="text-[9px] text-primary/50 mt-0.5">Edit ↗</span>
+                        )}
+                      </div>
 
-      {/* Member management */}
-      <div className="space-y-2">
-        <div className="flex items-center gap-1.5">
-          <label className="text-xs font-medium text-foreground">Team Members</label>
-          <span className="text-muted-foreground font-normal text-xs">— agents that will be spawned in this team</span>
-        </div>
-        {members.length > 0 && (
-          <div className="border border-border rounded-lg divide-y divide-border">
-            <div className="flex items-center gap-3 px-3 py-1.5 bg-muted/30 rounded-t-lg">
-              <span className="text-xs text-muted-foreground flex-1">Agent</span>
-              <div className="flex items-center gap-1 w-32">
-                <span className="text-xs text-muted-foreground">Role in team</span>
-                <div className="relative group">
-                  <span className="w-3.5 h-3.5 rounded-full bg-muted-foreground/30 text-muted-foreground flex items-center justify-center text-[9px] font-bold cursor-help select-none">i</span>
-                  <div className="absolute bottom-full right-0 mb-1.5 w-56 bg-popover border border-border rounded-md px-2.5 py-2 text-xs text-muted-foreground shadow-lg opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50">
-                    <p className="font-medium text-foreground mb-0.5">Team role</p>
-                    <p>This label is used by the orchestrator to assign tasks and describe what this agent does <em>in this team</em>. It overrides the agent's job title in the orchestration prompt.</p>
-                  </div>
-                </div>
+                      {/* Content */}
+                      <div className="flex-1 min-w-0 p-3 space-y-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap mb-1">
+                              {persona?.role && (
+                                <span className="inline-flex items-center gap-1 text-[10px] bg-primary/10 text-primary border border-primary/20 rounded-full px-2 py-0.5">
+                                  {persona.role}
+                                </span>
+                              )}
+                              {onViewPersona && persona && (
+                                <button
+                                  type="button"
+                                  onClick={() => onViewPersona(persona)}
+                                  className="text-[10px] text-muted-foreground/60 hover:text-primary transition-colors"
+                                >
+                                  Edit persona →
+                                </button>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <label className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium whitespace-nowrap">Team role</label>
+                              <input
+                                value={m.role}
+                                onChange={e => setMembers(prev => prev.map((x, i) => i === idx ? { ...x, role: e.target.value } : x))}
+                                placeholder="e.g. reviewer"
+                                className="text-xs bg-background border border-border rounded px-2 py-0.5 text-foreground w-36 focus:outline-none focus:ring-1 focus:ring-primary"
+                              />
+                            </div>
+                          </div>
+                          <button type="button" onClick={() => removeMember(idx)} className="text-muted-foreground hover:text-destructive transition-colors flex-shrink-0 mt-0.5">
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        {skillEntries.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground/60 uppercase tracking-wider font-medium self-center">
+                              <Sparkles className="w-2.5 h-2.5" /> Skills
+                            </span>
+                            {skillEntries.map((skill, i) => (
+                              <SkillChip key={i} slug={skill.slug} title={skill.title} onViewFull={skill.slug ? setSkillDetail : undefined} />
+                            ))}
+                          </div>
+                        )}
+
+                        {requiredIntegrations.length > 0 && (
+                          <div className="flex flex-wrap gap-1 items-center">
+                            <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground/60 uppercase tracking-wider font-medium">
+                              <ExternalLink className="w-2.5 h-2.5" /> Needs
+                            </span>
+                            {requiredIntegrations.map(int => (
+                              <span key={int} className="inline-flex items-center gap-1 text-[10px] bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-md px-1.5 py-0.5 capitalize">
+                                {int.replace(/-/g, ' ')}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
-              <div className="w-3.5" />
-            </div>
-            {members.map((m, idx) => (
-              <div key={idx} className="flex items-center gap-3 px-3 py-2">
-                <div className="flex-1 min-w-0">
-                  <span className="text-sm font-medium text-foreground">{m.name}</span>
-                  {personas.find(p => String(p.id) === String(m.persona_id))?.role && (
-                    <span className="ml-2 text-xs text-muted-foreground/60 line-through">
-                      {personas.find(p => String(p.id) === String(m.persona_id))?.role}
-                    </span>
-                  )}
-                </div>
+            )}
+
+            {personas.filter(p => !members.find(m => String(m.persona_id) === String(p.id))).length > 0 && (
+              <div className="flex gap-2 items-center pt-1 border-t border-border">
+                <select
+                  value={addPersonaId}
+                  onChange={e => setAddPersonaId(e.target.value)}
+                  className="flex-1 bg-muted/40 border border-border rounded-md px-2 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                >
+                  <option value="">+ Add agent…</option>
+                  {personas.filter(p => !members.find(m => String(m.persona_id) === String(p.id))).map(p => (
+                    <option key={p.id} value={p.id}>{p.name}{p.role ? ` — ${p.role}` : ''}</option>
+                  ))}
+                </select>
                 <input
-                  value={m.role}
-                  onChange={e => setMembers(prev => prev.map((x, i) => i === idx ? { ...x, role: e.target.value } : x))}
-                  placeholder="e.g. backend"
-                  className="text-xs bg-background border border-border rounded px-2 py-1 text-foreground w-32 focus:outline-none focus:ring-1 focus:ring-primary"
+                  value={addRole}
+                  onChange={e => setAddRole(e.target.value)}
+                  placeholder="team role"
+                  className="w-28 text-xs bg-background border border-border rounded-md px-2 py-1.5 text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                 />
-                <button type="button" onClick={() => removeMember(idx)} className="text-muted-foreground hover:text-destructive transition-colors">
-                  <X className="w-3.5 h-3.5" />
+                <button
+                  type="button"
+                  onClick={addMember}
+                  disabled={!addPersonaId}
+                  className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 disabled:opacity-40 transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Add
                 </button>
               </div>
-            ))}
+            )}
+
+            {members.length === 0 && (
+              <div className="text-xs text-muted-foreground/60 border border-dashed border-border rounded-lg px-4 py-6 text-center">
+                No agents yet — use the selector above to add team members
+              </div>
+            )}
           </div>
         )}
-        {personas.filter(p => !members.find(m => String(m.persona_id) === String(p.id))).length > 0 && (
-          <div className="flex gap-2 items-center">
-            <select
-              value={addPersonaId}
-              onChange={e => setAddPersonaId(e.target.value)}
-              className="flex-1 bg-muted/40 border border-border rounded-md px-2 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-            >
-              <option value="">+ Add agent…</option>
-              {personas.filter(p => !members.find(m => String(m.persona_id) === String(p.id))).map(p => (
-                <option key={p.id} value={p.id}>{p.name}{p.role ? ` — ${p.role}` : ''}</option>
-              ))}
-            </select>
-            <input
-              value={addRole}
-              onChange={e => setAddRole(e.target.value)}
-              placeholder="team role"
-              className="w-28 text-xs bg-background border border-border rounded-md px-2 py-1.5 text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-            />
-            <button
-              type="button"
-              onClick={addMember}
-              disabled={!addPersonaId}
-              className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 disabled:opacity-40 transition-colors"
-            >
-              <Plus className="w-3.5 h-3.5" /> Add
-            </button>
-          </div>
-        )}
+
+        {/* Always-visible save/cancel */}
+        <div className="flex gap-2 pt-2 border-t border-border">
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="flex items-center gap-1.5 text-xs bg-primary text-primary-foreground px-4 py-2 rounded-md hover:bg-primary/90 disabled:opacity-60 transition-colors"
+          >
+            {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+          <button onClick={onCancel} className="text-xs border border-border px-4 py-2 rounded-md hover:bg-secondary transition-colors">
+            Cancel
+          </button>
+        </div>
       </div>
 
-      <div className="flex gap-2 pt-1">
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="flex items-center gap-1.5 text-xs bg-primary text-primary-foreground px-4 py-2 rounded-md hover:bg-primary/90 disabled:opacity-60 transition-colors"
-        >
-          {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
-          {saving ? 'Saving…' : 'Save'}
-        </button>
-        <button onClick={onCancel} className="text-xs border border-border px-4 py-2 rounded-md hover:bg-secondary transition-colors">
-          Cancel
-        </button>
-      </div>
+      <SkillDetailModal slug={skillDetail} onClose={() => setSkillDetail(null)} />
     </div>
+  )
+}
+
+// ── Skill Detail Modal (AgentDashboard context) ───────────────────────────
+// Opens the full SkillDetail page in a centered portal dialog.
+
+function SkillDetailModal({ slug, onClose }) {
+  const { catalog } = useSkillsCatalog()
+  useEscapeKey(onClose, !!slug)
+  if (!slug) return null
+  const skill = catalog.find(s => s.slug === slug) || { slug, title: slug.replace(/-/g, ' ') }
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+      onClick={e => { if (e.target === e.currentTarget) onClose() }}
+    >
+      <div className="bg-background border border-border rounded-2xl shadow-xl w-full max-w-3xl max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-end px-5 pt-4 flex-shrink-0">
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        <div className="px-5 pb-6 overflow-y-auto">
+          <SkillDetail skill={skill} onBack={onClose} />
+        </div>
+      </div>
+    </div>,
+    document.body
   )
 }
 
@@ -2088,8 +2488,7 @@ function PersonaCard({ persona, bots = [], onEdit, onDelete, onLinkBot }) {
   const [linking, setLinking] = useState(false)
   const [selectedBot, setSelectedBot] = useState(persona.bot_name || '')
   const [savingBot, setSavingBot] = useState(false)
-  const [skillDetail, setSkillDetail] = useState(null) // skill object to show in modal
-  useEscapeKey(() => setSkillDetail(null), !!skillDetail)
+  const [skillDetail, setSkillDetail] = useState(null)
 
   // Keep selectedBot in sync if persona.bot_name changes externally
   useEffect(() => { setSelectedBot(persona.bot_name || '') }, [persona.bot_name])
@@ -2127,7 +2526,10 @@ function PersonaCard({ persona, bots = [], onEdit, onDelete, onLinkBot }) {
 
   return (
     <>
-    <div className="rounded-xl border border-border bg-card overflow-hidden">
+    <div
+      className={`rounded-xl border border-border bg-card overflow-hidden ${onEdit ? 'cursor-pointer group/pcard' : ''}`}
+      onClick={onEdit}
+    >
       <div className="flex gap-0">
 
         {/* Figure column */}
@@ -2145,8 +2547,10 @@ function PersonaCard({ persona, bots = [], onEdit, onDelete, onLinkBot }) {
 
           {/* Header row */}
           <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
-              <p className="font-semibold text-sm text-foreground truncate">{persona.name}</p>
+            <div className="min-w-0 flex-1">
+              <p className={`font-semibold text-sm truncate transition-colors ${onEdit ? 'group-hover/pcard:text-primary' : ''} text-foreground`}>
+                {persona.name}
+              </p>
               {persona.role && (
                 <span className="inline-flex items-center gap-1 text-[11px] bg-primary/10 text-primary border border-primary/20 rounded-full px-2 py-0.5 mt-1">
                   {persona.role}
@@ -2154,7 +2558,7 @@ function PersonaCard({ persona, bots = [], onEdit, onDelete, onLinkBot }) {
               )}
             </div>
             {(onEdit || onDelete) && (
-              <div className="flex gap-1 flex-shrink-0">
+              <div className="flex gap-1 flex-shrink-0" onClick={e => e.stopPropagation()}>
                 {onEdit && (
                   <button onClick={onEdit}
                     className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
@@ -2182,30 +2586,23 @@ function PersonaCard({ persona, bots = [], onEdit, onDelete, onLinkBot }) {
 
           {/* Skills */}
           {skills.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground/60 font-medium uppercase tracking-wider mr-0.5">
+            <div className="flex flex-wrap gap-1.5" onClick={e => e.stopPropagation()}>
+              <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground/60 font-medium uppercase tracking-wider mr-0.5 self-center">
                 <Sparkles className="w-2.5 h-2.5" /> Skills
               </span>
               {skills.map((skill, i) => (
-                skill.slug ? (
-                  <button key={i} onClick={() => setSkillDetail(catalog.find(s => s.slug === skill.slug) || { slug: skill.slug, title: skill.title })}
-                    className="inline-flex items-center text-[11px] bg-secondary text-muted-foreground border border-border rounded-md px-2 py-0.5 max-w-[180px] truncate hover:border-primary/40 hover:text-foreground hover:bg-primary/5 transition-colors cursor-pointer"
-                    title={`View ${skill.title} skill`}>
-                    {skill.title}
-                  </button>
-                ) : (
-                  <span key={i}
-                    className="inline-flex items-center text-[11px] bg-secondary text-muted-foreground border border-border rounded-md px-2 py-0.5 max-w-[180px] truncate"
-                    title={skill.title}>
-                    {skill.title}
-                  </span>
-                )
+                <SkillChip
+                  key={i}
+                  slug={skill.slug}
+                  title={skill.title}
+                  onViewFull={skill.slug ? setSkillDetail : undefined}
+                />
               ))}
             </div>
           )}
 
           {/* Bot link footer — only shown when caller has personas.link_bot permission */}
-          <div className="mt-auto pt-2 border-t border-border flex items-center gap-2">
+          <div className="mt-auto pt-2 border-t border-border flex items-center gap-2" onClick={e => e.stopPropagation()}>
             {onLinkBot && linking ? (
               <>
                 <Bot className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
@@ -2260,23 +2657,7 @@ function PersonaCard({ persona, bots = [], onEdit, onDelete, onLinkBot }) {
       </div>
     </div>
 
-    {skillDetail && createPortal(
-      <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto"
-        onClick={e => { if (e.target === e.currentTarget) setSkillDetail(null) }}>
-        <div className="bg-background border border-border rounded-2xl shadow-xl w-full max-w-2xl my-8">
-          <div className="flex items-center justify-end px-5 pt-4">
-            <button onClick={() => setSkillDetail(null)} aria-label="Close skill detail"
-              className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-          <div className="px-5 pb-6">
-            <SkillDetail skill={skillDetail} onBack={() => setSkillDetail(null)} />
-          </div>
-        </div>
-      </div>,
-      document.body
-    )}
+    <SkillDetailModal slug={skillDetail} onClose={() => setSkillDetail(null)} />
     </>
   )
 }
@@ -2294,7 +2675,7 @@ const CATEGORY_COLORS = {
 function SkillBrowser({ selectedSlugs, onChange }) {
   const { catalog, loading } = useSkillsCatalog()
   const [activeCategory, setActiveCategory] = useState('all')
-  const [expandedSlug, setExpandedSlug] = useState(null)
+  const [openSkill, setOpenSkill] = useState(null) // slug for SkillDetailModal
 
   const categories = useMemo(() => {
     const cats = [...new Set(catalog.map(s => s.category))].sort()
@@ -2350,7 +2731,6 @@ function SkillBrowser({ selectedSlugs, onChange }) {
       <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
         {visible.map(skill => {
           const selected = selectedSlugs.includes(skill.slug)
-          const expanded = expandedSlug === skill.slug
           const catColor = CATEGORY_COLORS[skill.category] || CATEGORY_COLORS.general
           return (
             <div
@@ -2365,7 +2745,7 @@ function SkillBrowser({ selectedSlugs, onChange }) {
               <div className="flex items-start gap-3 p-3">
                 {/* Select toggle */}
                 <button
-                  onClick={() => toggle(skill.slug)}
+                  onClick={e => { e.stopPropagation(); toggle(skill.slug) }}
                   className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 mt-0.5 border transition-colors ${
                     selected
                       ? 'bg-primary border-primary text-primary-foreground'
@@ -2390,37 +2770,19 @@ function SkillBrowser({ selectedSlugs, onChange }) {
                     </span>
                   </div>
                   <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{skill.description}</p>
-
-                  {/* Expand body */}
                   <button
-                    onClick={() => setExpandedSlug(expanded ? null : skill.slug)}
+                    onClick={e => { e.stopPropagation(); setOpenSkill(skill.slug) }}
                     className="text-[11px] text-primary hover:underline mt-1.5"
                   >
-                    {expanded ? 'Hide instructions ↑' : 'Preview instructions ↓'}
+                    View full skill →
                   </button>
-                  {expanded && (
-                    <div className="mt-2 space-y-2">
-                      {skill.mcp_tools?.length > 0 && (
-                        <div className="flex flex-wrap items-center gap-1">
-                          <span className="text-[10px] text-muted-foreground/50">Actions:</span>
-                          {skill.mcp_tools.map(t => (
-                            <code key={t} className="text-[10px] bg-secondary border border-border rounded px-1.5 py-0.5 text-muted-foreground font-mono">
-                              {t}
-                            </code>
-                          ))}
-                        </div>
-                      )}
-                      <div className="p-2.5 rounded-md bg-background border border-border text-xs text-muted-foreground font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">
-                        {skill.body}
-                      </div>
-                    </div>
-                  )}
                 </div>
               </div>
             </div>
           )
         })}
       </div>
+      <SkillDetailModal slug={openSkill} onClose={() => setOpenSkill(null)} />
     </div>
   )
 }
@@ -2430,14 +2792,16 @@ function SkillBrowser({ selectedSlugs, onChange }) {
 function PersonaEditor({ persona, bots, onSave, onCancel }) {
   const [name, setName] = useState(persona?.name || '')
   const [role, setRole] = useState(persona?.role || '')
+  const [description, setDescription] = useState(persona?.description || '')
   // Skills stored as JSON array of slugs; parse existing value on load
   const [skillSlugs, setSkillSlugs] = useState(() => parseSkillSlugs(persona?.capabilities || ''))
-  const [prompt, setPrompt] = useState(persona?.prompt || persona?.description || '')
+  const [prompt, setPrompt] = useState(persona?.prompt || '')
   const [botName, setBotName] = useState(persona?.bot_name || '')
   const [figure, setFigure] = useState(persona?.figure || '')
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState(null)
   const [activeTab, setActiveTab] = useState('identity') // 'identity' | 'skills' | 'prompt'
+  const [openSkill, setOpenSkill] = useState(null)
 
   async function handleSave() {
     if (!name.trim()) { setFormError('Name is required'); return }
@@ -2447,6 +2811,7 @@ function PersonaEditor({ persona, bots, onSave, onCancel }) {
       await onSave({
         name: name.trim(),
         role: role.trim(),
+        description: description.trim(),
         capabilities: JSON.stringify(skillSlugs), // stored as JSON slug array
         prompt: prompt.trim(),
         bot_name: botName,
@@ -2515,6 +2880,19 @@ function PersonaEditor({ persona, bots, onSave, onCancel }) {
             </div>
           </div>
 
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-foreground">Expertise summary</label>
+            <p className="text-[11px] text-muted-foreground leading-relaxed">
+              What this agent is good at — shown on marketplace cards and used by the orchestrator to assign tasks. Keep it to one sentence.
+            </p>
+            <input
+              value={description}
+              onChange={e => setDescription(e.target.value)}
+              placeholder="e.g. SEO Specialist — researches keywords and optimisation opportunities"
+              className="w-full text-sm bg-background border border-border rounded-md px-3 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+            />
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1">
               <label className="text-xs font-medium text-foreground">Bot</label>
@@ -2554,8 +2932,8 @@ function PersonaEditor({ persona, bots, onSave, onCancel }) {
         <div className="space-y-3">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <p className="text-xs text-muted-foreground">
-                Select the skills this agent will use to complete tasks. Skill instructions are automatically injected into the agent's prompt when deployed.
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                Skills are procedural tool guides — e.g. how to set up a hotel bot, read Notion, or send emails. They are automatically injected into the agent's prompt at deploy time. To describe what the agent is good at, use the <strong>Expertise summary</strong> on the Identity tab.
               </p>
             </div>
           </div>
@@ -2565,11 +2943,12 @@ function PersonaEditor({ persona, bots, onSave, onCancel }) {
             <div className="flex flex-wrap gap-1.5 p-3 bg-secondary/50 rounded-lg border border-border">
               <span className="text-[10px] text-muted-foreground/60 font-medium uppercase tracking-wider self-center mr-1">Active:</span>
               {skillSlugs.map(slug => (
-                <span key={slug}
-                  className="inline-flex items-center gap-1 text-xs bg-primary/10 text-primary border border-primary/20 rounded-full px-2.5 py-0.5">
-                  {slug.replace(/-/g, ' ')}
-                  <button onClick={() => setSkillSlugs(prev => prev.filter(s => s !== slug))}
-                    className="hover:text-destructive ml-0.5">
+                <span key={slug} className="inline-flex items-center gap-0.5">
+                  <SkillChip slug={slug} onViewFull={setOpenSkill} />
+                  <button
+                    onClick={() => setSkillSlugs(prev => prev.filter(s => s !== slug))}
+                    className="text-muted-foreground hover:text-destructive ml-1 transition-colors"
+                  >
                     <X className="w-3 h-3" />
                   </button>
                 </span>
@@ -2578,6 +2957,7 @@ function PersonaEditor({ persona, bots, onSave, onCancel }) {
           )}
 
           <SkillBrowser selectedSlugs={skillSlugs} onChange={setSkillSlugs} />
+          <SkillDetailModal slug={openSkill} onClose={() => setOpenSkill(null)} />
         </div>
       )}
 

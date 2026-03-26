@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useEscapeKey } from './utils/useEscapeKey'
 import { createPortal } from 'react-dom'
+import { Provider as TooltipProvider } from '@radix-ui/react-tooltip'
 import { HabboFigure } from './components/HabboFigure'
 import { AgentDashboard, AccountView, LogPanel, OnlineView } from './components/AgentDashboard'
 import { FeedbackWidget, FeedbackView } from './components/FeedbackWidget'
@@ -16,7 +17,7 @@ import {
   Edit, Settings, Square, User, ArrowUpCircle, Bell,
   ClipboardList, X, Sun, Moon, Network, Plus,
   Terminal, ChevronDown, ChevronLeft, ChevronRight, Wrench, PanelLeft, MessageSquarePlus, Minus, Waves,
-  Search, Sparkles, LayoutGrid, ExternalLink,
+  Search, Sparkles, LayoutGrid, ExternalLink, Lock,
 } from 'lucide-react'
 
 // ── Fallback figure types (if API is unavailable) ─────────────────────────
@@ -495,6 +496,7 @@ function Dashboard({ me, setMe }) {
   ]
 
   return (
+    <TooltipProvider delayDuration={400}>
     <div className="h-screen bg-background flex overflow-hidden">
 
       {/* ── Collapsible Sidebar ── */}
@@ -768,6 +770,7 @@ function Dashboard({ me, setMe }) {
         <UiBuildFooter />
       </div>{/* end main area */}
     </div>
+    </TooltipProvider>
   )
 }
 
@@ -1295,12 +1298,9 @@ function BotsTab({ figureTypes }) {
     try {
       const d = await api('/api/hotel/bots/sync', { method: 'POST' })
       const parts = []
-      if (d.removed > 0) {
-        parts.push(`Removed ${d.removed} stale portal entr${d.removed !== 1 ? 'ies' : 'y'}`)
-      }
-      if (d.imported > 0) {
-        parts.push(`imported ${d.imported} bot${d.imported !== 1 ? 's' : ''}`)
-      }
+      if (d.removed > 0) parts.push(`Removed ${d.removed} stale entr${d.removed !== 1 ? 'ies' : 'y'}`)
+      if (d.imported > 0) parts.push(`imported ${d.imported} bot${d.imported !== 1 ? 's' : ''}`)
+      if (d.updated > 0) parts.push(`refreshed ${d.updated} appearance${d.updated !== 1 ? 's' : ''}`)
       setSyncMsg(
         parts.length > 0
           ? `${parts.join(' · ')}.`
@@ -1806,24 +1806,42 @@ function UpgradeRequestsTab({ onCountChange }) {
 // Skill-linked integrations (referenced by requires_integration in SKILL.md files)
 const CURATED_INTEGRATIONS = [
   {
+    slug: 'plane',
+    name: 'Plane',
+    title: 'Plane.so',
+    description: 'Project management — issues, cycles, modules, and projects via your Plane workspace.',
+    icon: 'https://plane.so/favicon.ico',
+    type: 'stdio',
+    command: 'uvx',
+    args: ['plane-mcp-server', 'stdio'],
+    envFields: [
+      { key: 'PLANE_API_KEY', label: 'API Key', isSecret: true, isRequired: true, description: 'Your Plane personal API key — Settings → API Tokens in your Plane workspace' },
+      { key: 'PLANE_WORKSPACE_SLUG', label: 'Workspace Slug', isSecret: false, isRequired: true, description: 'Your workspace slug (e.g. "myworkspace" from the URL)' },
+      { key: 'PLANE_BASE_URL', label: 'Instance URL', isSecret: false, isRequired: true, description: 'Your Plane instance URL (e.g. https://plan.fixdev.nl or https://app.plane.so)' },
+    ],
+    docsUrl: 'https://developers.plane.so',
+  },
+  {
     slug: 'atlassian',
     name: 'Atlassian',
     title: 'Atlassian (Jira & Confluence)',
     description: 'Connect Jira for sprint planning, issue tracking, and Confluence knowledge bases.',
     icon: '/integrations/atlassian.svg',
-    defaultUrl: 'https://mcp.atlassian.com/rest/mcp/1.0',
-    headers: [{ name: 'Authorization', description: 'Bearer token — get one at id.atlassian.com → Security → API tokens', isRequired: true, isSecret: true }],
-    docsUrl: 'https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/',
+    defaultUrl: 'https://mcp.atlassian.com/v1/mcp',
+    headers: [{ name: 'Authorization', description: 'Service account API key (Bearer) — ask your Atlassian admin to create one at admin.atlassian.com. Personal API tokens use Basic auth and are not compatible here.', isRequired: true, isSecret: true }],
+    docsUrl: 'https://support.atlassian.com/atlassian-rovo-mcp-server/docs/configuring-authentication-via-api-token/',
   },
   {
     slug: 'notion',
     name: 'Notion',
     title: 'Notion',
-    description: 'Read and search pages, databases, and structured content in your Notion workspace.',
+    description: 'Read and search pages, databases, and structured content in your Notion workspace. Uses a static integration token — no OAuth required.',
     icon: '/integrations/notion.svg',
-    defaultUrl: 'https://mcp.notion.com/mcp',
-    headers: [{ name: 'Authorization', description: 'Bearer token — create an integration at notion.so/my-integrations', isRequired: true, isSecret: true }],
-    docsUrl: 'https://developers.notion.com/docs/getting-started',
+    type: 'stdio',
+    command: 'npx',
+    args: ['-y', '@notionhq/notion-mcp-server'],
+    envFields: [{ key: 'NOTION_TOKEN', description: 'Your internal integration token (starts with ntn_) — create one at notion.so/profile/integrations, then share target pages under the Access tab', isRequired: true, isSecret: true }],
+    docsUrl: 'https://developers.notion.com/docs/mcp',
   },
   {
     slug: 'resend',
@@ -1831,8 +1849,10 @@ const CURATED_INTEGRATIONS = [
     title: 'Resend Email',
     description: 'Send transactional emails, manage contacts, domains and broadcasts via Resend\'s official MCP server. Free tier available.',
     icon: 'https://www.google.com/s2/favicons?domain=resend.com&sz=64',
-    defaultUrl: '',
-    headers: [{ name: 'RESEND_API_KEY', description: 'Your Resend API key (starts with re_) — sign up free at resend.com', isRequired: true, isSecret: true }],
+    type: 'stdio',
+    command: 'npx',
+    args: ['-y', 'resend-mcp'],
+    envFields: [{ key: 'RESEND_API_KEY', description: 'Your Resend API key (starts with re_) — sign up free at resend.com', isRequired: true, isSecret: true }],
     docsUrl: 'https://resend.com/docs/mcp-server',
   },
 ]
@@ -1844,8 +1864,8 @@ const POPULAR_INTEGRATIONS = [
     name: 'Airtable',
     description: 'Access and manage your Airtable bases, tables, and records.',
     icon: 'https://www.airtable.com/images/favicon/baymax/apple-touch-icon.png',
-    defaultUrl: 'https://waystation.ai/airtable/mcp',
-    headers: [{ name: 'Authorization', description: 'Bearer token from waystation.ai — connect your Airtable account', isRequired: true, isSecret: true }],
+    defaultUrl: 'https://waystation.ai/mcp',
+    headers: [{ name: 'Authorization', description: 'Bearer token from waystation.ai — first connect your Airtable account at waystation.ai/dashboard (one-time OAuth setup), then copy your WayStation API key.', isRequired: true, isSecret: true }],
     docsUrl: 'https://waystation.ai',
   },
   {
@@ -1854,6 +1874,8 @@ const POPULAR_INTEGRATIONS = [
     description: 'Manage Gmail messages, threads, labels, drafts, and send emails.',
     icon: 'https://ssl.gstatic.com/ui/v1/icons/mail/rfr/gmail.ico',
     defaultUrl: 'https://server.smithery.ai/@faithk7/gmail-mcp/mcp',
+    authType: 'oauth',
+    oauthNote: 'Gmail requires Google OAuth to access mailbox data — no static API key path exists. Smithery\'s own bearer token is for their registry, not for Gmail access.',
     headers: [{ name: 'Authorization', description: 'Bearer token from smithery.ai — required for Smithery-hosted servers', isRequired: true, isSecret: true }],
     docsUrl: 'https://smithery.ai',
   },
@@ -1863,6 +1885,8 @@ const POPULAR_INTEGRATIONS = [
     description: 'Access OneDrive and SharePoint files via Microsoft\'s official MCP server.',
     icon: 'https://www.google.com/s2/favicons?domain=onedrive.live.com&sz=64',
     defaultUrl: 'https://agent365.svc.cloud.microsoft/agents/tenants/{tenant_id}/servers/mcp_ODSPRemoteServer',
+    authType: 'oauth',
+    oauthNote: 'Microsoft Entra tokens expire in ~1 hour and cannot be used as a static key. OneDrive MCP requires an OAuth flow with token refresh — not compatible with server-side agent runs.',
     headers: [{ name: 'Authorization', description: 'Replace {tenant_id} in the URL with your Azure tenant ID, then use a Microsoft Entra bearer token', isRequired: true, isSecret: true }],
     docsUrl: 'https://learn.microsoft.com/en-us/onedrive/',
   },
@@ -1871,8 +1895,8 @@ const POPULAR_INTEGRATIONS = [
     name: 'Supabase',
     description: 'Query and manage your Supabase database, auth, and schemas.',
     icon: 'https://supabase.com/favicon/favicon-32x32.png',
-    defaultUrl: 'https://waystation.ai/supabase/mcp',
-    headers: [{ name: 'Authorization', description: 'Bearer token from waystation.ai — connect your Supabase project', isRequired: true, isSecret: true }],
+    defaultUrl: 'https://waystation.ai/mcp',
+    headers: [{ name: 'Authorization', description: 'Bearer token from waystation.ai — first connect your Supabase project at waystation.ai/dashboard (one-time OAuth setup), then copy your WayStation API key.', isRequired: true, isSecret: true }],
     docsUrl: 'https://supabase.com/docs',
   },
   {
@@ -1881,6 +1905,8 @@ const POPULAR_INTEGRATIONS = [
     description: 'Create diagrams, search and share Lucidchart documents from your agents.',
     icon: 'https://corporate-assets.lucid.co/co/cab2c5c2-21ed-4272-8606-4ce6e117da17.png',
     defaultUrl: 'https://mcp.lucid.app/mcp',
+    authType: 'oauth',
+    oauthNote: 'mcp.lucid.app uses OAuth 2.1 with Dynamic Client Registration — static API keys only work with the self-hosted lucid-mcp-server npm package, not this endpoint.',
     headers: [{ name: 'Authorization', description: 'Bearer token from your Lucid developer settings', isRequired: true, isSecret: true }],
     docsUrl: 'https://developer.lucid.co/',
   },
@@ -1889,18 +1915,22 @@ const POPULAR_INTEGRATIONS = [
     name: 'Linear',
     description: 'Project management and issue tracking via Linear\'s official MCP server.',
     icon: 'https://linear.app/favicon.ico',
-    defaultUrl: 'https://mcp.linear.app/sse',
-    headers: [{ name: 'Authorization', description: 'Bearer token — linear.app → Settings → API → Personal API keys', isRequired: true, isSecret: true }],
+    type: 'stdio',
+    command: 'npx',
+    args: ['-y', '@linear/mcp-server'],
+    envFields: [{ key: 'LINEAR_API_KEY', description: 'Your personal API key — linear.app → Settings → API → Personal API keys (starts with lin_api_)', isRequired: true, isSecret: true }],
     docsUrl: 'https://developers.linear.app/docs',
   },
   {
     slug: 'telegram',
     name: 'Telegram',
-    description: 'Browse Telegram chats, read and summarize messages from your AI assistant.',
+    description: 'Send messages, manage groups, and post to Telegram channels via a bot. Create a bot with @BotFather to get a static token — no OAuth required.',
     icon: 'https://telegram.org/img/apple-touch-icon.png',
-    defaultUrl: 'https://mcp.ai.church/mcp',
-    headers: [{ name: 'Authorization', description: 'Bearer token from mcp.ai.church — connect your Telegram account', isRequired: true, isSecret: true }],
-    docsUrl: 'https://mcp.ai.church',
+    type: 'stdio',
+    command: 'npx',
+    args: ['-y', 'telegram-bot-mcp-server'],
+    envFields: [{ key: 'TELEGRAM_BOT_API_TOKEN', description: 'Your bot token from @BotFather — message @BotFather on Telegram, send /newbot, and copy the token (format: 123456:ABCdef…)', isRequired: true, isSecret: true }],
+    docsUrl: 'https://core.telegram.org/bots',
   },
   {
     slug: 'prince',
@@ -1975,6 +2005,7 @@ function IntegrationsTab() {
   const [loadingMy, setLoadingMy] = useState(true)
   const [setupTarget, setSetupTarget] = useState(null)
   const [pingStatus, setPingStatus] = useState({})
+  const [integrationTools, setIntegrationTools] = useState({})
   const [confirmDelete, setConfirmDelete] = useState(null)
   const [busy, setBusy] = useState(false)
 
@@ -2034,25 +2065,68 @@ function IntegrationsTab() {
       headers: curated.headers,
       docsUrl: curated.docsUrl,
       existingId: existingIntegration?.id ?? null,
+      type: curated.type,
+      command: curated.command,
+      args: curated.args,
+      envFields: curated.envFields,
     })
   }
 
   function openRegistrySetup(server) {
     const remote = server.remotes?.[0]
-    setSetupTarget({
+    const stdioPackage = server.packages?.find(p => p.transport?.type === 'stdio')
+    const commonFields = {
       name: server.title || server.name?.split('/').pop() || server.name,
       title: server.title || server.name,
       icon: server.icons?.[0]?.src ?? null,
-      defaultUrl: remote?.url ?? '',
-      headers: remote?.headers ?? [],
       docsUrl: server.websiteUrl ?? null,
       existingId: null,
+    }
+
+    if (!remote && stdioPackage) {
+      const cmd = stdioPackage.runtimeHint
+        ?? (stdioPackage.registryType === 'npm' ? 'npx'
+          : stdioPackage.registryType === 'pypi' ? 'uvx'
+          : null)
+      const args = cmd === 'npx'
+        ? ['-y', stdioPackage.identifier]
+        : stdioPackage.identifier ? [stdioPackage.identifier] : []
+      setSetupTarget({
+        ...commonFields,
+        type: 'stdio',
+        command: cmd,
+        args,
+        envFields: (stdioPackage.environmentVariables ?? []).map(ev => ({
+          key: ev.name,
+          description: ev.description ?? '',
+          isRequired: !!ev.isRequired,
+          isSecret: !!ev.isSecret,
+        })),
+      })
+      return
+    }
+
+    setSetupTarget({
+      ...commonFields,
+      defaultUrl: remote?.url ?? '',
+      headers: remote?.headers ?? [],
     })
   }
 
   function openEditSetup(integration) {
     const curated = findCuratedMatch(integration)
     if (curated) { openCuratedSetup(curated, integration); return }
+    if (integration.type === 'stdio') {
+      setSetupTarget({
+        name: integration.name, title: integration.name,
+        icon: null, docsUrl: null, existingId: integration.id,
+        type: 'stdio',
+        command: integration.command ?? null,
+        args: integration.args ?? [],
+        envFields: [],
+      })
+      return
+    }
     setSetupTarget({
       name: integration.name, title: integration.name,
       icon: null, defaultUrl: integration.url,
@@ -2060,11 +2134,16 @@ function IntegrationsTab() {
     })
   }
 
-  async function pingIntegration(id, url) {
+  async function pingIntegration(id) {
     setPingStatus(s => ({ ...s, [id]: 'checking' }))
     try {
-      const data = await api('/api/my/integrations/ping', { method: 'POST', body: JSON.stringify({ url }) })
-      setPingStatus(s => ({ ...s, [id]: data.online ? 'online' : 'offline' }))
+      const data = await api(`/api/my/integrations/${id}/test`, { method: 'POST' })
+      if (data.authenticated) {
+        setPingStatus(s => ({ ...s, [id]: 'online' }))
+        if (data.tools?.length) setIntegrationTools(s => ({ ...s, [id]: data.tools }))
+      } else {
+        setPingStatus(s => ({ ...s, [id]: data.online ? 'auth_fail' : 'offline' }))
+      }
     } catch { setPingStatus(s => ({ ...s, [id]: 'offline' })) }
   }
 
@@ -2107,45 +2186,85 @@ function IntegrationsTab() {
           <div className="space-y-2">
             {myIntegrations.map(integration => {
               const ping = pingStatus[integration.id]
+              const tools = integrationTools[integration.id] ?? []
               const curated = findCuratedMatch(integration)
+              const isStdioInt = integration.type === 'stdio'
+              const borderColor = isStdioInt ? 'border-success/20'
+                : ping === 'auth_fail' ? 'border-amber-500/30'
+                : ping === 'offline' ? 'border-destructive/20'
+                : 'border-success/20'
               return (
-                <div key={integration.id} className="flex items-center gap-3 p-3 rounded-xl border border-success/20 bg-card">
-                  <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-secondary flex items-center justify-center overflow-hidden">
-                    {curated
-                      ? <img src={curated.icon} alt={curated.name} className="w-5 h-5 object-contain" onError={e => { e.currentTarget.style.display = 'none' }} />
-                      : <Network className="w-4 h-4 text-muted-foreground" />}
+                <div key={integration.id} className={`bg-card border rounded-xl p-3 transition-colors ${borderColor}`}>
+                  <div className="flex items-center gap-3">
+                    <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-secondary flex items-center justify-center overflow-hidden">
+                      {curated
+                        ? <img src={curated.icon} alt={curated.name} className="w-5 h-5 object-contain" onError={e => { e.currentTarget.style.display = 'none' }} />
+                        : <Network className="w-4 h-4 text-muted-foreground" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-foreground">{integration.name}</p>
+                      {isStdioInt
+                        ? <p className="text-xs text-muted-foreground">Local process (stdio)</p>
+                        : <p className="text-xs text-muted-foreground truncate">{integration.url}</p>}
+                    </div>
+                    {isStdioInt && (
+                      <span className="flex items-center gap-1 text-[10px] text-success font-medium flex-shrink-0">
+                        <Terminal className="w-3 h-3" /> Configured
+                      </span>
+                    )}
+                    {!isStdioInt && ping !== 'checking' && ping !== 'auth_fail' && ping !== 'offline' && (
+                      <span className="flex items-center gap-1 text-[10px] text-success font-medium flex-shrink-0">
+                        <Check className="w-3 h-3" /> {ping === 'online' ? 'Verified' : 'Saved'}
+                      </span>
+                    )}
+                    {!isStdioInt && ping === 'auth_fail' && (
+                      <span className="flex items-center gap-1 text-[10px] text-amber-500 font-medium flex-shrink-0">
+                        <Lock className="w-3 h-3" /> Auth failed
+                      </span>
+                    )}
+                    {!isStdioInt && ping === 'offline' && (
+                      <span className="flex items-center gap-1 text-[10px] text-destructive font-medium flex-shrink-0">
+                        <WifiOff className="w-3 h-3" /> Offline
+                      </span>
+                    )}
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      {!isStdioInt && (
+                        <button onClick={() => pingIntegration(integration.id)} disabled={ping === 'checking'}
+                          title="Test connection"
+                          className="h-7 w-7 flex items-center justify-center rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40">
+                          {ping === 'checking'
+                            ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            : ping === 'online' ? <Wifi className="w-3.5 h-3.5 text-success" />
+                            : ping === 'auth_fail' ? <Lock className="w-3.5 h-3.5 text-amber-500" />
+                            : ping === 'offline' ? <WifiOff className="w-3.5 h-3.5 text-destructive" />
+                            : <Wifi className="w-3.5 h-3.5" />}
+                        </button>
+                      )}
+                      <button onClick={() => openEditSetup(integration)} title="Edit"
+                        className="h-7 w-7 flex items-center justify-center rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
+                        <Edit className="w-3.5 h-3.5" />
+                      </button>
+                      <button onClick={() => handleDelete(integration.id)} disabled={busy}
+                        title={confirmDelete === integration.id ? 'Click again to confirm' : 'Remove'}
+                        className={`h-7 px-2 text-xs rounded-md border transition-colors disabled:opacity-40 flex items-center gap-1 ${
+                          confirmDelete === integration.id
+                            ? 'border-destructive bg-destructive text-white'
+                            : 'border-destructive/30 text-destructive hover:bg-destructive/10'
+                        }`}>
+                        {confirmDelete === integration.id ? 'Sure?' : <Trash2 className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-foreground">{integration.name}</p>
-                    <p className="text-xs text-muted-foreground truncate">{integration.url}</p>
-                  </div>
-                  <span className="flex items-center gap-1 text-[10px] text-success font-medium flex-shrink-0">
-                    <Check className="w-3 h-3" /> Connected
-                  </span>
-                  <div className="flex items-center gap-1.5 flex-shrink-0">
-                    <button onClick={() => pingIntegration(integration.id, integration.url)} disabled={ping === 'checking'}
-                      title="Test connection"
-                      className="h-7 w-7 flex items-center justify-center rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40">
-                      {ping === 'checking'
-                        ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        : ping === 'online' ? <Wifi className="w-3.5 h-3.5 text-success" />
-                        : ping === 'offline' ? <WifiOff className="w-3.5 h-3.5 text-destructive" />
-                        : <Wifi className="w-3.5 h-3.5" />}
-                    </button>
-                    <button onClick={() => openEditSetup(integration)} title="Edit"
-                      className="h-7 w-7 flex items-center justify-center rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
-                      <Edit className="w-3.5 h-3.5" />
-                    </button>
-                    <button onClick={() => handleDelete(integration.id)} disabled={busy}
-                      title={confirmDelete === integration.id ? 'Click again to confirm' : 'Remove'}
-                      className={`h-7 px-2 text-xs rounded-md border transition-colors disabled:opacity-40 flex items-center gap-1 ${
-                        confirmDelete === integration.id
-                          ? 'border-destructive bg-destructive text-white'
-                          : 'border-destructive/30 text-destructive hover:bg-destructive/10'
-                      }`}>
-                      {confirmDelete === integration.id ? 'Sure?' : <Trash2 className="w-3.5 h-3.5" />}
-                    </button>
-                  </div>
+                  {tools.length > 0 && (
+                    <div className="mt-2 pt-2 border-t border-border/50 flex flex-wrap gap-1">
+                      {tools.map(t => (
+                        <span key={t.name} title={t.description}
+                          className="inline-flex items-center gap-1 text-[10px] bg-secondary text-muted-foreground rounded px-1.5 py-0.5 font-mono">
+                          <Wrench className="w-2.5 h-2.5 flex-shrink-0" />{t.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )
             })}
@@ -2296,11 +2415,17 @@ function IntSectionHeading({ icon: Icon, label }) {
 
 function CuratedIntCard({ curated, configured, onSetup }) {
   const [imgError, setImgError] = useState(false)
+  const isOAuth = curated.authType === 'oauth'
   return (
-    <div className={`relative bg-card border rounded-xl p-4 flex flex-col gap-3 transition-colors ${configured ? 'border-success/30' : 'border-border'}`}>
-      {configured && (
+    <div className={`relative bg-card border rounded-xl p-4 flex flex-col gap-3 transition-colors ${isOAuth ? 'border-amber-500/20' : configured ? 'border-success/30' : 'border-border'}`}>
+      {configured && !isOAuth && (
         <span className="absolute top-3 right-3 flex items-center gap-1 text-[10px] text-success font-medium">
           <Check className="w-3 h-3" /> Connected
+        </span>
+      )}
+      {configured && isOAuth && (
+        <span className="absolute top-3 right-3 flex items-center gap-1 text-[10px] text-amber-500 font-medium">
+          <Lock className="w-3 h-3" /> Saved, not working
         </span>
       )}
       <div className="flex items-center gap-3">
@@ -2312,19 +2437,40 @@ function CuratedIntCard({ curated, configured, onSetup }) {
         <p className="text-sm font-semibold text-foreground leading-tight">{curated.name}</p>
       </div>
       <p className="text-xs text-muted-foreground leading-relaxed flex-1">{curated.description}</p>
-      {curated.docsUrl && (
+      {isOAuth && (
+        <div className="flex items-start gap-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 px-2.5 py-2">
+          <Lock className="w-3 h-3 text-amber-500 flex-shrink-0 mt-0.5" />
+          <p className="text-[11px] text-amber-600 dark:text-amber-400 leading-relaxed">{curated.oauthNote}</p>
+        </div>
+      )}
+      {!isOAuth && curated.docsUrl && (
         <a href={curated.docsUrl} target="_blank" rel="noopener noreferrer"
           className="flex items-center gap-1 text-[11px] text-primary/70 hover:text-primary transition-colors"
           onClick={e => e.stopPropagation()}>
           <ExternalLink className="w-3 h-3" /> Docs
         </a>
       )}
-      <button onClick={onSetup}
-        className={`w-full h-8 rounded-md text-xs font-medium transition-colors ${
-          configured ? 'border border-border text-muted-foreground hover:bg-secondary' : 'bg-primary text-primary-foreground hover:bg-primary/90'
-        }`}>
-        {configured ? 'Edit' : 'Connect'}
-      </button>
+      {isOAuth ? (
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[11px] text-amber-500/70 flex items-center gap-1">
+            <Lock className="w-3 h-3" /> Not available for automated agents
+          </span>
+          {curated.docsUrl && (
+            <a href={curated.docsUrl} target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-1 text-[11px] text-primary/70 hover:text-primary transition-colors flex-shrink-0"
+              onClick={e => e.stopPropagation()}>
+              <ExternalLink className="w-3 h-3" /> Docs
+            </a>
+          )}
+        </div>
+      ) : (
+        <button onClick={onSetup}
+          className={`w-full h-8 rounded-md text-xs font-medium transition-colors ${
+            configured ? 'border border-border text-muted-foreground hover:bg-secondary' : 'bg-primary text-primary-foreground hover:bg-primary/90'
+          }`}>
+          {configured ? 'Edit' : 'Connect'}
+        </button>
+      )}
     </div>
   )
 }
@@ -2334,6 +2480,7 @@ function RegistryIntCard({ server, onAdd, approved = false, configured = false }
   const icon = server.icons?.[0]?.src
   const title = server.title || server.name?.split('/').pop() || server.name
   const desc = server.description || ''
+  const isStdioOnly = !server.remotes?.length && server.packages?.some(p => p.transport?.type === 'stdio')
   let hostname = null
   try { if (server.websiteUrl) hostname = new URL(server.websiteUrl).hostname } catch {}
 
@@ -2352,7 +2499,11 @@ function RegistryIntCard({ server, onAdd, approved = false, configured = false }
         </div>
         <div className="flex-1 min-w-0 pr-16">
           <p className="text-xs font-semibold text-foreground leading-tight truncate">{title}</p>
-          {hostname && (
+          {isStdioOnly ? (
+            <span className="text-[10px] text-muted-foreground flex items-center gap-0.5 mt-0.5">
+              <Terminal className="w-2.5 h-2.5" /> stdio
+            </span>
+          ) : hostname && (
             <a href={server.websiteUrl} target="_blank" rel="noopener noreferrer"
               className="text-[10px] text-muted-foreground hover:text-primary truncate block"
               onClick={e => e.stopPropagation()}>
@@ -2378,8 +2529,13 @@ function RegistryIntCard({ server, onAdd, approved = false, configured = false }
 
 function IntegrationSetupModal({ target, onClose, onSaved }) {
   const { showToast } = useToast()
+  const isStdio = target.type === 'stdio'
   const [form, setForm] = useState({ name: target.name || '', url: target.defaultUrl || '', api_key: '' })
+  const [envForm, setEnvForm] = useState(
+    (target.envFields ?? []).reduce((acc, f) => ({ ...acc, [f.key]: '' }), {})
+  )
   const [busy, setBusy] = useState(false)
+  const [testResult, setTestResult] = useState(null)
   useEscapeKey(onClose)
 
   const header = target.headers?.[0] ?? null
@@ -2387,13 +2543,49 @@ function IntegrationSetupModal({ target, onClose, onSaved }) {
   async function handleSubmit(e) {
     e.preventDefault()
     setBusy(true)
+    setTestResult(null)
     try {
+      let integrationId = target.existingId
+
+      if (isStdio) {
+        // Build stdio_config from command/args/env — only include non-empty env values
+        const env = Object.fromEntries(
+          Object.entries(envForm).filter(([, v]) => v.trim() !== '')
+        )
+        const stdio_config = { command: target.command, args: target.args, env }
+        const payload = { name: form.name, stdio_config }
+        if (target.existingId) {
+          await api(`/api/my/integrations/${target.existingId}`, { method: 'PUT', body: JSON.stringify(payload) })
+        } else {
+          const data = await api('/api/my/integrations', { method: 'POST', body: JSON.stringify(payload) })
+          integrationId = data.integration?.id
+        }
+        showToast(`${target.name} configured.`)
+        setTestResult({ online: true, authenticated: true, tools: [], stdio: true })
+        onSaved()
+        return
+      }
+
+      // HTTP integration (existing path)
       if (target.existingId) {
         await api(`/api/my/integrations/${target.existingId}`, { method: 'PUT', body: JSON.stringify(form) })
-        showToast('Integration updated.')
       } else {
-        await api('/api/my/integrations', { method: 'POST', body: JSON.stringify(form) })
-        showToast('Integration connected.')
+        const data = await api('/api/my/integrations', { method: 'POST', body: JSON.stringify(form) })
+        integrationId = data.integration?.id
+      }
+
+      if (integrationId) {
+        try {
+          const result = await api(`/api/my/integrations/${integrationId}/test`, { method: 'POST' })
+          setTestResult(result)
+          if (result.authenticated) {
+            showToast(result.tools?.length ? `Connected — ${result.tools.length} tools found` : 'Connected successfully.')
+          } else {
+            showToast(result.error || 'Saved, but authentication test failed.', 'error')
+          }
+        } catch {
+          showToast(target.existingId ? 'Integration updated.' : 'Integration connected.')
+        }
       }
       onSaved()
     } catch (err) { showToast(err.message, 'error') }
@@ -2431,27 +2623,58 @@ function IntegrationSetupModal({ target, onClose, onSaved }) {
               className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
           </div>
 
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-foreground">Server URL</label>
-            <input required type="url" placeholder="https://mcp.example.com" value={form.url}
-              onChange={e => setForm(f => ({ ...f, url: e.target.value }))}
-              className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-foreground flex items-center gap-1">
-              {header ? header.name : 'API Key'}
-              {header?.isRequired && <span className="text-destructive">*</span>}
-              {header && !header.isRequired && <span className="text-muted-foreground font-normal">(optional)</span>}
-            </label>
-            {header?.description && (
-              <p className="text-[11px] text-muted-foreground leading-relaxed">{header.description}</p>
-            )}
-            <input type="password"
-              placeholder={target.existingId ? '••••••• (leave blank to keep current)' : (header?.name ?? 'API key or bearer token')}
-              value={form.api_key} onChange={e => setForm(f => ({ ...f, api_key: e.target.value }))}
-              className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
-          </div>
+          {isStdio ? (
+            <>
+              <div className="flex items-start gap-1.5 rounded-lg bg-secondary px-2.5 py-2">
+                <Terminal className="w-3 h-3 text-muted-foreground flex-shrink-0 mt-0.5" />
+                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                  Runs as a local process: <code className="font-mono">{[target.command, ...(target.args ?? [])].filter(Boolean).join(' ')}</code>
+                </p>
+              </div>
+              {(target.envFields ?? []).map(field => (
+                <div key={field.key} className="space-y-1.5">
+                  <label className="text-xs font-medium text-foreground flex items-center gap-1">
+                    {field.label}
+                    {field.isRequired && <span className="text-destructive">*</span>}
+                  </label>
+                  {field.description && (
+                    <p className="text-[11px] text-muted-foreground leading-relaxed">{field.description}</p>
+                  )}
+                  <input
+                    type={field.isSecret ? 'password' : 'text'}
+                    required={field.isRequired && !target.existingId}
+                    placeholder={target.existingId && field.isSecret ? '••••••• (leave blank to keep current)' : field.key}
+                    value={envForm[field.key] ?? ''}
+                    onChange={e => setEnvForm(f => ({ ...f, [field.key]: e.target.value }))}
+                    className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-ring"
+                  />
+                </div>
+              ))}
+            </>
+          ) : (
+            <>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-foreground">Server URL</label>
+                <input required type="url" placeholder="https://mcp.example.com" value={form.url}
+                  onChange={e => setForm(f => ({ ...f, url: e.target.value }))}
+                  className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-foreground flex items-center gap-1">
+                  {header ? header.name : 'API Key'}
+                  {header?.isRequired && <span className="text-destructive">*</span>}
+                  {header && !header.isRequired && <span className="text-muted-foreground font-normal">(optional)</span>}
+                </label>
+                {header?.description && (
+                  <p className="text-[11px] text-muted-foreground leading-relaxed">{header.description}</p>
+                )}
+                <input type="password"
+                  placeholder={target.existingId ? '••••••• (leave blank to keep current)' : (header?.name ?? 'API key or bearer token')}
+                  value={form.api_key} onChange={e => setForm(f => ({ ...f, api_key: e.target.value }))}
+                  className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
+              </div>
+            </>
+          )}
 
           {target.docsUrl && (
             <a href={target.docsUrl} target="_blank" rel="noopener noreferrer"
@@ -2460,15 +2683,47 @@ function IntegrationSetupModal({ target, onClose, onSaved }) {
             </a>
           )}
 
+          {testResult && (
+            <div className={`rounded-lg border px-3 py-2.5 space-y-1.5 ${
+              testResult.authenticated
+                ? 'bg-success/10 border-success/20'
+                : 'bg-amber-500/10 border-amber-500/20'
+            }`}>
+              <div className={`flex items-center gap-1.5 text-xs font-medium ${testResult.authenticated ? 'text-success' : 'text-amber-600 dark:text-amber-400'}`}>
+                {testResult.stdio
+                  ? <><Terminal className="w-3.5 h-3.5" /> Saved — runs as local process on the server</>
+                  : testResult.authenticated
+                  ? <><Check className="w-3.5 h-3.5" /> Connection verified</>
+                  : <><Lock className="w-3.5 h-3.5" /> Authentication failed</>}
+              </div>
+              {testResult.error && !testResult.authenticated && !testResult.stdio && (
+                <p className="text-[11px] text-muted-foreground">{testResult.error}</p>
+              )}
+              {testResult.authenticated && !testResult.stdio && testResult.tools?.length > 0 && (
+                <div className="flex flex-wrap gap-1 pt-0.5">
+                  {testResult.tools.map(t => (
+                    <span key={t.name} title={t.description}
+                      className="inline-flex items-center gap-1 text-[10px] bg-secondary text-muted-foreground rounded px-1.5 py-0.5 font-mono">
+                      <Wrench className="w-2.5 h-2.5 flex-shrink-0" />{t.name}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {testResult.authenticated && !testResult.stdio && !testResult.tools?.length && (
+                <p className="text-[11px] text-muted-foreground">No tools discovered (SSE transport or empty list).</p>
+              )}
+            </div>
+          )}
+
           <div className="flex gap-2 pt-1">
             <button type="button" onClick={onClose}
               className="flex-1 h-10 rounded-lg border border-border text-sm hover:bg-secondary transition-colors">
-              Cancel
+              {testResult ? 'Close' : 'Cancel'}
             </button>
             <button type="submit" disabled={busy}
               className="flex-1 h-10 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 flex items-center justify-center gap-2 transition-colors">
               {busy && <Loader2 className="w-4 h-4 animate-spin" />}
-              {target.existingId ? 'Save changes' : 'Connect'}
+              {busy ? 'Testing…' : target.existingId ? 'Save changes' : 'Connect'}
             </button>
           </div>
         </form>

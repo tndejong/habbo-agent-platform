@@ -231,8 +231,13 @@ function permRequired(permName) {
 }
 
 function requireInternalSecret(req, res, next) {
+  if (!PORTAL_INTERNAL_SECRET) {
+    // Fail closed: if the secret is not configured, block all internal routes
+    // rather than leaving them open. Set PORTAL_INTERNAL_SECRET in env to enable.
+    return res.status(503).json({ error: 'Internal secret not configured on this server' });
+  }
   const secret = req.headers['x-internal-secret'];
-  if (PORTAL_INTERNAL_SECRET && secret !== PORTAL_INTERNAL_SECRET) {
+  if (secret !== PORTAL_INTERNAL_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   return next();
@@ -405,6 +410,9 @@ async function ensurePortalSchema() {
   await db.execute(`ALTER TABLE agent_teams ADD COLUMN IF NOT EXISTS execution_mode VARCHAR(20) NOT NULL DEFAULT 'concurrent';`);
   await db.execute(`ALTER TABLE agent_teams ADD COLUMN IF NOT EXISTS tasks_json MEDIUMTEXT NOT NULL DEFAULT '[]';`);
   await db.execute(`ALTER TABLE agent_teams ADD COLUMN IF NOT EXISTS language VARCHAR(10) NOT NULL DEFAULT 'en';`);
+  await db.execute(`ALTER TABLE agent_teams ADD COLUMN IF NOT EXISTS narrator_verbosity INT NOT NULL DEFAULT 3;`);
+  await db.execute(`ALTER TABLE agent_teams ADD COLUMN IF NOT EXISTS category VARCHAR(64) NOT NULL DEFAULT '' AFTER name;`);
+  await db.execute(`ALTER TABLE user_teams ADD COLUMN IF NOT EXISTS narrator_verbosity INT NOT NULL DEFAULT 3;`);
   await db.execute(`ALTER TABLE agent_personas ADD COLUMN IF NOT EXISTS role VARCHAR(64) NOT NULL DEFAULT '' AFTER name;`);
   await db.execute(`ALTER TABLE agent_personas ADD COLUMN IF NOT EXISTS capabilities TEXT NOT NULL DEFAULT '' AFTER role;`);
   await db.execute(`ALTER TABLE agent_personas ADD COLUMN IF NOT EXISTS figure TEXT NOT NULL DEFAULT '' AFTER figure_type;`);
@@ -635,6 +643,12 @@ When sending emails: address each person by first name, keep the message under 5
       KEY idx_pui_user (portal_user_id),
       CONSTRAINT fk_pui_user FOREIGN KEY (portal_user_id) REFERENCES portal_users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+
+  // Add stdio_config_encrypted column if it doesn't exist yet (idempotent migration)
+  await db.execute(`
+    ALTER TABLE portal_user_integrations
+    ADD COLUMN IF NOT EXISTS stdio_config_encrypted TEXT NULL
   `);
 
   await db.execute(`
@@ -885,116 +899,255 @@ async function ensureBootstrapPortalUser() {
 }
 
 async function ensureAgentSeedData() {
-  // Only seed if no teams exist yet
-  const [[{ cnt }]] = await db.execute('SELECT COUNT(*) AS cnt FROM agent_teams');
-  if (cnt > 0) return;
+  // ── One-time migration guard ─────────────────────────────────────────────
+  // Detect if capabilities are stored as broken plain text (not JSON array).
+  // If so, delete all seeded rows and re-insert with correct skill slugs.
+  // On subsequent restarts the check passes and INSERT IGNORE is a no-op.
+  const [[firstPersona]] = await db.execute("SELECT capabilities FROM agent_personas WHERE name='Alex Rivera'");
+  const needsReseed = !firstPersona || !firstPersona.capabilities?.trim().startsWith('[');
+  if (needsReseed) {
+    const SEEDED_TEAMS = ['Waitlist Team','Marketing Room','Sales Room','Engineering Room','Support Room','Analytics Room','Design Room'];
+    const SEEDED_PERSONAS = ['Sander','Tom','Alex Rivera','Sara Patel','Maya Chen','Marcus Webb','Priya Sharma','Daniel Park','Liam Torres','Chloe Zhang','Ravi Nair','Elena Kovac','Omar Hassan','Kai Osei','Luna Park','Theo Marchetti','Isla Fontaine'];
+    const ph = arr => arr.map(() => '?').join(',');
+    const [teamRows] = await db.execute(`SELECT id FROM agent_teams WHERE name IN (${ph(SEEDED_TEAMS)})`, SEEDED_TEAMS);
+    const teamIds = teamRows.map(r => r.id);
+    if (teamIds.length) {
+      await db.execute(`DELETE FROM agent_team_members WHERE team_id IN (${ph(teamIds)})`, teamIds);
+      await db.execute(`DELETE FROM agent_team_flows WHERE team_id IN (${ph(teamIds)})`, teamIds);
+    }
+    await db.execute(`DELETE FROM agent_teams WHERE name IN (${ph(SEEDED_TEAMS)})`, SEEDED_TEAMS);
+    await db.execute(`DELETE FROM agent_personas WHERE name IN (${ph(SEEDED_PERSONAS)})`, SEEDED_PERSONAS);
+    console.log('[seed] Reseeding marketplace personas with correct skill slugs...');
+  }
 
-  console.log('Seeding agent personas and Waitlist Team...');
+  // ── Persona helper ───────────────────────────────────────────────────────────
+  const seedPersona = (name, role, capabilities, description, prompt, figureType) =>
+    db.execute(
+      'INSERT IGNORE INTO agent_personas (name, role, capabilities, description, prompt, figure_type, bot_name) VALUES (?,?,?,?,?,?,?)',
+      [name, role, capabilities, description, prompt, figureType, '']
+    );
 
-  // Skills are resolved at deploy time from agents/skills/*/SKILL.md.
-  // Prompts here define identity + personality only — skill instructions are injected automatically.
-  const SANDER_SKILLS = JSON.stringify(['hotel-setup', 'hotel-narrator', 'notion-reader', 'task-coordinator']);
-  const SANDER_PROMPT = `You are Sander, a researcher at The Pixel Office.
+  const personaId = async (name) => {
+    const [[row]] = await db.execute('SELECT id FROM agent_personas WHERE name=?', [name]);
+    return row?.id ?? null;
+  };
 
-Personality: Calm, methodical, thorough. You never skip entries or cut corners. \
-You speak in short, factual sentences. Max 120 chars per talk_bot message.
+  const seedTeam = (name, category, description, orchestratorPrompt, executionMode, tasksJson) =>
+    db.execute(
+      'INSERT IGNORE INTO agent_teams (name, category, description, orchestrator_prompt, execution_mode, tasks_json) VALUES (?,?,?,?,?,?)',
+      [name, category, description, orchestratorPrompt, executionMode, tasksJson]
+    );
 
-When you have extracted the waitlist data, write a clean JSON array to the shared \
-task file as your result — one object per entry with at least { name, email }.`;
+  const teamId = async (name) => {
+    const [[row]] = await db.execute('SELECT id FROM agent_teams WHERE name=?', [name]);
+    return row?.id ?? null;
+  };
 
-  const TOM_SKILLS = JSON.stringify(['hotel-setup', 'hotel-narrator', 'email-outreach', 'task-coordinator']);
-  const TOM_PROMPT = `You are Tom, an outreach specialist at The Pixel Office.
+  const linkMember = (tId, pId, role) =>
+    pId ? db.execute('INSERT IGNORE INTO agent_team_members (team_id, persona_id, role) VALUES (?,?,?)', [tId, pId, role]) : Promise.resolve();
 
-Personality: Warm, direct, efficient. You write short personalised emails that \
-feel human, not automated. Max 120 chars per talk_bot message.
-
-When sending emails: address each person by first name, keep the message under \
-5 sentences, and close with a friendly sign-off from The Pixel Office team.`;
-
-  const WAITLIST_ORCHESTRATOR = `You are the orchestrator for the Waitlist Team.
+  const ORCHESTRATOR = `You are the orchestrator for the {{TEAM_NAME}} in Habbo Hotel room {{ROOM_ID}}.
 Triggered by: {{TRIGGERED_BY}}
 
 {{TASKS}}
 
 {{PERSONAS}}
 
-Run the tasks in order. Each agent receives the previous task's output as context.`;
+Work through the tasks above in order. Spawn each team member as a subagent using the Agent tool. Wait for each task to complete before starting the next. Do not use any other coordination or messaging tools.`;
 
-  // Insert personas with skill slug arrays as capabilities
-  await db.execute(
-    'INSERT IGNORE INTO agent_personas (name, role, capabilities, description, prompt, figure_type, bot_name) VALUES (?,?,?,?,?,?,?)',
-    [
-      'Sander',
-      'Researcher',
-      SANDER_SKILLS,
-      'Researcher — reads Notion pages and extracts structured data',
-      SANDER_PROMPT,
-      'citizen-m',
-      '',
-    ]
-  );
-  await db.execute(
-    'INSERT IGNORE INTO agent_personas (name, role, capabilities, description, prompt, figure_type, bot_name) VALUES (?,?,?,?,?,?,?)',
-    [
-      'Tom',
-      'Outreach specialist',
-      TOM_SKILLS,
-      'Outreach specialist — sends personalised welcome emails to waitlist entries',
-      TOM_PROMPT,
-      'agent-m',
-      '',
-    ]
-  );
+  // ── Waitlist Team (original seed, kept idempotent) ────────────────────────
+  const SANDER_SKILLS = JSON.stringify(['hotel-setup', 'hotel-narrator', 'notion-reader', 'task-coordinator']);
+  const SANDER_PROMPT = `You are Sander, a researcher at The Pixel Office.
 
-  // Get actual IDs
-  const [[sander]] = await db.execute('SELECT id FROM agent_personas WHERE name=?', ['Sander']);
-  const [[tom]]    = await db.execute('SELECT id FROM agent_personas WHERE name=?', ['Tom']);
+Personality: Calm, methodical, thorough. You never skip entries or cut corners. You speak in short, factual sentences. Max 120 chars per talk_bot message.
 
-  // Insert Waitlist Team
-  await db.execute(
-    'INSERT IGNORE INTO agent_teams (name, description, orchestrator_prompt, execution_mode) VALUES (?,?,?,?)',
-    ['Waitlist Team', 'Sander reads the Notion waitlist, Tom emails everyone on it', WAITLIST_ORCHESTRATOR, 'shared']
-  );
+When you have extracted the waitlist data, write a clean JSON array to the shared task file as your result — one object per entry with at least { name, email }.`;
 
-  const [[teamRow]] = await db.execute('SELECT id FROM agent_teams WHERE name=?', ['Waitlist Team']);
-  if (!teamRow) return;
+  const TOM_SKILLS = JSON.stringify(['hotel-setup', 'hotel-narrator', 'email-outreach', 'task-coordinator']);
+  const TOM_PROMPT = `You are Tom, an outreach specialist at The Pixel Office.
 
-  // Link members
-  if (sander) await db.execute('INSERT IGNORE INTO agent_team_members (team_id, persona_id, role) VALUES (?,?,?)', [teamRow.id, sander.id, 'researcher']);
-  if (tom)    await db.execute('INSERT IGNORE INTO agent_team_members (team_id, persona_id, role) VALUES (?,?,?)', [teamRow.id, tom.id, 'outreach']);
+Personality: Warm, direct, efficient. You write short personalised emails that feel human, not automated. Max 120 chars per talk_bot message.
 
-  // Insert Waitlist flow
-  await db.execute(
-    'INSERT IGNORE INTO agent_flows (name, description, tasks_json, allowed_tools_json) VALUES (?,?,?,?)',
-    [
-      'Waitlist Outreach',
-      'Read the Notion waitlist and send a welcome email to everyone on it',
-      JSON.stringify([
-        {
-          id: 't1',
-          title: 'Read Notion waitlist',
-          description: 'Find the Notion page named "Waitlist" and extract all entries as a JSON array with at minimum { name, email } per entry.',
-          assign_to: 'Sander',
-          depends_on: []
-        },
-        {
-          id: 't2',
-          title: 'Send welcome emails',
-          description: 'Take the waitlist extracted by Sander and send a personalised welcome email to each person via Resend. Report how many were sent successfully.',
-          assign_to: 'Tom',
-          depends_on: ['t1']
-        }
-      ]),
-      JSON.stringify(['notion', 'resend'])
-    ]
-  );
+When sending emails: address each person by first name, keep the message under 5 sentences, and close with a friendly sign-off from The Pixel Office team.`;
 
-  const [[flowRow]] = await db.execute('SELECT id FROM agent_flows WHERE name=?', ['Waitlist Outreach']);
-  if (flowRow) {
-    await db.execute('INSERT IGNORE INTO agent_team_flows (team_id, flow_id) VALUES (?,?)', [teamRow.id, flowRow.id]);
+  await seedPersona('Sander', 'Researcher', SANDER_SKILLS, 'Researcher — reads Notion pages and extracts structured data', SANDER_PROMPT, 'citizen-m');
+  await seedPersona('Tom', 'Outreach specialist', TOM_SKILLS, 'Outreach specialist — sends personalised welcome emails to waitlist entries', TOM_PROMPT, 'agent-m');
+
+  const WAITLIST_TASKS = JSON.stringify([
+    { id: 't1', title: 'Read Notion waitlist', description: 'Find the Notion page named "Waitlist" and extract all entries as a JSON array with at minimum { name, email } per entry.', assign_to: 'Sander', depends_on: [] },
+    { id: 't2', title: 'Send welcome emails', description: 'Take the waitlist extracted by Sander and send a personalised welcome email to each person via Resend. Report how many were sent successfully.', assign_to: 'Tom', depends_on: ['t1'] }
+  ]);
+  await seedTeam('Waitlist Team', 'Outreach', 'Sander reads the Notion waitlist, Tom emails everyone on it', ORCHESTRATOR, 'shared', WAITLIST_TASKS);
+
+  const waitlistId = await teamId('Waitlist Team');
+  if (waitlistId) {
+    await linkMember(waitlistId, await personaId('Sander'), 'researcher');
+    await linkMember(waitlistId, await personaId('Tom'), 'outreach');
+    const [[flowRow]] = await db.execute("SELECT id FROM agent_flows WHERE name='Waitlist Outreach'");
+    if (flowRow) await db.execute('INSERT IGNORE INTO agent_team_flows (team_id, flow_id) VALUES (?,?)', [waitlistId, flowRow.id]);
   }
 
-  console.log('Waitlist Team seeded with Sander & Tom personas.');
+  // ── Marketing Room ────────────────────────────────────────────────────────
+  await seedPersona('Alex Rivera', 'SEO Specialist',
+    JSON.stringify(['hotel-setup', 'hotel-narrator', 'task-coordinator', 'web-researcher']),
+    'SEO Specialist — researches keywords and optimisation opportunities',
+    `You are Alex Rivera, an SEO Specialist. Calm, data-driven, precise. You back every recommendation with search volume and difficulty data. Max 120 chars per talk_bot message.`, 'agent-m');
+
+  await seedPersona('Sara Patel', 'Content Strategist',
+    JSON.stringify(['hotel-setup', 'hotel-narrator', 'task-coordinator']),
+    'Content Strategist — turns keyword research into actionable content briefs',
+    `You are Sara Patel, a Content Strategist. Structured, audience-focused, clear. You translate data into crisp briefs that writers can act on immediately. Max 120 chars per talk_bot message.`, 'agent-f');
+
+  await seedPersona('Maya Chen', 'Copywriter',
+    JSON.stringify(['hotel-setup', 'hotel-narrator', 'task-coordinator']),
+    'Copywriter — writes engaging content from briefs',
+    `You are Maya Chen, a Copywriter. Creative, concise, persuasive. You write for humans first, search engines second. Max 120 chars per talk_bot message.`, 'agent-f');
+
+  const MARKETING_TASKS = JSON.stringify([
+    { id: 't1', title: 'Research target keywords', description: 'Identify 10 high-opportunity keywords for the given topic. Include search volume, difficulty, and search intent for each. Output as a structured list.', assign_to: 'Alex Rivera', depends_on: [] },
+    { id: 't2', title: 'Create content brief', description: 'Using the keyword research from t1, create a detailed content brief: target keyword, secondary keywords, outline, word count, audience, tone, and CTA.', assign_to: 'Sara Patel', depends_on: ['t1'] },
+    { id: 't3', title: 'Write article draft', description: 'Write a complete first draft of the article following the brief from t2. Include title, intro, all sections, and a conclusion. Optimise naturally for the primary keyword.', assign_to: 'Maya Chen', depends_on: ['t2'] }
+  ]);
+  await seedTeam('Marketing Room', 'Marketing', 'Research keywords, build a content brief, and write a full article draft — end-to-end content production.', ORCHESTRATOR, 'sequential', MARKETING_TASKS);
+
+  const marketingId = await teamId('Marketing Room');
+  if (marketingId) {
+    await linkMember(marketingId, await personaId('Alex Rivera'), 'seo');
+    await linkMember(marketingId, await personaId('Sara Patel'), 'strategy');
+    await linkMember(marketingId, await personaId('Maya Chen'), 'copywriting');
+  }
+
+  // ── Sales Room ────────────────────────────────────────────────────────────
+  await seedPersona('Marcus Webb', 'Sales Manager',
+    JSON.stringify(['hotel-setup', 'hotel-narrator', 'task-coordinator', 'web-researcher']),
+    'Sales Manager — owns pipeline strategy and deal oversight',
+    `You are Marcus Webb, a Sales Manager. Direct, strategic, results-oriented. You think in pipelines and conversion rates. Max 120 chars per talk_bot message.`, 'agent-m');
+
+  await seedPersona('Priya Sharma', 'Business Development Rep',
+    JSON.stringify(['hotel-setup', 'hotel-narrator', 'email-outreach', 'task-coordinator', 'web-researcher']),
+    'BDR — finds and qualifies new business opportunities',
+    `You are Priya Sharma, a Business Development Rep. Energetic, persistent, empathetic. You open doors with genuine curiosity. Max 120 chars per talk_bot message.`, 'agent-f');
+
+  await seedPersona('Daniel Park', 'Account Executive',
+    JSON.stringify(['hotel-setup', 'hotel-narrator', 'task-coordinator', 'web-researcher']),
+    'Account Executive — runs deals from qualified lead to close',
+    `You are Daniel Park, an Account Executive. Consultative, persuasive, detail-oriented. You close by understanding the customer\'s real problem. Max 120 chars per talk_bot message.`, 'agent-m');
+
+  const SALES_TASKS = JSON.stringify([
+    { id: 't1', title: 'Research and qualify target accounts', description: 'Identify 5 target companies that match the ICP. For each: company size, industry, pain points, key stakeholders, and why they are a good fit. Use available tools and web research.', assign_to: 'Priya Sharma', depends_on: [] },
+    { id: 't2', title: 'Draft personalised outreach sequence', description: 'Using the accounts from t1, write a 3-touch outreach sequence (email + LinkedIn) for each top prospect. Personalise each message to their specific context.', assign_to: 'Priya Sharma', depends_on: ['t1'] },
+    { id: 't3', title: 'Prepare demo and proposal for top prospect', description: 'Pick the highest-potential account from t1. Prepare a tailored demo agenda and a one-page proposal covering: their problem, our solution, expected ROI, and pricing.', assign_to: 'Daniel Park', depends_on: ['t1'] }
+  ]);
+  await seedTeam('Sales Room', 'Sales', 'Prospect target accounts, draft outreach sequences, and prepare a tailored demo and proposal.', ORCHESTRATOR, 'sequential', SALES_TASKS);
+
+  const salesId = await teamId('Sales Room');
+  if (salesId) {
+    await linkMember(salesId, await personaId('Marcus Webb'), 'manager');
+    await linkMember(salesId, await personaId('Priya Sharma'), 'bdr');
+    await linkMember(salesId, await personaId('Daniel Park'), 'ae');
+  }
+
+  // ── Engineering Room ──────────────────────────────────────────────────────
+  await seedPersona('Liam Torres', 'Backend Engineer',
+    JSON.stringify(['hotel-setup', 'hotel-narrator', 'jira-researcher', 'task-coordinator']),
+    'Backend Engineer — designs and builds server-side systems',
+    `You are Liam Torres, a Backend Engineer. Pragmatic, systematic, quality-focused. You write clean code with clear contracts. Max 120 chars per talk_bot message.`, 'agent-m');
+
+  await seedPersona('Chloe Zhang', 'Frontend Engineer',
+    JSON.stringify(['hotel-setup', 'hotel-narrator', 'jira-researcher', 'task-coordinator']),
+    'Frontend Engineer — builds the user-facing interface',
+    `You are Chloe Zhang, a Frontend Engineer. Detail-oriented, user-empathetic, pixel-perfect. You care deeply about what users actually experience. Max 120 chars per talk_bot message.`, 'agent-f');
+
+  await seedPersona('Ravi Nair', 'DevOps Engineer',
+    JSON.stringify(['hotel-setup', 'hotel-narrator', 'jira-researcher', 'sprint-coordinator', 'task-coordinator']),
+    'DevOps Engineer — automates delivery and manages infrastructure',
+    `You are Ravi Nair, a DevOps Engineer. Reliable, automation-first, incident-ready. You eliminate toil and keep systems running. Max 120 chars per talk_bot message.`, 'agent-m');
+
+  const ENGINEERING_TASKS = JSON.stringify([
+    { id: 't1', title: 'Design and implement the backend API', description: 'Define the data model and API contract. Implement the core endpoints with validation, error handling, and basic tests. Document the API shape clearly for the frontend.', assign_to: 'Liam Torres', depends_on: [] },
+    { id: 't2', title: 'Build the frontend interface', description: 'Using the API contract from t1, implement the UI. Build the required components, wire up the API calls, handle loading and error states, and ensure mobile responsiveness.', assign_to: 'Chloe Zhang', depends_on: ['t1'] },
+    { id: 't3', title: 'Set up deployment pipeline and infrastructure', description: 'Create a CI/CD pipeline that runs tests and deploys on merge. Provision the required cloud infrastructure. Add health checks and basic monitoring/alerting.', assign_to: 'Ravi Nair', depends_on: ['t2'] }
+  ]);
+  await seedTeam('Engineering Room', 'Engineering', 'Design the backend API, build the frontend, and set up deployment — full-stack delivery from spec to production.', ORCHESTRATOR, 'sequential', ENGINEERING_TASKS);
+
+  const engineeringId = await teamId('Engineering Room');
+  if (engineeringId) {
+    await linkMember(engineeringId, await personaId('Liam Torres'), 'backend');
+    await linkMember(engineeringId, await personaId('Chloe Zhang'), 'frontend');
+    await linkMember(engineeringId, await personaId('Ravi Nair'), 'devops');
+  }
+
+  // ── Support Room ──────────────────────────────────────────────────────────
+  await seedPersona('Elena Kovac', 'Customer Success Manager',
+    JSON.stringify(['hotel-setup', 'hotel-narrator', 'task-coordinator']),
+    'Customer Success Manager — owns the customer relationship and long-term health',
+    `You are Elena Kovac, a Customer Success Manager. Empathetic, proactive, relationship-driven. You anticipate problems before customers report them. Max 120 chars per talk_bot message.`, 'agent-f');
+
+  await seedPersona('Omar Hassan', 'Support Specialist',
+    JSON.stringify(['hotel-setup', 'hotel-narrator', 'task-coordinator']),
+    'Support Specialist — investigates and resolves customer issues',
+    `You are Omar Hassan, a Support Specialist. Methodical, patient, thorough. You dig until you find the real cause. Max 120 chars per talk_bot message.`, 'agent-m');
+
+  const SUPPORT_TASKS = JSON.stringify([
+    { id: 't1', title: 'Triage and investigate the issue', description: 'Reproduce the reported problem, identify the root cause, and document your findings: what broke, why, and what the impact is. Propose a resolution or workaround.', assign_to: 'Omar Hassan', depends_on: [] },
+    { id: 't2', title: 'Document resolution and update knowledge base', description: 'Based on the investigation from t1, write a clear resolution guide: steps taken, fix applied, and prevention advice. Format it as a knowledge base article.', assign_to: 'Omar Hassan', depends_on: ['t1'] },
+    { id: 't3', title: 'Follow up with customer and confirm resolution', description: 'Draft a personalised follow-up message to the customer: summarise what happened, what was fixed, and any actions they should take. Confirm the issue is fully resolved.', assign_to: 'Elena Kovac', depends_on: ['t1'] }
+  ]);
+  await seedTeam('Support Room', 'Support', 'Investigate a customer issue, document the resolution, and follow up — end-to-end support handling.', ORCHESTRATOR, 'sequential', SUPPORT_TASKS);
+
+  const supportId = await teamId('Support Room');
+  if (supportId) {
+    await linkMember(supportId, await personaId('Elena Kovac'), 'success');
+    await linkMember(supportId, await personaId('Omar Hassan'), 'support');
+  }
+
+  // ── Analytics Room ────────────────────────────────────────────────────────
+  await seedPersona('Kai Osei', 'Data Analyst',
+    JSON.stringify(['hotel-setup', 'hotel-narrator', 'task-coordinator', 'web-researcher']),
+    'Data Analyst — pulls, cleans, and analyses data to surface insights',
+    `You are Kai Osei, a Data Analyst. Curious, rigorous, sceptical of noise. You never present a number without context. Max 120 chars per talk_bot message.`, 'agent-m');
+
+  await seedPersona('Luna Park', 'BI Developer',
+    JSON.stringify(['hotel-setup', 'hotel-narrator', 'task-coordinator']),
+    'BI Developer — turns analysis into dashboards and reports',
+    `You are Luna Park, a BI Developer. Visual, structured, stakeholder-aware. You make data understandable to anyone. Max 120 chars per talk_bot message.`, 'agent-f');
+
+  const ANALYTICS_TASKS = JSON.stringify([
+    { id: 't1', title: 'Pull and clean the raw data', description: 'Extract the required dataset using SQL or available tools. Clean it: handle nulls, remove duplicates, fix data types. Output a clean summary of what the dataset contains.', assign_to: 'Kai Osei', depends_on: [] },
+    { id: 't2', title: 'Analyse data and identify key insights', description: 'Using the cleaned data from t1, run the analysis. Identify trends, anomalies, and patterns. Surface the top 5 actionable insights with supporting data.', assign_to: 'Kai Osei', depends_on: ['t1'] },
+    { id: 't3', title: 'Build dashboard and present findings', description: 'Using the insights from t2, design a dashboard layout with the key metrics and charts. Write a one-page executive summary of the findings and recommendations.', assign_to: 'Luna Park', depends_on: ['t2'] }
+  ]);
+  await seedTeam('Analytics Room', 'Analytics', 'Pull raw data, run analysis to find insights, and deliver a dashboard with an executive summary.', ORCHESTRATOR, 'sequential', ANALYTICS_TASKS);
+
+  const analyticsId = await teamId('Analytics Room');
+  if (analyticsId) {
+    await linkMember(analyticsId, await personaId('Kai Osei'), 'analyst');
+    await linkMember(analyticsId, await personaId('Luna Park'), 'bi');
+  }
+
+  // ── Design Room ───────────────────────────────────────────────────────────
+  await seedPersona('Theo Marchetti', 'UX Researcher',
+    JSON.stringify(['hotel-setup', 'hotel-narrator', 'task-coordinator', 'web-researcher']),
+    'UX Researcher — uncovers user needs and maps the experience',
+    `You are Theo Marchetti, a UX Researcher. Empathetic, curious, evidence-driven. You listen to users and translate what they say into what they mean. Max 120 chars per talk_bot message.`, 'agent-m');
+
+  await seedPersona('Isla Fontaine', 'UI Designer',
+    JSON.stringify(['hotel-setup', 'hotel-narrator', 'task-coordinator']),
+    'UI Designer — creates high-fidelity designs and visual assets',
+    `You are Isla Fontaine, a UI Designer. Aesthetic, precise, system-minded. You design components that look great and scale. Max 120 chars per talk_bot message.`, 'agent-f');
+
+  const DESIGN_TASKS = JSON.stringify([
+    { id: 't1', title: 'Conduct user research and define requirements', description: 'Research the target users: their goals, pain points, and current workflow. Produce a summary with 3 user personas and the top 5 design requirements derived from the research.', assign_to: 'Theo Marchetti', depends_on: [] },
+    { id: 't2', title: 'Create wireframes and user flow', description: 'Based on the requirements from t1, produce low-fidelity wireframes for the key screens and a user flow diagram showing how users move through the feature.', assign_to: 'Theo Marchetti', depends_on: ['t1'] },
+    { id: 't3', title: 'Design high-fidelity mockups', description: 'Using the wireframes from t2, create polished high-fidelity mockups for the key screens. Apply the design system, ensure visual hierarchy, and annotate interactions.', assign_to: 'Isla Fontaine', depends_on: ['t2'] }
+  ]);
+  await seedTeam('Design Room', 'Design', 'Research users, create wireframes and user flows, then deliver high-fidelity mockups ready for development.', ORCHESTRATOR, 'sequential', DESIGN_TASKS);
+
+  const designId = await teamId('Design Room');
+  if (designId) {
+    await linkMember(designId, await personaId('Theo Marchetti'), 'ux');
+    await linkMember(designId, await personaId('Isla Fontaine'), 'ui');
+  }
 }
 
 async function createHabboUser(username) {
@@ -1575,16 +1728,40 @@ app.get('/api/mcp/calls', authRequired, async (req, res) => {
 
 // ─── User integrations (external MCP servers) ────────────────────────────────
 
+// Parses, validates, and encrypts an stdio_config payload.
+// Returns { encrypted } on success or { error } on failure.
+function parseAndEncryptStdioConfig(raw) {
+  let parsed;
+  try { parsed = JSON.parse(typeof raw === 'string' ? raw : JSON.stringify(raw)); }
+  catch { return { error: 'stdio_config must be valid JSON' }; }
+  if (!parsed.command || typeof parsed.command !== 'string') {
+    return { error: 'stdio_config.command must be a non-empty string' };
+  }
+  return { encrypted: encryptApiKey(JSON.stringify(parsed)) };
+}
+
 app.get('/api/my/integrations', authRequired, async (req, res) => {
   try {
     const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
     if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
 
     const [rows] = await db.execute(
-      'SELECT id, name, url, created_at, updated_at FROM portal_user_integrations WHERE portal_user_id = ? ORDER BY created_at ASC',
+      'SELECT id, name, url, stdio_config_encrypted, created_at, updated_at FROM portal_user_integrations WHERE portal_user_id = ? ORDER BY created_at ASC',
       [portalUser.id]
     );
-    res.json({ ok: true, integrations: rows });
+    const integrations = rows.map(row => {
+      if (row.stdio_config_encrypted) {
+        let command = null, args = [];
+        try {
+          const cfg = JSON.parse(decryptApiKey(row.stdio_config_encrypted));
+          command = cfg.command ?? null;
+          args = Array.isArray(cfg.args) ? cfg.args : [];
+        } catch {}
+        return { id: row.id, name: row.name, url: null, type: 'stdio', command, args, created_at: row.created_at, updated_at: row.updated_at };
+      }
+      return { id: row.id, name: row.name, url: row.url, type: 'http', created_at: row.created_at, updated_at: row.updated_at };
+    });
+    res.json({ ok: true, integrations });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -1594,19 +1771,29 @@ app.post('/api/my/integrations', authRequired, async (req, res) => {
     if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
 
     const name = String(req.body?.name || '').trim().slice(0, 64);
+    if (!name) return res.status(400).json({ error: 'name is required' });
+
+    const stdioConfigRaw = req.body?.stdio_config;
+    if (stdioConfigRaw) {
+      const { error, encrypted } = parseAndEncryptStdioConfig(stdioConfigRaw);
+      if (error) return res.status(400).json({ error });
+      const [result] = await db.execute(
+        'INSERT INTO portal_user_integrations (portal_user_id, name, url, stdio_config_encrypted) VALUES (?, ?, ?, ?)',
+        [portalUser.id, name, 'stdio://', encrypted]
+      );
+      return res.json({ ok: true, integration: { id: result.insertId, name, type: 'stdio', created_at: new Date() } });
+    }
+
+    // HTTP integration (existing path)
     const url = String(req.body?.url || '').trim().slice(0, 512);
     const apiKey = String(req.body?.api_key || '').trim();
-
-    if (!name) return res.status(400).json({ error: 'name is required' });
     if (!url) return res.status(400).json({ error: 'url is required' });
-
     const apiKeyEncrypted = apiKey ? encryptApiKey(apiKey) : null;
-
     const [result] = await db.execute(
       'INSERT INTO portal_user_integrations (portal_user_id, name, url, api_key_encrypted) VALUES (?, ?, ?, ?)',
       [portalUser.id, name, url, apiKeyEncrypted]
     );
-    res.json({ ok: true, integration: { id: result.insertId, name, url, created_at: new Date() } });
+    res.json({ ok: true, integration: { id: result.insertId, name, url, type: 'http', created_at: new Date() } });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -1616,28 +1803,47 @@ app.put('/api/my/integrations/:id', authRequired, async (req, res) => {
     if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
 
     const [[existing]] = await db.execute(
-      'SELECT id FROM portal_user_integrations WHERE id = ? AND portal_user_id = ?',
+      'SELECT id, stdio_config_encrypted FROM portal_user_integrations WHERE id = ? AND portal_user_id = ?',
       [req.params.id, portalUser.id]
     );
     if (!existing) return res.status(404).json({ error: 'Integration not found' });
 
     const name = String(req.body?.name || '').trim().slice(0, 64);
+    if (!name) return res.status(400).json({ error: 'name is required' });
+
+    const stdioConfigRaw = req.body?.stdio_config;
+    if (stdioConfigRaw || existing.stdio_config_encrypted) {
+      if (stdioConfigRaw) {
+        const { error, encrypted } = parseAndEncryptStdioConfig(stdioConfigRaw);
+        if (error) return res.status(400).json({ error });
+        await db.execute(
+          'UPDATE portal_user_integrations SET name = ?, stdio_config_encrypted = ? WHERE id = ? AND portal_user_id = ?',
+          [name, encrypted, req.params.id, portalUser.id]
+        );
+      } else {
+        await db.execute(
+          'UPDATE portal_user_integrations SET name = ? WHERE id = ? AND portal_user_id = ?',
+          [name, req.params.id, portalUser.id]
+        );
+      }
+      return res.json({ ok: true });
+    }
+
+    // HTTP integration update (existing path)
     const url = String(req.body?.url || '').trim().slice(0, 512);
     const apiKey = req.body?.api_key !== undefined ? String(req.body.api_key).trim() : undefined;
-
-    if (!name) return res.status(400).json({ error: 'name is required' });
     if (!url) return res.status(400).json({ error: 'url is required' });
 
     if (apiKey !== undefined) {
       const apiKeyEncrypted = apiKey ? encryptApiKey(apiKey) : null;
       await db.execute(
-        'UPDATE portal_user_integrations SET name = ?, url = ?, api_key_encrypted = ? WHERE id = ?',
-        [name, url, apiKeyEncrypted, req.params.id]
+        'UPDATE portal_user_integrations SET name = ?, url = ?, api_key_encrypted = ? WHERE id = ? AND portal_user_id = ?',
+        [name, url, apiKeyEncrypted, req.params.id, portalUser.id]
       );
     } else {
       await db.execute(
-        'UPDATE portal_user_integrations SET name = ?, url = ? WHERE id = ?',
-        [name, url, req.params.id]
+        'UPDATE portal_user_integrations SET name = ?, url = ? WHERE id = ? AND portal_user_id = ?',
+        [name, url, req.params.id, portalUser.id]
       );
     }
     res.json({ ok: true });
@@ -1662,18 +1868,93 @@ app.delete('/api/my/integrations/:id', authRequired, async (req, res) => {
 app.get('/api/internal/user/:portalUserId/integrations', requireInternalSecret, async (req, res) => {
   try {
     const [rows] = await db.execute(
-      'SELECT id, name, url, api_key_encrypted FROM portal_user_integrations WHERE portal_user_id = ? ORDER BY created_at ASC',
+      'SELECT id, name, url, api_key_encrypted, stdio_config_encrypted FROM portal_user_integrations WHERE portal_user_id = ? ORDER BY created_at ASC',
       [req.params.portalUserId]
     );
-    const integrations = rows.map(row => ({
-      id: row.id,
-      name: row.name,
-      url: row.url,
-      api_key: row.api_key_encrypted ? decryptApiKey(row.api_key_encrypted) : null,
-    }));
+    const integrations = rows.map(row => {
+      if (row.stdio_config_encrypted) {
+        const stdio_config = decryptApiKey(row.stdio_config_encrypted);
+        return { id: row.id, name: row.name, url: null, api_key: null, stdio_config };
+      }
+      return {
+        id: row.id,
+        name: row.name,
+        url: row.url,
+        api_key: row.api_key_encrypted ? decryptApiKey(row.api_key_encrypted) : null,
+        stdio_config: null,
+      };
+    });
     res.json({ ok: true, integrations });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
+
+// ─── MCP HTTP probe: initialize + tools/list ──────────────────────────────────
+async function probeMcpConnection(url, authHeaders = {}, timeoutMs = 6000) {
+  const reqHeaders = {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json, text/event-stream',
+    ...authHeaders,
+  };
+
+  const initBody = JSON.stringify({
+    jsonrpc: '2.0', id: 1, method: 'initialize',
+    params: {
+      protocolVersion: '2024-11-05',
+      capabilities: {},
+      clientInfo: { name: 'habbo-agent', version: '1.0' },
+    },
+  });
+
+  let initResult;
+  try {
+    const resp = await fetch(url, {
+      method: 'POST', headers: reqHeaders, body: initBody,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+
+    if (resp.status === 401 || resp.status === 403) {
+      return { online: true, authenticated: false, tools: [], error: `Authentication failed (HTTP ${resp.status})` };
+    }
+    if (!resp.ok) {
+      return { online: true, authenticated: false, tools: [], error: `Server returned HTTP ${resp.status}` };
+    }
+
+    const text = await resp.text();
+    let data;
+    try { data = JSON.parse(text); } catch {
+      // SSE or non-JSON transport — server is reachable but we can't introspect tools
+      return { online: true, authenticated: true, tools: [], error: 'Non-JSON response (SSE transport — tools list not available)' };
+    }
+
+    if (data.error) {
+      return { online: true, authenticated: false, tools: [], error: data.error.message || JSON.stringify(data.error) };
+    }
+    if (!data.result) {
+      return { online: true, authenticated: false, tools: [], error: 'Unexpected response format from MCP server' };
+    }
+    initResult = data.result;
+  } catch (err) {
+    return { online: false, authenticated: false, tools: [], error: err.message };
+  }
+
+  // Probe tools/list
+  const toolsBody = JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
+  try {
+    const resp = await fetch(url, {
+      method: 'POST', headers: reqHeaders, body: toolsBody,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const text = await resp.text();
+    let data;
+    try { data = JSON.parse(text); } catch {
+      return { online: true, authenticated: true, tools: [], serverInfo: initResult };
+    }
+    const tools = (data.result?.tools ?? []).map(t => ({ name: t.name, description: t.description ?? '' }));
+    return { online: true, authenticated: true, tools, serverInfo: initResult };
+  } catch {
+    return { online: true, authenticated: true, tools: [], serverInfo: initResult };
+  }
+}
 
 // ─── Ping an integration URL (server-side socket check) ───────────────────────
 app.post('/api/my/integrations/ping', authRequired, async (req, res) => {
@@ -1681,6 +1962,30 @@ app.post('/api/my/integrations/ping', authRequired, async (req, res) => {
     const url = String(req.body?.url || '').trim();
     if (!url) return res.status(400).json({ error: 'url is required' });
     const result = await checkSocketOnline(url, 3000);
+    res.json({ ok: true, ...result });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ─── Test a saved integration: real MCP probe with stored auth ─────────────────
+app.post('/api/my/integrations/:id/test', authRequired, async (req, res) => {
+  try {
+    const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
+    if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
+
+    const [[integration]] = await db.execute(
+      'SELECT id, url, api_key_encrypted, stdio_config_encrypted FROM portal_user_integrations WHERE id = ? AND portal_user_id = ?',
+      [req.params.id, portalUser.id]
+    );
+    if (!integration) return res.status(404).json({ error: 'Integration not found' });
+
+    // stdio integrations can't be probed over HTTP — report as configured
+    if (integration.stdio_config_encrypted) {
+      return res.json({ ok: true, online: true, authenticated: true, tools: [], stdio: true });
+    }
+
+    const apiKey = integration.api_key_encrypted ? decryptApiKey(integration.api_key_encrypted) : null;
+    const authHeaders = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
+    const result = await probeMcpConnection(integration.url, authHeaders);
     res.json({ ok: true, ...result });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -1844,7 +2149,7 @@ app.get('/api/hotel/bots', authRequired, async (req, res) => {
   const [rows] = await db.execute(
     `
     SELECT
-      a.id, a.name, a.persona, COALESCE(b.motto, a.motto, '') AS motto, a.figure, a.gender,
+      a.id, a.name, a.persona, COALESCE(b.motto, a.motto, '') AS motto, COALESCE(b.figure, a.figure) AS figure, a.gender,
       a.room_id AS config_room_id, a.bot_id, a.active, a.created_at,
       r.name AS room_name,
       b.room_id AS db_room_id,
@@ -2013,12 +2318,32 @@ app.post('/api/hotel/bots/sync', authRequired, async (req, res) => {
       byName.set(key, b);
     }
 
+    // Build a lookup of existing configs by lowercased name for figure/motto refresh
+    const [existingConfigs] = await db.execute(
+      'SELECT id, LOWER(name) AS name, figure, motto FROM ai_agent_configs WHERE user_id = ?',
+      [habboUserId]
+    );
+    const configByName = new Map(existingConfigs.map(c => [c.name, c]));
+
     let imported = 0;
+    let updated = 0;
     let alreadyHad = 0;
     for (const b of byName.values()) {
       const key = b.name.toLowerCase();
-      if (registeredNames.has(key)) {
-        alreadyHad++;
+      const existing = configByName.get(key);
+      if (existing) {
+        // Refresh figure and motto from the live bots table if they differ
+        const newFigure = b.figure || existing.figure;
+        const newMotto  = b.motto  ?? existing.motto;
+        if (newFigure !== existing.figure || newMotto !== existing.motto) {
+          await db.execute(
+            'UPDATE ai_agent_configs SET figure=?, motto=? WHERE id=?',
+            [newFigure, newMotto, existing.id]
+          );
+          updated++;
+        } else {
+          alreadyHad++;
+        }
         continue;
       }
       const gender = b.gender === 'F' ? 'F' : 'M';
@@ -2034,6 +2359,7 @@ app.post('/api/hotel/bots/sync', authRequired, async (req, res) => {
     res.json({
       ok: true,
       imported,
+      updated,
       removed,
       alreadyHad,
       totalOwned: byName.size,
@@ -2152,12 +2478,12 @@ app.delete('/api/hotel/bots/:id', authRequired, async (req, res) => {
 
   const bot = await findLiveBot(config, habboUserId);
   if (bot) {
-    let rconOk = false;
     try {
-      const r = await rconCommand('deletebot', { bot_id: bot.id });
-      rconOk = r?.status === 0;
-    } catch { /* RCON unavailable */ }
-    if (!rconOk) await db.execute('DELETE FROM bots WHERE id=?', [bot.id]);
+      await rconCommand('deletebot', { bot_id: bot.id });
+    } catch { /* RCON unavailable — bot already gone or emulator down */ }
+    // Always remove the DB row so sync cannot reimport this bot.
+    // DeleteBot RCON only sets room_id=0; it does not delete the row.
+    await db.execute('DELETE FROM bots WHERE id=?', [bot.id]);
   }
 
   await db.execute('DELETE FROM ai_agent_configs WHERE id=?', [configId]);
@@ -2881,12 +3207,12 @@ app.post('/api/my/teams', authRequired, permRequired('teams.create'), async (req
   try {
     const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
     if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
-    const { name, description, orchestrator_prompt, execution_mode, tasks_json, language, default_room_id } = req.body;
+    const { name, description, orchestrator_prompt, execution_mode, tasks_json, language, default_room_id, narrator_verbosity } = req.body;
     if (!name?.trim()) return res.status(400).json({ error: 'Name required' });
     const [result] = await db.execute(
-      `INSERT INTO user_teams (portal_user_id, name, description, orchestrator_prompt, execution_mode, tasks_json, language, default_room_id)
-       VALUES (?,?,?,?,?,?,?,?)`,
-      [portalUser.id, name.trim(), description || '', orchestrator_prompt || '', execution_mode || 'concurrent', JSON.stringify(tasks_json || []), language || 'en', Number(default_room_id) || 50]
+      `INSERT INTO user_teams (portal_user_id, name, description, orchestrator_prompt, execution_mode, tasks_json, language, default_room_id, narrator_verbosity)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
+      [portalUser.id, name.trim(), description || '', orchestrator_prompt || '', execution_mode || 'concurrent', JSON.stringify(tasks_json || []), language || 'en', Number(default_room_id) || 50, Math.max(3, Math.min(10, Number(narrator_verbosity) || 3))]
     );
     res.json({ ok: true, id: result.insertId });
   } catch (err) {
@@ -2901,10 +3227,10 @@ app.put('/api/my/teams/:id', authRequired, permRequired('teams.edit'), async (re
     if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
     const [[existing]] = await db.execute('SELECT id FROM user_teams WHERE id = ? AND portal_user_id = ?', [req.params.id, portalUser.id]);
     if (!existing) return res.status(404).json({ error: 'Not found' });
-    const { name, description, orchestrator_prompt, execution_mode, tasks_json, language, default_room_id } = req.body;
+    const { name, description, orchestrator_prompt, execution_mode, tasks_json, language, default_room_id, narrator_verbosity } = req.body;
     await db.execute(
-      `UPDATE user_teams SET name=?, description=?, orchestrator_prompt=?, execution_mode=?, tasks_json=?, language=?, default_room_id=? WHERE id=? AND portal_user_id=?`,
-      [name, description || '', orchestrator_prompt || '', execution_mode || 'concurrent', JSON.stringify(tasks_json || []), language || 'en', Number(default_room_id) || 50, req.params.id, portalUser.id]
+      `UPDATE user_teams SET name=?, description=?, orchestrator_prompt=?, execution_mode=?, tasks_json=?, language=?, default_room_id=?, narrator_verbosity=? WHERE id=? AND portal_user_id=?`,
+      [name, description || '', orchestrator_prompt || '', execution_mode || 'concurrent', JSON.stringify(tasks_json || []), language || 'en', Number(default_room_id) || 50, Math.max(3, Math.min(10, Number(narrator_verbosity) || 3)), req.params.id, portalUser.id]
     );
     res.json({ ok: true });
   } catch (err) {
@@ -2940,6 +3266,18 @@ app.post('/api/my/teams/:id/members', authRequired, permRequired('teams.edit'), 
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.patch('/api/my/teams/:id/members/:memberId', authRequired, permRequired('teams.edit'), async (req, res) => {
+  try {
+    const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
+    if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
+    const [[team]] = await db.execute('SELECT id FROM user_teams WHERE id = ? AND portal_user_id = ?', [req.params.id, portalUser.id]);
+    if (!team) return res.status(404).json({ error: 'Team not found' });
+    const { role } = req.body;
+    await db.execute('UPDATE user_team_members SET role = ? WHERE id = ? AND user_team_id = ?', [role ?? '', req.params.memberId, req.params.id]);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.delete('/api/my/teams/:id/members/:memberId', authRequired, permRequired('teams.edit'), async (req, res) => {
   try {
     const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
@@ -2968,6 +3306,36 @@ app.patch('/api/my/teams/:id/room', authRequired, permRequired('teams.deploy'), 
 });
 
 // Trigger my team
+// Maps a known integration service name to the keywords we look for in task/capability text.
+// Keywords are intentionally specific to avoid false positives on common English words.
+const INTEGRATION_KEYWORDS = {
+  notion:     ['notion'],
+  plane:      ['plane.so', 'plane mcp', 'planemcp'],
+  linear:     ['linear.app', 'linear mcp'],
+  atlassian:  ['atlassian', 'jira', 'confluence'],
+  airtable:   ['airtable'],
+  supabase:   ['supabase'],
+  resend:     ['resend'],
+  github:     ['github'],
+  slack:      ['slack mcp', 'slack integration'],
+};
+
+// Scan free-text content (tasks + capabilities) for service names that require an integration.
+function detectRequiredIntegrations(tasksJson, members, orchestratorPrompt) {
+  const texts = [];
+  try {
+    const tasks = JSON.parse(tasksJson || '[]');
+    texts.push(...tasks.map(t => `${t.title || ''} ${t.description || ''}`));
+  } catch { /* malformed json — skip */ }
+  texts.push(...(members || []).map(m => `${m.capabilities || ''} ${m.prompt || ''}`));
+  if (orchestratorPrompt) texts.push(orchestratorPrompt);
+  const combined = texts.join(' ').toLowerCase();
+
+  return Object.entries(INTEGRATION_KEYWORDS)
+    .filter(([, keywords]) => keywords.some(kw => combined.includes(kw)))
+    .map(([name]) => name);
+}
+
 app.post('/api/my/teams/:id/trigger', authRequired, permRequired('teams.deploy'), async (req, res) => {
   try {
     const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
@@ -2998,15 +3366,23 @@ app.post('/api/my/teams/:id/trigger', authRequired, permRequired('teams.deploy')
       });
     }
 
-    // Check bot conflicts
+    // Check bots exist and are not in a conflicting room
     const botNames = members.map(m => m.bot_name).filter(Boolean);
     if (botNames.length > 0) {
       const placeholders = botNames.map(() => '?').join(',');
-      const [activeBots] = await db.execute(
-        `SELECT name, room_id FROM bots WHERE name IN (${placeholders}) AND room_id > 0`,
+      const [foundBots] = await db.execute(
+        `SELECT name, room_id FROM bots WHERE name IN (${placeholders})`,
         botNames
       );
-      const wrongRoom = activeBots.filter(b => Number(b.room_id) !== resolvedRoomId);
+      const foundNames = new Set(foundBots.map(b => b.name.toLowerCase()));
+      const deletedBots = botNames.filter(n => !foundNames.has(n.toLowerCase()));
+      if (deletedBots.length > 0) {
+        return res.status(400).json({
+          error: `Bot${deletedBots.length > 1 ? 's' : ''} no longer exist in the hotel: ${deletedBots.map(n => `"${n}"`).join(', ')}. Reassign the agent${deletedBots.length > 1 ? 's' : ''} to a valid bot.`,
+          deleted_bots: deletedBots,
+        });
+      }
+      const wrongRoom = foundBots.filter(b => b.room_id > 0 && Number(b.room_id) !== resolvedRoomId);
       if (wrongRoom.length > 0) {
         return res.status(400).json({
           error: `Bot ${wrongRoom.map(b => `"${b.name}"`).join(', ')} already active in room ${wrongRoom[0].room_id}.`
@@ -3021,6 +3397,27 @@ app.post('/api/my/teams/:id/trigger', authRequired, permRequired('teams.deploy')
     );
     if (mcpTokenRows.length === 0) {
       return res.status(400).json({ error: 'No active MCP token found. Go to Settings → MCP Tokens and generate one before deploying.' });
+    }
+
+    // Pre-flight: detect which integrations the team tasks/capabilities reference and
+    // verify the user has them configured. An integration is "configured" when it has
+    // either an encrypted API key (HTTP) or a stdio config (stdio) — not just a name row.
+    const required = detectRequiredIntegrations(team.tasks_json, members, team.orchestrator_prompt);
+    if (required.length > 0) {
+      const [userIntegrations] = await db.execute(
+        `SELECT name FROM portal_user_integrations
+         WHERE portal_user_id = ?
+           AND (api_key_encrypted IS NOT NULL OR stdio_config_encrypted IS NOT NULL)`,
+        [portalUser.id]
+      );
+      const connectedNames = userIntegrations.map(i => i.name.toLowerCase());
+      const missing = required.filter(svc => !connectedNames.some(n => n.includes(svc)));
+      if (missing.length > 0) {
+        return res.status(400).json({
+          error: `Team needs integrations that are not connected: ${missing.map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(', ')}. Go to Settings → Integrations to connect them first.`,
+          missing_integrations: missing,
+        });
+      }
     }
 
     // Forward to agent-trigger — build a compatible config
@@ -3066,52 +3463,88 @@ app.post('/api/marketplace/teams/:id/install', authRequired, permRequired('marke
        WHERE atm.team_id = ?`, [marketplaceTeamId]
     );
 
-    // Fork personas
-    const personaIdMap = {}; // marketplace persona id → new user persona id
-    for (const mp of mMembers) {
-      // Check if user already has a persona with same name (from a previous install)
-      let suffix = '';
-      let attempts = 0;
-      while (attempts < 5) {
-        const candidateName = `${mp.name}${suffix}`;
-        const [[dup]] = await db.execute(
-          'SELECT id FROM user_personas WHERE portal_user_id = ? AND name = ?',
-          [portalUser.id, candidateName]
-        );
-        if (!dup) {
-          const [result] = await db.execute(
-            `INSERT INTO user_personas (portal_user_id, source_persona_id, name, description, prompt, role, capabilities, figure_type, figure, bot_name)
-             VALUES (?,?,?,?,?,?,?,?,?,?)`,
-            [portalUser.id, mp.id, candidateName, mp.description || '', mp.prompt || '', mp.role || '', mp.capabilities || '', mp.figure_type || 'agent-m', mp.figure || '', '']
+    // Validate bot_assignments shape — must be a plain object, not an array or primitive
+    const rawAssignments = req.body?.bot_assignments;
+    const botAssignments = (rawAssignments && typeof rawAssignments === 'object' && !Array.isArray(rawAssignments))
+      ? rawAssignments : {};
+
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      // Fork personas, tracking original → suffixed name for assign_to rewriting
+      const personaIdMap = {}; // marketplace persona id → new user persona id
+      const nameMap = {};      // original persona name → suffixed name (only when suffix applied)
+      for (const mp of mMembers) {
+        let suffix = '';
+        let attempts = 0;
+        while (attempts < 5) {
+          const candidateName = `${mp.name}${suffix}`;
+          const [[dup]] = await conn.execute(
+            'SELECT id FROM user_personas WHERE portal_user_id = ? AND name = ?',
+            [portalUser.id, candidateName]
           );
-          personaIdMap[mp.id] = result.insertId;
-          break;
+          if (!dup) {
+            const botName = String(botAssignments[mp.name] ?? '').trim();
+            const [result] = await conn.execute(
+              `INSERT INTO user_personas (portal_user_id, source_persona_id, name, description, prompt, role, capabilities, figure_type, figure, bot_name)
+               VALUES (?,?,?,?,?,?,?,?,?,?)`,
+              [portalUser.id, mp.id, candidateName, mp.description || '', mp.prompt || '', mp.role || '', mp.capabilities || '', mp.figure_type || 'agent-m', mp.figure || '', botName]
+            );
+            personaIdMap[mp.id] = result.insertId;
+            if (suffix !== '') nameMap[mp.name] = candidateName;
+            break;
+          }
+          attempts++;
+          suffix = ` (${attempts + 1})`;
         }
-        attempts++;
-        suffix = ` (${attempts + 1})`;
       }
-    }
 
-    // Fork team
-    const [teamResult] = await db.execute(
-      `INSERT INTO user_teams (portal_user_id, source_team_id, name, description, orchestrator_prompt, execution_mode, tasks_json, language, default_room_id)
-       VALUES (?,?,?,?,?,?,?,?,?)`,
-      [portalUser.id, marketplaceTeamId, mTeam.name, mTeam.description || '', mTeam.orchestrator_prompt || '', mTeam.execution_mode || 'concurrent', mTeam.tasks_json || '[]', mTeam.language || 'en', 50]
-    );
-    const userTeamId = teamResult.insertId;
+      // Guard: every member must have been forked successfully
+      const missing = mMembers.filter(mp => !personaIdMap[mp.id]);
+      if (missing.length > 0) throw new Error(`Could not fork personas (name collision after 5 attempts): ${missing.map(m => m.name).join(', ')}`);
 
-    // Link forked personas to forked team
-    for (const mp of mMembers) {
-      const userPersonaId = personaIdMap[mp.id];
-      if (userPersonaId) {
-        await db.execute(
-          'INSERT INTO user_team_members (user_team_id, user_persona_id, role) VALUES (?,?,?)',
-          [userTeamId, userPersonaId, mp.team_role || '']
-        );
+      // Rewrite assign_to in tasks_json if any persona name was suffixed
+      let tasksJson = mTeam.tasks_json || '[]';
+      if (Object.keys(nameMap).length > 0) {
+        try {
+          const tasks = JSON.parse(tasksJson);
+          for (const task of tasks) {
+            if (task.assign_to && nameMap[task.assign_to]) {
+              task.assign_to = nameMap[task.assign_to];
+            }
+          }
+          tasksJson = JSON.stringify(tasks);
+        } catch { /* malformed tasks_json — use as-is */ }
       }
-    }
 
-    res.json({ ok: true, user_team_id: userTeamId });
+      // Fork team
+      const [teamResult] = await conn.execute(
+        `INSERT INTO user_teams (portal_user_id, source_team_id, name, description, orchestrator_prompt, execution_mode, tasks_json, language, default_room_id, narrator_verbosity)
+         VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        [portalUser.id, marketplaceTeamId, mTeam.name, mTeam.description || '', mTeam.orchestrator_prompt || '', mTeam.execution_mode || 'concurrent', tasksJson, mTeam.language || 'en', 50, Math.max(3, Math.min(10, Number(mTeam.narrator_verbosity) || 3))]
+      );
+      const userTeamId = teamResult.insertId;
+
+      // Link forked personas to forked team
+      for (const mp of mMembers) {
+        const userPersonaId = personaIdMap[mp.id];
+        if (userPersonaId) {
+          await conn.execute(
+            'INSERT INTO user_team_members (user_team_id, user_persona_id, role) VALUES (?,?,?)',
+            [userTeamId, userPersonaId, mp.team_role || '']
+          );
+        }
+      }
+
+      await conn.commit();
+      res.json({ ok: true, user_team_id: userTeamId });
+    } catch (innerErr) {
+      await conn.rollback();
+      throw innerErr;
+    } finally {
+      conn.release();
+    }
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Team already installed or name conflict' });
     res.status(500).json({ error: err.message });
@@ -3235,6 +3668,7 @@ function skillSlugsToCapabilities(slugs) {
 function resolvePersonaSkills(member) {
   let capabilities = member.capabilities || '';
   let extraPrompt = '';
+  let requiredIntegrations = [];
   try {
     const slugs = JSON.parse(capabilities);
     if (Array.isArray(slugs) && slugs.length > 0) {
@@ -3242,6 +3676,8 @@ function resolvePersonaSkills(member) {
       const resolved = slugs.map(slug => catalog.find(s => s.slug === slug)).filter(Boolean);
       // Capabilities line for roster
       capabilities = resolved.map(s => `- ${s.title}`).join('\n');
+      // Collect required integrations from skills
+      requiredIntegrations = resolved.map(s => s.requires_integration).filter(Boolean);
       // Inject skill bodies into the persona's instructions
       if (resolved.length > 0) {
         extraPrompt = '\n\n## Skills\n\n' + resolved.map(s =>
@@ -3254,6 +3690,7 @@ function resolvePersonaSkills(member) {
     ...member,
     capabilities,
     prompt: (member.prompt || '') + extraPrompt,
+    required_integrations: requiredIntegrations,
   };
 }
 
@@ -3289,7 +3726,9 @@ app.get('/api/internal/user-teams/:id/config', requireInternalSecret, async (req
     );
     // Resolve skill slugs → capabilities bullets + inject skill bodies into prompt
     const members = rawMembers.map(resolvePersonaSkills);
-    res.json({ ok: true, team, members, flow: null, templates: [] });
+    // Collect unique required integrations across all team members' skills
+    const required_integrations = [...new Set(members.flatMap(m => m.required_integrations || []))];
+    res.json({ ok: true, team: { ...team, required_integrations }, members, flow: null, templates: [] });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -3595,7 +4034,9 @@ app.get('/api/internal/teams/:id/config', requireInternalSecret, async (req, res
     );
     // Resolve skill slugs → capabilities bullets + inject skill bodies into prompt
     const members = rawMembers.map(resolvePersonaSkills);
-    res.json({ ok: true, team, members, flow, templates });
+    // Collect unique required integrations across all team members' skills
+    const required_integrations = [...new Set(members.flatMap(m => m.required_integrations || []))];
+    res.json({ ok: true, team: { ...team, required_integrations }, members, flow, templates });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

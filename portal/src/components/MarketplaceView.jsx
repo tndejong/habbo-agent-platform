@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
 import { HabboFigure } from './HabboFigure'
+import { SkillChip } from './SkillChip'
 import { api } from '../utils/api'
 import { friendlyFetchError } from '../utils/fetchError'
 import { useToast } from '../ToastContext'
@@ -247,12 +248,12 @@ function ImportModal({ onClose, onImported }) {
 
   return (
     <div className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-card border border-border rounded-2xl w-full max-w-lg shadow-2xl" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+      <div className="bg-card border border-border rounded-2xl w-full max-w-lg shadow-2xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border flex-shrink-0">
           <div className="flex items-center gap-2"><Upload className="w-4 h-4 text-primary" /><h3 className="text-sm font-semibold text-foreground">Import team bundle</h3></div>
           <button onClick={onClose} aria-label="Close" className="text-muted-foreground hover:text-foreground transition-colors"><X className="w-4 h-4" /></button>
         </div>
-        <div className="p-5 space-y-3">
+        <div className="p-5 space-y-3 overflow-y-auto flex-1">
           <button type="button" onClick={() => fileRef.current?.click()} className="w-full border-2 border-dashed border-border rounded-xl py-6 text-sm text-muted-foreground hover:border-primary/50 hover:text-foreground flex flex-col items-center gap-2">
             <FileJson className="w-6 h-6 opacity-60" />Click to select a .json file
           </button>
@@ -261,7 +262,7 @@ function ImportModal({ onClose, onImported }) {
           <textarea rows={8} className="w-full text-xs bg-muted/50 border border-border rounded px-3 py-2 text-foreground font-mono resize-y" value={json} onChange={e => { setJson(e.target.value); setError(null) }} placeholder='{"version":"1.0","team":{...},"personas":[...]}' />
           {error && <p className="text-xs text-destructive/80 bg-destructive/10 rounded px-3 py-2">{error}</p>}
         </div>
-        <div className="flex justify-end gap-2 px-5 pb-5">
+        <div className="flex justify-end gap-2 px-5 pb-5 flex-shrink-0 border-t border-border pt-4">
           <button onClick={onClose} className="text-sm px-3 py-1.5 rounded border border-border text-muted-foreground hover:text-foreground">Cancel</button>
           <button onClick={handleImport} disabled={!json.trim() || loading} className="text-sm px-4 py-1.5 rounded bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5">
             {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
@@ -410,10 +411,68 @@ function TeamCard({ team, installed, installing, onInstall, onUninstall, disable
 
 // ── Team detail page ──────────────────────────────────────────────────────────
 
-function TeamDetail({ team, installed, installing, onInstall, onUninstall, disabled, isDev, onEdit, onExport, onBack }) {
+function MemberCard({ member: m, skillPairs, onSelectPersona, onViewSkill }) {
+  return (
+    <div className="rounded-xl border border-border/80 bg-card shadow-sm p-4 space-y-3">
+      <div className="flex items-start gap-3">
+        <button
+          onClick={() => onSelectPersona?.(m)}
+          className="w-10 h-10 rounded-full bg-muted/60 overflow-hidden flex items-center justify-center flex-shrink-0 text-muted-foreground hover:ring-2 hover:ring-primary/40 transition-all"
+        >
+          <HabboFigure figure={m.figure} figureType={m.figure_type} headOnly size={40} />
+        </button>
+        <div className="min-w-0 flex-1">
+          <button
+            onClick={() => onSelectPersona?.(m)}
+            className="text-sm font-medium text-foreground hover:text-primary hover:underline transition-colors text-left"
+          >
+            {m.name}
+          </button>
+          {m.description && <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{m.description}</p>}
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {m.role?.trim() && <span className="text-[10px] bg-primary/15 text-primary px-2 py-0.5 rounded">Team role: {m.role}</span>}
+            {m.persona_role?.trim() && <span className="text-[10px] bg-muted px-2 py-0.5 rounded text-muted-foreground">Persona: {m.persona_role}</span>}
+          </div>
+        </div>
+      </div>
+      {skillPairs.length > 0 && (
+        <div>
+          <SectionLabel icon={Sparkles}>Skills</SectionLabel>
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {skillPairs.map(({ slug, title }, j) => (
+              <SkillChip key={j} slug={slug} title={title} onViewFull={onViewSkill} />
+            ))}
+          </div>
+        </div>
+      )}
+      {m.prompt?.trim() && (
+        <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
+          <SectionLabel icon={BookOpen}>Behavior &amp; instructions</SectionLabel>
+          <div className="text-[11px] text-foreground/85 leading-relaxed mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap font-mono">{m.prompt}</div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function TeamDetail({ team, installed, installing, onInstall, onUninstall, disabled, isDev, onEdit, onExport, onBack, onViewSkill }) {
   const members = team.members || []
   const teamTasks = normalizeTeamTasks(team.tasks_json)
   const flows = team.flows || []
+  const [viewPersona, setViewPersona] = useState(null)
+
+  if (viewPersona) {
+    // Normalise member → persona shape: persona_role → role
+    const personaObj = { ...viewPersona, role: viewPersona.persona_role ?? viewPersona.role }
+    return (
+      <PersonaDetail
+        persona={personaObj}
+        backLabel={team.name}
+        onBack={() => setViewPersona(null)}
+        onViewSkill={onViewSkill}
+      />
+    )
+  }
 
   return (
     <div className="space-y-5">
@@ -517,37 +576,19 @@ function TeamDetail({ team, installed, installing, onInstall, onUninstall, disab
             <span className="text-xs text-muted-foreground">({members.length})</span>
           </div>
           {members.map((m, i) => {
-            const skills = parseCapabilityList(m.capabilities)
+            const skillSlugs = parseSkillSlugs(m.capabilities)
+            const skillTitles = parseCapabilityList(m.capabilities)
+            const skillPairs = skillSlugs.length > 0
+              ? skillSlugs.map((slug, idx) => ({ slug, title: skillTitles[idx] ?? slug.replace(/-/g, ' ') }))
+              : skillTitles.map(title => ({ slug: null, title }))
             return (
-              <div key={m.id ?? m.persona_id ?? i} className="rounded-xl border border-border/80 bg-card shadow-sm p-4 space-y-3">
-                <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 rounded-full bg-muted/60 overflow-hidden flex items-center justify-center flex-shrink-0 text-muted-foreground">
-                    <HabboFigure figure={m.figure} figureType={m.figure_type} headOnly size={40} />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-foreground">{m.name}</p>
-                    {m.description && <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{m.description}</p>}
-                    <div className="flex flex-wrap gap-1.5 mt-2">
-                      {m.role?.trim() && <span className="text-[10px] bg-primary/15 text-primary px-2 py-0.5 rounded">Team role: {m.role}</span>}
-                      {m.persona_role?.trim() && <span className="text-[10px] bg-muted px-2 py-0.5 rounded text-muted-foreground">Persona: {m.persona_role}</span>}
-                    </div>
-                  </div>
-                </div>
-                {skills.length > 0 && (
-                  <div>
-                    <SectionLabel icon={Sparkles}>Skills &amp; capabilities</SectionLabel>
-                    <div className="flex flex-wrap gap-1.5 mt-2">
-                      {skills.map((s, j) => <span key={j} className="text-[11px] bg-primary/10 text-foreground/90 px-2.5 py-1 rounded-full border border-primary/15">{s}</span>)}
-                    </div>
-                  </div>
-                )}
-                {m.prompt?.trim() && (
-                  <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
-                    <SectionLabel icon={BookOpen}>Behavior &amp; instructions</SectionLabel>
-                    <div className="text-[11px] text-foreground/85 leading-relaxed mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap font-mono">{m.prompt}</div>
-                  </div>
-                )}
-              </div>
+              <MemberCard
+                key={m.id ?? m.persona_id ?? i}
+                member={m}
+                skillPairs={skillPairs}
+                onSelectPersona={setViewPersona}
+                onViewSkill={onViewSkill}
+              />
             )
           })}
         </div>
@@ -567,9 +608,10 @@ const CATEGORY_STYLE = {
 }
 
 const INTEGRATION_META = {
-  atlassian: { label: 'Atlassian', icon: '/integrations/atlassian.svg', color: 'bg-blue-600/10 border-blue-500/20' },
-  notion:    { label: 'Notion',    icon: '/integrations/notion.svg',    color: 'bg-neutral-500/10 border-neutral-500/20' },
-  resend:    { label: 'Resend',    icon: 'https://www.google.com/s2/favicons?domain=resend.com&sz=64', color: 'bg-emerald-500/10 border-emerald-500/20' },
+  atlassian:  { label: 'Atlassian',  icon: '/integrations/atlassian.svg', color: 'bg-blue-600/10 border-blue-500/20' },
+  notion:     { label: 'Notion',     icon: '/integrations/notion.svg',    color: 'bg-neutral-500/10 border-neutral-500/20' },
+  resend:     { label: 'Resend',     icon: 'https://www.google.com/s2/favicons?domain=resend.com&sz=64', color: 'bg-emerald-500/10 border-emerald-500/20' },
+  'habbo-mcp': { label: 'Habbo MCP Key', icon: 'https://www.google.com/s2/favicons?domain=habbo.com&sz=64', color: 'bg-amber-500/10 border-amber-500/20' },
 }
 
 function IntegrationBadge({ name, onNavigate }) {
@@ -729,10 +771,20 @@ export function SkillDetail({ skill, onBack, onNavigate }) {
 
 // ── Skills Tab (grid) ─────────────────────────────────────────────────────────
 
-function SkillsTab({ onNavigate }) {
+function SkillsTab({ onNavigate, initialSlug, onClearSlug }) {
   const { catalog: skills, loading } = useSkillsCatalog()
   const [activeCategory, setActiveCategory] = useState('all')
   const [selectedSkill, setSelectedSkill] = useState(null)
+
+  // Pre-select a skill when navigated here from another tab (e.g. clicking "View full skill")
+  useEffect(() => {
+    if (!initialSlug || loading) return
+    const found = skills.find(s => s.slug === initialSlug)
+    if (found) {
+      setSelectedSkill(found)
+      onClearSlug?.()
+    }
+  }, [initialSlug, loading, skills, onClearSlug])
 
   const categories = ['all', ...[...new Set(skills.map(s => s.category))].sort()]
   const visible = activeCategory === 'all' ? skills : skills.filter(s => s.category === activeCategory)
@@ -837,10 +889,9 @@ function SkillsTab({ onNavigate }) {
 
 // ── Persona Detail Page ───────────────────────────────────────────────────────
 
-function PersonaDetail({ persona, onBack }) {
+function PersonaDetail({ persona, onBack, backLabel = 'Personas', onViewSkill }) {
   const { catalog } = useSkillsCatalog()
-  const [selectedSkill, setSelectedSkill] = useState(null)
-  useEscapeKey(() => selectedSkill ? setSelectedSkill(null) : onBack(), true)
+  useEscapeKey(onBack, true)
 
   const personaSkills = useMemo(() => {
     const slugs = parseSkillSlugs(persona.capabilities)
@@ -861,7 +912,7 @@ function PersonaDetail({ persona, onBack }) {
       <button onClick={onBack}
         className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors group">
         <ArrowLeft className="w-3.5 h-3.5 group-hover:-translate-x-0.5 transition-transform" />
-        Personas
+        {backLabel}
         <span className="text-muted-foreground/40 mx-0.5">/</span>
         <span className="text-foreground">{persona.name}</span>
       </button>
@@ -893,17 +944,7 @@ function PersonaDetail({ persona, onBack }) {
                   <Sparkles className="w-2.5 h-2.5" /> Skills
                 </span>
                 {personaSkills.map((s, i) => (
-                  s.slug ? (
-                    <button key={i}
-                      onClick={() => setSelectedSkill(catalog.find(c => c.slug === s.slug) || s)}
-                      className="text-[11px] bg-secondary text-muted-foreground border border-border rounded-md px-2 py-0.5 hover:border-primary/40 hover:text-foreground hover:bg-primary/5 transition-colors cursor-pointer">
-                      {s.title}
-                    </button>
-                  ) : (
-                    <span key={i} className="text-[11px] bg-secondary text-muted-foreground border border-border rounded-md px-2 py-0.5">
-                      {s.title}
-                    </span>
-                  )
+                  <SkillChip key={i} slug={s.slug} title={s.title} onViewFull={onViewSkill} />
                 ))}
               </div>
             )}
@@ -934,32 +975,13 @@ function PersonaDetail({ persona, onBack }) {
           </div>
         </div>
       )}
-
-      {/* Skill detail modal */}
-      {selectedSkill && createPortal(
-        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto"
-          onClick={e => { if (e.target === e.currentTarget) setSelectedSkill(null) }}>
-          <div className="bg-background border border-border rounded-2xl shadow-xl w-full max-w-4xl my-8">
-            <div className="flex items-center justify-end px-5 pt-4">
-              <button onClick={() => setSelectedSkill(null)}
-                className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="px-5 pb-6">
-              <SkillDetail skill={selectedSkill} onBack={() => setSelectedSkill(null)} />
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
     </div>
   )
 }
 
 // ── Personas Tab ──────────────────────────────────────────────────────────────
 
-function PersonasTab() {
+function PersonasTab({ onViewSkill }) {
   const { catalog: skills } = useSkillsCatalog()
   const [personas, setPersonas] = useState([])
   const [loading, setLoading] = useState(true)
@@ -979,7 +1001,7 @@ function PersonasTab() {
   )
 
   if (selectedPersona) return (
-    <PersonaDetail persona={selectedPersona} onBack={() => setSelectedPersona(null)} />
+    <PersonaDetail persona={selectedPersona} onBack={() => setSelectedPersona(null)} onViewSkill={onViewSkill} />
   )
 
   return (
@@ -1053,7 +1075,122 @@ const MARKETPLACE_TABS = [
   { id: 'skills',   label: 'Skills',   icon: Zap   },
 ]
 
-function TeamsTab({ me, isDev }) {
+// ── Install modal — bot-linking step before installation ──────────────────────
+
+function InstallModal({ team, onClose, onConfirm, installing }) {
+  const [bots, setBots] = useState(null)
+  const [botsError, setBotsError] = useState(null)
+  const members = team.members || []
+
+  // assignments: { [personaName]: botName }
+  const [assignments, setAssignments] = useState(() =>
+    Object.fromEntries(members.map(m => [m.name, '']))
+  )
+
+  useEffect(() => {
+    api('/api/agents/bots?mine=true')
+      .then(d => setBots(d.bots || []))
+      .catch(() => setBotsError('Could not load your bots.'))
+  }, [])
+
+  useEscapeKey(onClose, true)
+
+  const allAssigned = members.length > 0 && members.every(m => assignments[m.name]?.trim())
+
+  function setBot(personaName, botName) {
+    setAssignments(prev => ({ ...prev, [personaName]: botName }))
+  }
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-md flex flex-col overflow-hidden">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+          <div>
+            <p className="font-semibold text-sm text-foreground">Install {team.name}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Link each agent to one of your bots before installing.</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Bot assignment rows */}
+        <div className="px-5 py-4 space-y-3 overflow-y-auto max-h-96">
+          {botsError && (
+            <div className="flex items-center gap-2 text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" /> {botsError}
+            </div>
+          )}
+          {members.length === 0 && (
+            <p className="text-xs text-muted-foreground italic text-center py-4">This team has no agents defined.</p>
+          )}
+          {members.map(member => {
+            const assigned = assignments[member.name]?.trim()
+            return (
+              <div key={member.name} className="space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
+                    <Bot className="w-3.5 h-3.5 text-primary" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium text-foreground leading-tight">{member.name}</p>
+                    {member.role && <p className="text-[10px] text-muted-foreground leading-tight">{member.role}</p>}
+                  </div>
+                  {!assigned && (
+                    <span className="text-[10px] text-destructive font-medium shrink-0">Required</span>
+                  )}
+                </div>
+                <select
+                  value={assignments[member.name] || ''}
+                  onChange={e => setBot(member.name, e.target.value)}
+                  disabled={!bots}
+                  className={`w-full bg-muted/40 border rounded-md px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary transition-colors ${
+                    !assigned ? 'border-destructive/50' : 'border-border'
+                  }`}
+                >
+                  <option value="">— select a bot —</option>
+                  {(bots || []).map(bot => (
+                    <option key={bot.id} value={bot.name}>{bot.name}</option>
+                  ))}
+                </select>
+              </div>
+            )
+          })}
+          {bots === null && !botsError && (
+            <div className="flex items-center justify-center py-4">
+              <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+            </div>
+          )}
+          {bots && bots.length === 0 && !botsError && (
+            <div className="bg-warning/10 border border-warning/30 rounded-lg px-3 py-2 flex items-start gap-2">
+              <AlertCircle className="w-3.5 h-3.5 text-warning mt-0.5 shrink-0" />
+              <p className="text-xs text-warning/80">You have no bots yet. Create bots in your Habbo hotel first, then come back to install this team.</p>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-5 py-4 border-t border-border flex items-center justify-end gap-2">
+          <button onClick={onClose} disabled={installing} className="text-sm px-4 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
+            Cancel
+          </button>
+          <button
+            onClick={() => onConfirm(assignments)}
+            disabled={!allAssigned || installing || !bots || bots.length === 0}
+            className="inline-flex items-center gap-1.5 text-sm font-medium px-4 py-1.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {installing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+            {installing ? 'Installing…' : 'Install team'}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+function TeamsTab({ me, isDev, onViewSkill }) {
   const { showToast } = useToast()
   const [teams, setTeams] = useState([])
   const [installedIds, setInstalledIds] = useState([])
@@ -1064,6 +1201,7 @@ function TeamsTab({ me, isDev }) {
   const [showImport, setShowImport] = useState(false)
   const [editingTeam, setEditingTeam] = useState(null)
   const [selectedTeam, setSelectedTeam] = useState(null)
+  const [installTarget, setInstallTarget] = useState(null) // team pending install modal
   const selectedTeamRef = useRef(null)
 
   const canInstall   = can(me, 'marketplace.install')
@@ -1071,11 +1209,12 @@ function TeamsTab({ me, isDev }) {
 
   // Escape key: close active modal or deselect team
   useEscapeKey(() => {
+    if (installTarget) { setInstallTarget(null); return }
     if (editingTeam) { setEditingTeam(null); return }
     if (showCreate)  { setShowCreate(false); return }
     if (showImport)  { setShowImport(false); return }
     if (selectedTeam) setSelectedTeam(null)
-  }, !!(editingTeam || showCreate || showImport || selectedTeam))
+  }, !!(installTarget || editingTeam || showCreate || showImport || selectedTeam))
 
   // Keep ref in sync so load() can read current value without stale closure
   useEffect(() => { selectedTeamRef.current = selectedTeam }, [selectedTeam])
@@ -1102,10 +1241,18 @@ function TeamsTab({ me, isDev }) {
 
   useEffect(() => { load() }, [load])
 
-  async function installTeam(teamId) {
-    setInstallingId(teamId)
-    try { await api(`/api/marketplace/teams/${teamId}/install`, { method: 'POST' }); setInstalledIds(prev => [...prev, teamId]); showToast('Team installed! Go to My Agents to configure bots and deploy.') }
-    catch (e) { showToast(e.message, 'error') } finally { setInstallingId(null) }
+  function openInstallModal(team) {
+    setInstallTarget(team)
+  }
+
+  async function confirmInstall(team, botAssignments) {
+    setInstallingId(team.id)
+    try {
+      await api(`/api/marketplace/teams/${team.id}/install`, { method: 'POST', body: JSON.stringify({ bot_assignments: botAssignments }) })
+      setInstalledIds(prev => [...prev, team.id])
+      setInstallTarget(null)
+      showToast('Team installed! Your agents are linked and ready to deploy.')
+    } catch (e) { showToast(e.message, 'error') } finally { setInstallingId(null) }
   }
 
   async function uninstallTeam(teamId) {
@@ -1151,13 +1298,14 @@ function TeamsTab({ me, isDev }) {
           team={selectedTeam}
           installed={installedIds.includes(selectedTeam.id)}
           installing={installingId === selectedTeam.id}
-          onInstall={canInstall ? () => installTeam(selectedTeam.id) : undefined}
+          onInstall={canInstall ? () => openInstallModal(selectedTeam) : undefined}
           onUninstall={canUninstall ? () => uninstallTeam(selectedTeam.id) : undefined}
           disabled={!canInstall}
           isDev={isDev}
           onEdit={() => setEditingTeam(selectedTeam)}
           onExport={() => exportTeam(selectedTeam)}
           onBack={() => setSelectedTeam(null)}
+          onViewSkill={onViewSkill}
         />
       ) : (
         <>
@@ -1196,7 +1344,7 @@ function TeamsTab({ me, isDev }) {
                 <TeamCard
                   key={team.id} team={team}
                   installed={installedIds.includes(team.id)} installing={installingId === team.id}
-                  onInstall={canInstall ? () => installTeam(team.id) : undefined}
+                  onInstall={canInstall ? () => openInstallModal(team) : undefined}
                   onUninstall={canUninstall ? () => uninstallTeam(team.id) : undefined}
                   disabled={!canInstall} isDev={isDev}
                   onEdit={() => setEditingTeam(team)} onDelete={() => deleteTeam(team)}
@@ -1210,13 +1358,27 @@ function TeamsTab({ me, isDev }) {
       {showCreate && createPortal(<CreateModal onClose={() => setShowCreate(false)} onSaved={() => { showToast('Team created!'); load() }} />, document.body)}
       {showImport && createPortal(<ImportModal onClose={() => setShowImport(false)} onSaved={() => { showToast('Team imported!'); load() }} />, document.body)}
       {editingTeam && createPortal(<EditModal team={editingTeam} onClose={() => setEditingTeam(null)} onSaved={() => { showToast('Team updated!'); setEditingTeam(null); load() }} />, document.body)}
+      {installTarget && (
+        <InstallModal
+          team={installTarget}
+          installing={installingId === installTarget.id}
+          onClose={() => setInstallTarget(null)}
+          onConfirm={(assignments) => confirmInstall(installTarget, assignments)}
+        />
+      )}
     </div>
   )
 }
 
 export function MarketplaceView({ me, onNavigate }) {
   const [activeTab, setActiveTab] = useState('teams')
+  const [selectedSkillSlug, setSelectedSkillSlug] = useState(null)
   const isDev = !!me?.is_developer
+
+  function viewSkill(slug) {
+    setActiveTab('skills')
+    setSelectedSkillSlug(slug)
+  }
 
   return (
     <div className="space-y-4">
@@ -1246,9 +1408,15 @@ export function MarketplaceView({ me, onNavigate }) {
       </div>
 
       {/* Tab content */}
-      {activeTab === 'teams'    && <TeamsTab me={me} isDev={isDev} />}
-      {activeTab === 'personas' && <PersonasTab />}
-      {activeTab === 'skills'   && <SkillsTab onNavigate={onNavigate} />}
+      {activeTab === 'teams'    && <TeamsTab me={me} isDev={isDev} onViewSkill={viewSkill} />}
+      {activeTab === 'personas' && <PersonasTab onViewSkill={viewSkill} />}
+      {activeTab === 'skills'   && (
+        <SkillsTab
+          onNavigate={onNavigate}
+          initialSlug={selectedSkillSlug}
+          onClearSlug={() => setSelectedSkillSlug(null)}
+        />
+      )}
     </div>
   )
 }

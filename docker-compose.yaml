@@ -206,6 +206,7 @@ services:
       - HABBO_HOOK_ENABLED=false
       - PORTAL_URL=${HOTEL_PORTAL_INTERNAL_URL:-http://agent-portal:3000}
       - PORTAL_INTERNAL_SECRET=${HOTEL_PORTAL_INTERNAL_SECRET:-change-this-secret}
+      # narrator_verbosity (3–10) is stored per team in the database, not here
     volumes:
       - .:/project:ro
     ports:

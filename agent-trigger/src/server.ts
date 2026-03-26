@@ -41,12 +41,15 @@ const activeRuns = new Map<number, RunContext>();
 // Guards against concurrent POST /trigger for the same room
 const triggeringRooms = new Set<number>();
 
-function writeNarratorBotsFile(roomId: number, knownBots: string[]): void {
+function writeNarratorBotsFile(roomId: number, knownBots: string[], language = 'en', verbosity = 3): void {
   try {
     writeFileSync(narratorBotsFile(roomId), JSON.stringify({
       known_bots: knownBots,
+      language,
+      max_session_messages: Math.max(3, Math.min(10, verbosity)),
       sessions: {},
       pending: [],
+      message_counts: {},
     }, null, 2));
   } catch { /* non-fatal */ }
 }
@@ -154,8 +157,9 @@ async function fetchUserMcpToken(portalUserId: number): Promise<string | null> {
 interface IntegrationRow {
   id: number;
   name: string;
-  url: string;
+  url: string | null;
   api_key: string | null;
+  stdio_config: string | null; // JSON: { command, args, env }
 }
 
 async function fetchUserIntegrations(portalUserId: number): Promise<IntegrationRow[]> {
@@ -186,7 +190,7 @@ function createRunMcpDir(roomId: number, userMcpToken: string | null, integratio
 
   // Hotel MCP server — always included; token determines per-user access
   const effectiveToken = userMcpToken || MCP_API_KEY;
-  const hotelMcpEntry: Record<string, unknown> = { url: MCP_ENDPOINT };
+  const hotelMcpEntry: Record<string, unknown> = { type: "http", url: MCP_ENDPOINT };
   if (effectiveToken) {
     hotelMcpEntry.headers = { Authorization: `Bearer ${effectiveToken}` };
   }
@@ -194,13 +198,27 @@ function createRunMcpDir(roomId: number, userMcpToken: string | null, integratio
 
   // User's external integrations
   for (const integration of integrations) {
-    const entry: Record<string, unknown> = { url: integration.url };
-    if (integration.api_key) {
-      entry.headers = { Authorization: `Bearer ${integration.api_key}` };
-    }
-    // Sanitize name to a valid key (no spaces / special chars)
     const key = integration.name.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-");
-    mcpServers[key] = entry;
+
+    if (integration.stdio_config) {
+      // stdio transport — write command/args/env directly
+      try {
+        const cfg = JSON.parse(integration.stdio_config) as { command: string; args?: string[]; env?: Record<string, string> };
+        const entry: Record<string, unknown> = { type: "stdio", command: cfg.command };
+        if (cfg.args?.length) entry.args = cfg.args;
+        if (cfg.env && Object.keys(cfg.env).length) entry.env = cfg.env;
+        mcpServers[key] = entry;
+      } catch {
+        // skip malformed stdio config
+      }
+    } else if (integration.url && !integration.url.startsWith("stdio://")) {
+      // HTTP transport — skip placeholder stdio:// URLs
+      const entry: Record<string, unknown> = { type: "http", url: integration.url };
+      if (integration.api_key) {
+        entry.headers = { Authorization: `Bearer ${integration.api_key}` };
+      }
+      mcpServers[key] = entry;
+    }
   }
 
   writeFileSync(join(runDir, ".mcp.json"), JSON.stringify({ mcpServers }, null, 2));
@@ -301,7 +319,7 @@ interface RoomTemplate {
 }
 
 interface TeamConfig {
-  team: { id: number; name: string; description: string; orchestrator_prompt: string; execution_mode: string; tasks_json: string; language: string };
+  team: { id: number; name: string; description: string; orchestrator_prompt: string; execution_mode: string; tasks_json: string; language: string; narrator_verbosity?: number; required_integrations?: string[] };
   members: TeamMember[];
   flow: { name: string; description: string; tasks_json: string } | null;
   templates: RoomTemplate[];
@@ -317,6 +335,8 @@ interface PackConfig {
   role_assignments: RoleAssignments;
   room_id: number;
   triggered_by: string;
+  language?: string;
+  narrator_verbosity?: number;
 }
 
 async function fetchTeamConfig(teamId: number, flowId: number | null): Promise<TeamConfig> {
@@ -383,7 +403,7 @@ Each agent must: read \`${taskFilePath}\`, find a pending task assigned to them 
     const steps = tasks.map((t, i) => {
       const idx = i + 1
       const deps = (t.depends_on || []).length ? ` (depends on: ${t.depends_on!.join(', ')})` : ''
-      const assignee = t.assign_to ? ` → assign to **${t.assign_to}**` : ''
+      const assignee = t.assign_to ? ` → assign to **${t.assign_to}**` : ` → assign to the team member whose capabilities best match this task`
       return `${idx}. **${t.title}**${assignee}${deps}${t.description ? `\n   ${t.description}` : ''}`
     }).join('\n')
     return `
@@ -436,14 +456,19 @@ function buildPromptFromConfig(config: TeamConfig, roomId: number, triggeredBy: 
     const placement = tpl
       ? `x=${tpl.x}, y=${tpl.y}, rot=${tpl.rot}`
       : `anywhere`
+    // m.prompt already has skill bodies injected by resolvePersonaSkills on the portal side
+    const personaContext = m.prompt?.trim()
+      ? `${m.prompt.trim()}\n\n---\n\n`
+      : ''
     return `### Subagent prompt for ${m.name}
 \`\`\`
-You are ${m.name}, a ${m.persona_role || m.team_role || 'team member'} working as part of team "${config.team.name}" in Habbo Hotel room ${roomId}.
+${personaContext}You are ${m.name}, a ${m.persona_role || m.team_role || 'team member'} working as part of team "${config.team.name}" in Habbo Hotel room ${roomId}.
 
 Your hotel bot name is "${m.bot_name}".
-- Use the deploy_bot MCP tool to place yourself in the room (${placement}) if not already there.
-- Use talk_bot to communicate progress and results in the hotel room.
+- First call list_bots and check if a bot named "${m.bot_name}" already appears in room ${roomId}. Only call deploy_bot if it is NOT already listed there (placement: ${placement}).
+- Use talk_bot with your bot_id to communicate progress and results in the hotel room.
 - Always speak in ${langName} when using talk_bot.
+- MCP tools are pre-registered — call them DIRECTLY by their full prefixed name (e.g. \`mcp__atlassian__searchJiraIssuesUsingJql\`). Do NOT use ToolSearch to discover MCP tools first; ToolSearch does not reliably surface them and wastes turns.
 
 [INSERT SPECIFIC TASK HERE]
 
@@ -456,14 +481,35 @@ When done: announce your completion in ${langName} via talk_bot (e.g. "✅ Task 
 After ALL subagents have finished, use talk_bot (as any available bot) to announce in ${langName} that the entire team has completed all tasks. Keep it short and clear (1-2 sentences).`
 
   // If team has a custom orchestrator prompt, use it with variable substitution
+  // Always append the subagent-spawning guide so Claude knows exactly how to launch agents
+  // and does not hallucinate tools like TeamCreate / TeamDelete / SendMessage.
   if (config.team.orchestrator_prompt?.trim()) {
-    return config.team.orchestrator_prompt
+    const customBody = config.team.orchestrator_prompt
       .replaceAll("{{TEAM_NAME}}", config.team.name)
       .replaceAll("{{ROOM_ID}}", String(roomId))
       .replaceAll("{{TRIGGERED_BY}}", triggeredBy)
       .replaceAll("{{TASKS}}", tasksBlock)
       .replaceAll("{{PERSONAS}}", rosterLines + flowSection)
-      + langInstruction
+
+    const spawnGuide = `
+
+## Team roster (room ${roomId})
+${rosterLines}
+${flowSection}
+
+## How to spawn subagents — READ THIS CAREFULLY
+Use ONLY the built-in **Agent** tool to spawn each team member as a subagent.
+DO NOT use ToolSearch, TeamCreate, TeamDelete, SendMessage, or any other coordination tool — they do not exist.
+DO NOT call check_stop_signal in a loop; call it at most once before you begin.
+
+Spawn each subagent in a SINGLE message (parallel calls).
+
+${subagentTemplate}
+
+## Final step
+After all subagents complete, use talk_bot (as any available bot) to announce in ${langName} that the team has finished. Keep it short (1-2 sentences).`
+
+    return customBody + spawnGuide + langInstruction
   }
 
   // Auto-generate orchestrator prompt based on execution mode
@@ -557,7 +603,7 @@ This ensures each agent is visually represented by their hotel bot in the room.`
 }
 
 function runOrchestratorWithPrompt(prompt: string, roomId: number, from: string, userApiKey?: string | null, onChild?: (child: ReturnType<typeof spawn>) => void, userMcpToken?: string | null, integrations: IntegrationRow[] = []): Promise<string> {
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
     // Clear any stale stop signal from a previous run in this room
     const sf = stopFile(roomId);
     if (existsSync(sf)) unlinkSync(sf);
@@ -565,11 +611,67 @@ function runOrchestratorWithPrompt(prompt: string, roomId: number, from: string,
     // Build a per-run temp dir with .mcp.json so each run gets its own MCP config
     const runDir = createRunMcpDir(roomId, userMcpToken ?? null, integrations);
 
+    // Log which MCP servers are configured, then probe live status via `claude mcp list`
     const claudeBin = process.env.CLAUDE_BIN ?? "claude";
-    const child = spawn(claudeBin, ["-p", "--dangerously-skip-permissions", "--no-session-persistence", "--output-format", "stream-json", "--verbose"], {
+    try {
+      const mcpConfig = JSON.parse(readFileSync(join(runDir, ".mcp.json"), "utf8"));
+      const serverNames = Object.keys(mcpConfig.mcpServers ?? {});
+      logRoom(roomId, `[session] MCP connections configured: ${serverNames.join(", ")}`);
+
+      // Run `claude mcp list` to probe which servers actually connect.
+      // Wrapped in a 10s timeout so it never delays the main run.
+      // Note: `claude mcp list` does not accept --mcp-config; cwd is set to runDir so it picks up .mcp.json automatically.
+      await new Promise<void>((res) => {
+        const probe = spawn(claudeBin, ["mcp", "list"], {
+          cwd: runDir,
+          env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", ANTHROPIC_API_KEY: userApiKey || (process.env.ANTHROPIC_API_KEY ?? "") },
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        const kill = setTimeout(() => { try { probe.kill(); } catch {} res(); }, 10_000);
+        let out = "";
+        probe.stdout.on("data", (d: Buffer) => { out += d.toString(); });
+        probe.stderr.on("data", (d: Buffer) => { out += d.toString(); });
+        probe.on("close", () => {
+          clearTimeout(kill);
+          // Parse output lines — each server appears as "● server-name" (connected) or "○ server-name" (failed)
+          for (const line of out.split("\n").filter(Boolean)) {
+            const okMatch = line.match(/[●✓✔]\s+(\S+)/);
+            const errMatch = line.match(/[○✗✘×]\s+(\S+)/);
+            if (okMatch) logRoom(roomId, `[mcp:ok] ${okMatch[1]} connected`);
+            else if (errMatch) logRoom(roomId, `[mcp:err] ${errMatch[1]} failed to connect`);
+            else if (/error|fail|could not/i.test(line)) logRoom(roomId, `[mcp:err] ${line.trim().slice(0, 120)}`);
+          }
+          res();
+        });
+        probe.on("error", () => { clearTimeout(kill); res(); });
+      });
+    } catch { /* non-fatal — don't block the run */ }
+
+    // Allowlist of env vars the Claude subprocess needs. Everything else from
+    // process.env (PORTAL_INTERNAL_SECRET, TWILIO_*, ATLASSIAN_*, etc.) is
+    // stripped so it cannot be read by the AI model or by stdio MCP children
+    // (e.g. plane-mcp-server) that inherit the Claude process environment.
+    const SAFE_PASS_THROUGH: string[] = [
+      "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "TMPDIR",
+      "TZ", "TERM", "NODE_ENV",
+      // Claude CLI runtime
+      "CLAUDE_BIN", "CLAUDE_CONFIG_DIR",
+      // Hook infrastructure (read by hotel_narrator.mjs)
+      "HABBO_HOOK_TRANSPORT", "HABBO_HOOK_REMOTE_BASE_URL",
+    ];
+    const safeEnv: Record<string, string> = {};
+    for (const key of SAFE_PASS_THROUGH) {
+      if (process.env[key] !== undefined) safeEnv[key] = process.env[key] as string;
+    }
+
+    // Explicitly load our per-run .mcp.json so Claude registers the hotel MCP
+    // and user integrations. Without --mcp-config Claude may not auto-discover
+    // .mcp.json from cwd in non-interactive (-p) mode.
+    const mcpConfigPath = join(runDir, ".mcp.json");
+    const child = spawn(claudeBin, ["-p", "--dangerously-skip-permissions", "--no-session-persistence", "--output-format", "stream-json", "--verbose", "--mcp-config", mcpConfigPath], {
       cwd: runDir,
       env: {
-        ...process.env,
+        ...safeEnv,
         ANTHROPIC_API_KEY: userApiKey || (process.env.ANTHROPIC_API_KEY ?? ""),
         MCP_API_KEY: process.env.MCP_API_KEY ?? "",
         USER_MCP_TOKEN: userMcpToken || "",
@@ -577,7 +679,6 @@ function runOrchestratorWithPrompt(prompt: string, roomId: number, from: string,
         HABBO_HOOK_TRANSPORT: process.env.HABBO_HOOK_TRANSPORT ?? "remote",
         HABBO_HOOK_REMOTE_BASE_URL:
           process.env.HABBO_HOOK_REMOTE_BASE_URL ?? "https://hotel-mcp.fixdev.nl",
-        // Passed to hotel_narrator.mjs so it reads the correct room-scoped bots file
         HABBO_ROOM_ID: String(roomId),
       },
       stdio: ["pipe", "pipe", "pipe"],
@@ -628,7 +729,17 @@ function runOrchestratorWithPrompt(prompt: string, roomId: number, from: string,
     child.stderr.on("data", (d: Buffer) => {
       const text = d.toString();
       stderr += text;
-      logRoom(roomId, `[claude:err] ${text.trim()}`);
+      for (const line of text.split("\n").filter(Boolean)) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        if (/connected|tools available|initialized/i.test(trimmed) && /mcp/i.test(trimmed)) {
+          logRoom(roomId, `[mcp:ok] ${trimmed}`);
+        } else if (/fail|error|could not|unable|timeout/i.test(trimmed) && /mcp/i.test(trimmed)) {
+          logRoom(roomId, `[mcp:err] ${trimmed}`);
+        } else {
+          logRoom(roomId, `[claude:err] ${trimmed}`);
+        }
+      }
     });
 
     child.on("close", (code: number | null) => {
@@ -639,6 +750,15 @@ function runOrchestratorWithPrompt(prompt: string, roomId: number, from: string,
       } else {
         reject(new Error(`claude exited ${code}: ${stderr.slice(0, 300)}`));
       }
+    });
+
+    // Ensure runDir (which contains .mcp.json with decrypted secrets) is always
+    // removed even when spawn() fails before the child process can emit "close".
+    child.on("error", (err: Error) => {
+      clearTimeout(timeoutHandle);
+      cleanupRunDir();
+      activeRuns.delete(roomId);
+      reject(err);
     });
   });
 }
@@ -762,6 +882,11 @@ const server = Bun.serve({
       const { bot_name, message, mcp_token, room_id } = body;
       if (!bot_name || !message) return Response.json({ ok: false, error: "bot_name and message required" }, { status: 400 });
 
+      // Coerce to string — the agent may write objects to the bots file, causing
+      // the hook to POST an object as bot_name instead of a plain string.
+      const safeBotName = typeof bot_name === 'string' ? bot_name : String(bot_name ?? '');
+      if (!safeBotName) return Response.json({ ok: false, error: "bot_name resolved to empty string" }, { status: 400 });
+
       // Prefer the user's own MCP token, fall back to static system key
       const effectiveMcpToken = mcp_token || MCP_API_KEY;
       const logFn = room_id ? (s: string) => logRoom(room_id, s) : log;
@@ -769,7 +894,7 @@ const server = Bun.serve({
       // Fire-and-forget: resolve bot_id then talk
       (async () => {
         try {
-          const botId = await findBotIdByName(bot_name, effectiveMcpToken);
+          const botId = await findBotIdByName(safeBotName, effectiveMcpToken);
           if (botId == null) { logFn(`[narrator] Bot "${bot_name}" not found in hotel`); return; }
           await mcpCall("talk_bot", { bot_id: botId, message: message.slice(0, 240), type: "talk" }, effectiveMcpToken);
           logFn(`[narrator] ${bot_name}: ${message.slice(0, 80)}`);
@@ -791,7 +916,7 @@ const server = Bun.serve({
       let body: {
         team_id?: number; flow_id?: number | null; room_id?: number; triggered_by?: string; portal_url?: string;
         pack_source_url?: string; role_assignments?: Record<string, string>; pack_id?: number;
-        portal_user_id?: number; user_team?: boolean;
+        portal_user_id?: number; user_team?: boolean; language?: string; narrator_verbosity?: number;
       };
       try {
         body = await req.json();
@@ -807,6 +932,8 @@ const server = Bun.serve({
           role_assignments: body.role_assignments,
           room_id: Number(body.room_id) || 50,
           triggered_by: body.triggered_by ?? 'portal',
+          language: body.language || 'en',
+          narrator_verbosity: Number(body.narrator_verbosity) || 3,
         };
         const packRoomId = packConfig.room_id;
 
@@ -828,7 +955,7 @@ const server = Bun.serve({
         }
 
         const knownBots = Object.values(packConfig.role_assignments).filter(Boolean);
-        writeNarratorBotsFile(packRoomId, knownBots);
+        writeNarratorBotsFile(packRoomId, knownBots, packConfig.language || 'en', packConfig.narrator_verbosity ?? 3);
 
         const packPortalUserId = Number(body.portal_user_id) || 0;
         const [packUserApiKey, packUserMcpToken] = await Promise.all([
@@ -900,7 +1027,16 @@ const server = Bun.serve({
 
       if (userApiKey) logRoom(roomId, `[trigger] Using API key from portal user ${portalUserId}`);
       if (userMcpToken) logRoom(roomId, `[trigger] Using MCP token from portal user ${portalUserId}`);
-      if (userIntegrations.length > 0) logRoom(roomId, `[trigger] Loaded ${userIntegrations.length} integration(s) for user ${portalUserId}`);
+
+      // Filter integrations to only those required by the team's skills so unrelated
+      // MCP servers aren't loaded into the agent's context.
+      const requiredIntegrations = config.team.required_integrations;
+      const filteredIntegrations = requiredIntegrations && requiredIntegrations.length > 0
+        ? userIntegrations.filter(i => requiredIntegrations.includes(i.name.toLowerCase()))
+        : userIntegrations;
+      if (filteredIntegrations.length > 0) {
+        logRoom(roomId, `[trigger] Loaded ${filteredIntegrations.length} integration(s) for user ${portalUserId}: ${filteredIntegrations.map(i => i.name).join(', ')}`);
+      }
 
       const prompt = buildPromptFromConfig(config, roomId, triggeredBy);
       const run: RunContext = { roomId, startTime: new Date(), from: triggeredBy, child: null, timeoutHandle: null };
@@ -908,13 +1044,13 @@ const server = Bun.serve({
       triggeringRooms.delete(roomId);
       logRoom(roomId, `[trigger] Team "${config.team.name}" started by ${triggeredBy}`);
 
-      // Write known bot names so hotel_narrator.mjs can map subagent prompts → personas
-      writeNarratorBotsFile(roomId, config.members.map(m => m.bot_name).filter(Boolean));
+      // Write known bot names + team language so hotel_narrator.mjs can map subagent prompts → personas
+      writeNarratorBotsFile(roomId, config.members.map(m => m.bot_name).filter(Boolean), config.team.language || 'en', config.team.narrator_verbosity ?? 3);
 
       // Run in background
       runOrchestratorWithPrompt(prompt, roomId, triggeredBy, userApiKey, (child) => {
         const r = activeRuns.get(roomId); if (r) r.child = child;
-      }, userMcpToken, userIntegrations)
+      }, userMcpToken, filteredIntegrations)
         .then((summary) => {
           activeRuns.delete(roomId);
           cleanupRoomFiles(roomId);
@@ -954,7 +1090,7 @@ const server = Bun.serve({
       const config = await fetchUserTeamConfig(phoneUser.team.id);
       const prompt = buildPromptFromConfig(config, roomId, phoneUser.username);
 
-      writeNarratorBotsFile(roomId, config.members.map(m => m.bot_name).filter(Boolean));
+      writeNarratorBotsFile(roomId, config.members.map(m => m.bot_name).filter(Boolean), config.team.language || 'en', config.team.narrator_verbosity ?? 3);
       runOrchestratorWithPrompt(prompt, roomId, phoneUser.username, userApiKey, (child) => {
         const r = activeRuns.get(roomId); if (r) r.child = child;
       }, userMcpToken)
@@ -1015,7 +1151,7 @@ const server = Bun.serve({
               fetchUserTeamConfig(smsUser.team!.id),
             ]);
             const prompt = buildPromptFromConfig(config, smsRoomId, smsUser.username);
-            writeNarratorBotsFile(smsRoomId, config.members.map(m => m.bot_name).filter(Boolean));
+            writeNarratorBotsFile(smsRoomId, config.members.map(m => m.bot_name).filter(Boolean), config.team.language || 'en', config.team.narrator_verbosity ?? 3);
             await runOrchestratorWithPrompt(prompt, smsRoomId, smsUser.username, userApiKey, (child) => {
               const r = activeRuns.get(smsRoomId); if (r) r.child = child;
             }, userMcpToken);

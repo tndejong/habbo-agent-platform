@@ -7,6 +7,7 @@ description: >
 category: hotel
 tags: [hotel, communication, narration, talk_bot]
 mcp_tools: [talk_bot]
+requires_integration: habbo-mcp
 difficulty: beginner
 version: "1.0"
 ---
