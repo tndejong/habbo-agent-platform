@@ -113,6 +113,7 @@ services:
     volumes:
       - ./portal/dist:/app/dist
       - ./portal/server.js:/app/server.js
+      - ./agents/skills:/app/agents/skills:ro
     ports:
       - ${HABBO_PORTAL_PORT:-3090}:3000
     depends_on:

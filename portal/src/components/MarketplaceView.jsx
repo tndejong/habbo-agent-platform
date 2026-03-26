@@ -1,19 +1,26 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
+import ReactMarkdown from 'react-markdown'
 import { HabboFigure } from './HabboFigure'
 import { api } from '../utils/api'
 import { friendlyFetchError } from '../utils/fetchError'
+import { useToast } from '../ToastContext'
+import { parseSkills, parseSkillSlugs } from '../utils/parseSkills'
+import { useSkillsCatalog } from '../utils/useSkillsCatalog'
+import { useEscapeKey } from '../utils/useEscapeKey'
+import { can } from '../utils/permissions'
 import {
   Package, Users, User, Check, Loader2, AlertCircle, Download,
   Sparkles, BookOpen, ListTodo, MessageSquare, Workflow, LayoutGrid,
   Plus, Upload, Pencil, Trash2, FileJson, X, Save, ChevronRight, ArrowLeft,
+  Zap, Code2, Bot, Tag, Wrench, ExternalLink,
 } from 'lucide-react'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+/** @deprecated use parseSkills from utils/parseSkills */
 function parseCapabilityList(cap) {
-  if (cap == null || cap === '') return []
-  return String(cap).split(/[\n,;]+/).map((s) => s.trim()).filter(Boolean)
+  return parseSkills(cap)
 }
 
 function normalizeTeamTasks(raw) {
@@ -47,26 +54,42 @@ function SectionLabel({ icon: Icon, children }) {
 
 // ── Persona editor (for create/edit forms) ───────────────────────────────────
 
-const BLANK_PERSONA = { name: '', role: '', description: '', capabilities: '', prompt: '', figure_type: 'agent-m', figure: '', member_role: '' }
+const BLANK_PERSONA = { name: '', role: '', description: '', capabilities: '[]', prompt: '', figure_type: 'agent-m', figure: '', member_role: '' }
 const BLANK_TEAM = { name: '', description: '', execution_mode: 'shared', language: 'en', orchestrator_prompt: '', tasks_json: '[]' }
 
 function PersonaEditor({ persona, onChange, onRemove, index }) {
   const [open, setOpen] = useState(index === 0)
+  const { catalog } = useSkillsCatalog()
+
+  // Parse current slug array from capabilities JSON
+  const selectedSlugs = (() => {
+    try { const a = JSON.parse(persona.capabilities); return Array.isArray(a) ? a : [] } catch { return [] }
+  })()
+
+  function toggleSkill(slug) {
+    const next = selectedSlugs.includes(slug)
+      ? selectedSlugs.filter(s => s !== slug)
+      : [...selectedSlugs, slug]
+    onChange('capabilities', JSON.stringify(next))
+  }
+
   return (
     <div className="border border-border rounded-lg overflow-hidden">
-      <button type="button" onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between px-3 py-2 bg-muted/40 hover:bg-muted/60 text-sm font-medium text-foreground">
-        <span className="flex items-center gap-2">
-          <User className="w-3.5 h-3.5 opacity-60" />
-          {persona.name || `Agent ${index + 1}`}
-          {persona.member_role && <span className="text-[10px] text-muted-foreground ml-1">({persona.member_role})</span>}
-        </span>
-        <span className="flex items-center gap-2">
-          {open ? <X className="w-3 h-3 opacity-40" /> : <ChevronRight className="w-3.5 h-3.5" />}
-          <button type="button" onClick={(e) => { e.stopPropagation(); onRemove() }} className="text-destructive/60 hover:text-destructive p-0.5 rounded">
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
-        </span>
-      </button>
+      <div className="flex items-center bg-muted/40 hover:bg-muted/60 transition-colors">
+        <button type="button" onClick={() => setOpen(o => !o)} className="flex-1 flex items-center justify-between px-3 py-2 text-sm font-medium text-foreground text-left">
+          <span className="flex items-center gap-2">
+            <User className="w-3.5 h-3.5 opacity-60" />
+            {persona.name || `Agent ${index + 1}`}
+            {persona.member_role && <span className="text-[10px] text-muted-foreground ml-1">({persona.member_role})</span>}
+          </span>
+          <span className="flex items-center gap-1 mr-2">
+            {open ? <X className="w-3 h-3 opacity-40" /> : <ChevronRight className="w-3.5 h-3.5" />}
+          </span>
+        </button>
+        <button type="button" onClick={onRemove} aria-label="Remove agent" className="text-destructive/60 hover:text-destructive p-1.5 mr-1 rounded transition-colors">
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
       {open && (
         <div className="p-3 space-y-3 bg-background">
           <div className="grid grid-cols-2 gap-2">
@@ -94,8 +117,26 @@ function PersonaEditor({ persona, onChange, onRemove, index }) {
             <input className="w-full text-sm bg-muted/50 border border-border rounded px-2 py-1.5 text-foreground" value={persona.description} onChange={e => onChange('description', e.target.value)} placeholder="Short description" />
           </div>
           <div>
-            <label className="text-[11px] text-muted-foreground mb-1 block">Capabilities (comma separated)</label>
-            <input className="w-full text-sm bg-muted/50 border border-border rounded px-2 py-1.5 text-foreground" value={persona.capabilities} onChange={e => onChange('capabilities', e.target.value)} placeholder="Notion reading, data extraction" />
+            <label className="text-[11px] text-muted-foreground mb-1 block">Skills</label>
+            {catalog.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No skills available.</p>
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {catalog.map(s => {
+                  const active = selectedSlugs.includes(s.slug)
+                  return (
+                    <button key={s.slug} type="button" onClick={() => toggleSkill(s.slug)}
+                      className={`text-[11px] px-2 py-0.5 rounded-full border transition-colors ${
+                        active
+                          ? 'bg-primary/20 border-primary/40 text-primary'
+                          : 'border-border text-muted-foreground hover:text-foreground hover:border-primary/30'
+                      }`}>
+                      {active && <span className="mr-1">✓</span>}{s.title}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
           </div>
           <div>
             <label className="text-[11px] text-muted-foreground mb-1 block">Prompt / Instructions</label>
@@ -205,11 +246,11 @@ function ImportModal({ onClose, onImported }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center p-4">
-      <div className="bg-card border border-border rounded-2xl w-full max-w-lg shadow-2xl">
+    <div className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-card border border-border rounded-2xl w-full max-w-lg shadow-2xl" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-4 border-b border-border">
           <div className="flex items-center gap-2"><Upload className="w-4 h-4 text-primary" /><h3 className="text-sm font-semibold text-foreground">Import team bundle</h3></div>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
+          <button onClick={onClose} aria-label="Close" className="text-muted-foreground hover:text-foreground transition-colors"><X className="w-4 h-4" /></button>
         </div>
         <div className="p-5 space-y-3">
           <button type="button" onClick={() => fileRef.current?.click()} className="w-full border-2 border-dashed border-border rounded-xl py-6 text-sm text-muted-foreground hover:border-primary/50 hover:text-foreground flex flex-col items-center gap-2">
@@ -222,7 +263,7 @@ function ImportModal({ onClose, onImported }) {
         </div>
         <div className="flex justify-end gap-2 px-5 pb-5">
           <button onClick={onClose} className="text-sm px-3 py-1.5 rounded border border-border text-muted-foreground hover:text-foreground">Cancel</button>
-          <button onClick={handleImport} disabled={!json.trim() || loading} className="text-sm px-4 py-1.5 rounded bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 flex items-center gap-1.5">
+          <button onClick={handleImport} disabled={!json.trim() || loading} className="text-sm px-4 py-1.5 rounded bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5">
             {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
             {loading ? 'Importing…' : 'Import'}
           </button>
@@ -243,11 +284,19 @@ function EditModal({ team, onClose, onSaved }) {
       language: team.language || 'en', orchestrator_prompt: team.orchestrator_prompt || '',
       tasks_json: (() => { try { return JSON.stringify(typeof team.tasks_json === 'string' ? JSON.parse(team.tasks_json) : team.tasks_json, null, 2) } catch { return '[]' } })(),
     },
-    personas: (team.members || []).map(m => ({
-      name: m.name || '', role: m.persona_role || m.role || '', description: m.description || '',
-      capabilities: m.capabilities || '', prompt: m.prompt || '', figure_type: m.figure_type || 'agent-m',
-      figure: m.figure || '', member_role: m.role || m.team_role || '',
-    })),
+    personas: (team.members || []).map(m => {
+      // Normalise capabilities to JSON slug array string
+      let caps = m.capabilities || '[]'
+      if (caps && !caps.trim().startsWith('[')) {
+        // Legacy bullet/comma format — leave as empty array for clean edit
+        caps = '[]'
+      }
+      return {
+        name: m.name || '', role: m.persona_role || m.role || '', description: m.description || '',
+        capabilities: caps, prompt: m.prompt || '', figure_type: m.figure_type || 'agent-m',
+        figure: m.figure || '', member_role: m.role || m.team_role || '',
+      }
+    }),
   }
   async function handleSave({ team: t, personas }) {
     setSaving(true); setError(null)
@@ -300,7 +349,7 @@ function CreateModal({ onClose, onSaved }) {
 
 // ── Compact team card (grid view) ─────────────────────────────────────────────
 
-function TeamCard({ team, installed, installing, onInstall, disabled, isDev, onEdit, onDelete, onExport, onSelect }) {
+function TeamCard({ team, installed, installing, onInstall, onUninstall, disabled, isDev, onEdit, onDelete, onExport, onSelect }) {
   const members = team.members || []
   function handleCardClick(e) {
     // Don't navigate if user clicked a button inside the card
@@ -310,7 +359,7 @@ function TeamCard({ team, installed, installing, onInstall, disabled, isDev, onE
   return (
     <div
       onClick={handleCardClick}
-      className="bg-card border border-border rounded-xl overflow-hidden cursor-pointer transition-shadow hover:shadow-lg"
+      className="bg-card border border-border rounded-xl overflow-hidden cursor-pointer transition-all hover:border-primary/40 hover:shadow-sm"
     >
       <div className="p-4">
         <div className="flex items-start justify-between gap-3">
@@ -327,7 +376,15 @@ function TeamCard({ team, installed, installing, onInstall, disabled, isDev, onE
               </>
             )}
             {installed ? (
-              <span className="inline-flex items-center gap-1 text-xs text-success bg-success/10 px-2.5 py-1.5 rounded-lg"><Check className="w-3 h-3" /> Installed</span>
+              <div className="flex items-center gap-1.5">
+                <span className="inline-flex items-center gap-1 text-xs text-success bg-success/10 px-2.5 py-1.5 rounded-lg"><Check className="w-3 h-3" /> Installed</span>
+                {onUninstall && (
+                  <button onClick={e => { e.stopPropagation(); onUninstall() }} disabled={installing}
+                    className="text-xs px-2.5 py-1.5 rounded-lg border border-destructive/30 text-destructive hover:bg-destructive/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+                    {installing ? <Loader2 className="w-3 h-3 animate-spin inline" /> : 'Uninstall'}
+                  </button>
+                )}
+              </div>
             ) : (
               <button onClick={onInstall} disabled={disabled || installing} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
                 {installing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
@@ -353,7 +410,7 @@ function TeamCard({ team, installed, installing, onInstall, disabled, isDev, onE
 
 // ── Team detail page ──────────────────────────────────────────────────────────
 
-function TeamDetail({ team, installed, installing, onInstall, disabled, isDev, onEdit, onExport, onBack }) {
+function TeamDetail({ team, installed, installing, onInstall, onUninstall, disabled, isDev, onEdit, onExport, onBack }) {
   const members = team.members || []
   const teamTasks = normalizeTeamTasks(team.tasks_json)
   const flows = team.flows || []
@@ -391,7 +448,15 @@ function TeamDetail({ team, installed, installing, onInstall, disabled, isDev, o
               </>
             )}
             {installed ? (
-              <span className="inline-flex items-center gap-1 text-xs text-success bg-success/10 px-3 py-1.5 rounded-lg"><Check className="w-3 h-3" /> Installed</span>
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center gap-1 text-xs text-success bg-success/10 px-3 py-1.5 rounded-lg"><Check className="w-3 h-3" /> Installed</span>
+                {onUninstall && (
+                  <button onClick={onUninstall} disabled={installing}
+                    className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-destructive/30 text-destructive hover:bg-destructive/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+                    {installing ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Uninstall'}
+                  </button>
+                )}
+              </div>
             ) : (
               <button onClick={onInstall} disabled={disabled || installing} className="inline-flex items-center gap-1.5 text-xs font-medium px-4 py-1.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors">
                 {installing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
@@ -457,7 +522,7 @@ function TeamDetail({ team, installed, installing, onInstall, disabled, isDev, o
               <div key={m.id ?? m.persona_id ?? i} className="rounded-xl border border-border/80 bg-card shadow-sm p-4 space-y-3">
                 <div className="flex items-start gap-3">
                   <div className="w-10 h-10 rounded-full bg-muted/60 overflow-hidden flex items-center justify-center flex-shrink-0 text-muted-foreground">
-                    {m.figure ? <HabboFigure figure={m.figure} headOnly size={40} /> : <User className="w-4 h-4 opacity-70" aria-hidden />}
+                    <HabboFigure figure={m.figure} figureType={m.figure_type} headOnly size={40} />
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium text-foreground">{m.name}</p>
@@ -491,21 +556,529 @@ function TeamDetail({ team, installed, installing, onInstall, disabled, isDev, o
   )
 }
 
+// ── Skills Tab ────────────────────────────────────────────────────────────────
+
+const CATEGORY_STYLE = {
+  hotel:         'bg-sky-500/10 text-sky-400 border-sky-500/20',
+  research:      'bg-violet-500/10 text-violet-400 border-violet-500/20',
+  coordination:  'bg-amber-500/10 text-amber-400 border-amber-500/20',
+  communication: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
+  general:       'bg-secondary text-muted-foreground border-border',
+}
+
+const INTEGRATION_META = {
+  atlassian: { label: 'Atlassian', icon: '/integrations/atlassian.svg', color: 'bg-blue-600/10 border-blue-500/20' },
+  notion:    { label: 'Notion',    icon: '/integrations/notion.svg',    color: 'bg-neutral-500/10 border-neutral-500/20' },
+  resend:    { label: 'Resend',    icon: 'https://www.google.com/s2/favicons?domain=resend.com&sz=64', color: 'bg-emerald-500/10 border-emerald-500/20' },
+}
+
+function IntegrationBadge({ name, onNavigate }) {
+  const meta = INTEGRATION_META[name?.toLowerCase()] || null
+  const inner = meta ? (
+    <span className={`inline-flex items-center gap-1.5 text-[10px] font-medium border rounded-md px-2 py-0.5 ${meta.color}`}>
+      <img src={meta.icon} alt={meta.label} className="w-3 h-3 object-contain" />
+      <span className="text-foreground/70">Requires</span>
+      <span className="text-foreground/90">{meta.label}</span>
+    </span>
+  ) : (
+    <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground bg-secondary border border-border rounded-md px-2 py-0.5">
+      <AlertCircle className="w-3 h-3" /> Requires {name}
+    </span>
+  )
+  if (!onNavigate) return inner
+  return (
+    <button type="button" onClick={e => { e.stopPropagation(); onNavigate('integrations') }}
+      className="inline-flex items-center gap-1.5 group/ibadge" title="Set up integration">
+      {inner}
+      <span className="text-[10px] text-primary/60 group-hover/ibadge:text-primary transition-colors hidden group-hover/ibadge:inline">
+        Set up →
+      </span>
+    </button>
+  )
+}
+
+// ── Skill Detail Page ─────────────────────────────────────────────────────────
+
+export function SkillDetail({ skill, onBack, onNavigate }) {
+  const [body, setBody] = useState(skill.body || null)
+  const [loading, setLoading] = useState(!skill.body)
+  useEscapeKey(onBack)
+
+  useEffect(() => {
+    if (skill.body) { setBody(skill.body); return }
+    api(`/api/skills/${skill.slug}`)
+      .then(d => setBody(d.skill?.body || ''))
+      .catch(() => setBody('Could not load instructions.'))
+      .finally(() => setLoading(false))
+  }, [skill.slug, skill.body])
+
+  const catStyle = CATEGORY_STYLE[skill.category] || CATEGORY_STYLE.general
+
+  return (
+    <div className="space-y-6">
+      {/* Breadcrumb */}
+      <button onClick={onBack}
+        className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors group">
+        <ArrowLeft className="w-3.5 h-3.5 group-hover:-translate-x-0.5 transition-transform" />
+        Skills
+        <span className="text-muted-foreground/40 mx-0.5">/</span>
+        <span className="text-foreground">{skill.title}</span>
+      </button>
+
+      {/* Hero */}
+      <div className="bg-card border border-border rounded-2xl p-6 space-y-4">
+        <div className="flex items-start gap-4">
+          <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 border ${catStyle}`}>
+            <Zap className="w-5 h-5" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex flex-wrap items-center gap-2 mb-1">
+              <h2 className="text-xl font-bold text-foreground">{skill.title}</h2>
+              <span className={`text-[10px] px-2 py-0.5 rounded-full border capitalize font-medium ${catStyle}`}>
+                {skill.category}
+              </span>
+              {skill.difficulty && (
+                <span className={`text-[10px] px-2 py-0.5 rounded-full border font-medium ${
+                  skill.difficulty === 'beginner'
+                    ? 'bg-success/10 text-success border-success/20'
+                    : 'bg-warning/10 text-warning border-warning/20'
+                }`}>
+                  {skill.difficulty}
+                </span>
+              )}
+            </div>
+            <p className="text-sm text-muted-foreground leading-relaxed">{skill.description}</p>
+          </div>
+        </div>
+
+        {/* Meta grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-border">
+          {/* Slug */}
+          <div>
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground/50 mb-1 flex items-center gap-1"><Tag className="w-3 h-3" /> Slug</p>
+            <code className="text-xs font-mono text-foreground/70 bg-secondary px-2 py-0.5 rounded">{skill.slug}</code>
+          </div>
+
+          {/* MCP tools */}
+          {skill.mcp_tools?.length > 0 && (
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground/50 mb-1 flex items-center gap-1"><Wrench className="w-3 h-3" /> MCP Tools</p>
+              <div className="flex flex-wrap gap-1">
+                {skill.mcp_tools.map(t => (
+                  <code key={t} className="text-[11px] font-mono bg-secondary border border-border rounded px-1.5 py-0.5 text-muted-foreground">{t}</code>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Integration */}
+          {skill.requires_integration && (
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground/50 mb-1 flex items-center gap-1"><ExternalLink className="w-3 h-3" /> Integration</p>
+              <IntegrationBadge name={skill.requires_integration} onNavigate={onNavigate} />
+            </div>
+          )}
+        </div>
+
+        {/* Tags */}
+        {skill.tags?.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 pt-1">
+            {skill.tags.map(tag => (
+              <span key={tag} className="text-[10px] px-2 py-0.5 rounded-full bg-secondary text-muted-foreground border border-border">
+                #{tag}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Instructions body */}
+      <div className="bg-card border border-border rounded-2xl overflow-hidden">
+        <div className="px-5 py-3 border-b border-border flex items-center gap-2">
+          <BookOpen className="w-3.5 h-3.5 text-muted-foreground" />
+          <span className="text-xs font-medium text-foreground">Instructions</span>
+          <span className="ml-auto text-[10px] text-muted-foreground/40 font-mono">SKILL.md</span>
+        </div>
+        <div className="p-5">
+          {loading ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground py-8 justify-center">
+              <Loader2 className="w-4 h-4 animate-spin" /> Loading…
+            </div>
+          ) : (
+            <div className="prose prose-sm prose-invert max-w-none
+              [&_h1]:text-base [&_h1]:font-bold [&_h1]:text-foreground [&_h1]:mt-0 [&_h1]:mb-3
+              [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:text-foreground [&_h2]:mt-5 [&_h2]:mb-2 [&_h2]:pb-1 [&_h2]:border-b [&_h2]:border-border
+              [&_h3]:text-xs [&_h3]:font-semibold [&_h3]:text-foreground/80 [&_h3]:mt-4 [&_h3]:mb-1.5 [&_h3]:uppercase [&_h3]:tracking-wider
+              [&_p]:text-sm [&_p]:text-muted-foreground [&_p]:leading-relaxed [&_p]:my-2
+              [&_ul]:my-2 [&_ul]:space-y-1 [&_ul>li]:text-sm [&_ul>li]:text-muted-foreground [&_ul>li]:pl-1
+              [&_ol]:my-2 [&_ol]:space-y-1 [&_ol>li]:text-sm [&_ol>li]:text-muted-foreground [&_ol>li]:pl-1
+              [&_code]:text-xs [&_code]:font-mono [&_code]:bg-secondary [&_code]:text-primary/80 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded
+              [&_pre]:bg-background [&_pre]:border [&_pre]:border-border [&_pre]:rounded-lg [&_pre]:p-4 [&_pre]:overflow-x-auto [&_pre]:my-3
+              [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-muted-foreground [&_pre_code]:text-xs
+              [&_blockquote]:border-l-2 [&_blockquote]:border-primary/40 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_blockquote]:italic [&_blockquote]:my-3
+              [&_strong]:text-foreground [&_strong]:font-semibold
+              [&_hr]:border-border [&_hr]:my-4">
+              <ReactMarkdown>{body || ''}</ReactMarkdown>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Skills Tab (grid) ─────────────────────────────────────────────────────────
+
+function SkillsTab({ onNavigate }) {
+  const { catalog: skills, loading } = useSkillsCatalog()
+  const [activeCategory, setActiveCategory] = useState('all')
+  const [selectedSkill, setSelectedSkill] = useState(null)
+
+  const categories = ['all', ...[...new Set(skills.map(s => s.category))].sort()]
+  const visible = activeCategory === 'all' ? skills : skills.filter(s => s.category === activeCategory)
+
+  if (loading) return (
+    <div className="flex items-center justify-center py-16">
+      <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+    </div>
+  )
+
+  if (selectedSkill) return (
+    <SkillDetail skill={selectedSkill} onBack={() => setSelectedSkill(null)} onNavigate={onNavigate} />
+  )
+
+  return (
+    <div className="space-y-5">
+      {/* Header */}
+      <div>
+        <h2 className="text-lg font-semibold text-foreground">Skills</h2>
+        <p className="text-sm text-muted-foreground">Reusable capability packages injected into agents at deploy time.</p>
+      </div>
+
+      {/* Category pills */}
+      <div className="flex flex-wrap gap-1.5">
+        {categories.map(cat => (
+          <button key={cat} onClick={() => setActiveCategory(cat)}
+            className={`text-xs px-3 py-1 rounded-full border capitalize transition-colors ${
+              activeCategory === cat
+                ? 'bg-primary text-primary-foreground border-primary'
+                : 'border-border text-muted-foreground hover:text-foreground hover:border-primary/30'
+            }`}>
+            {cat === 'all' ? `All (${skills.length})` : cat}
+          </button>
+        ))}
+      </div>
+
+      {skills.length === 0 ? (
+        <div className="bg-card border border-border rounded-2xl p-10 text-center">
+          <Zap className="w-7 h-7 text-muted-foreground mx-auto mb-3" />
+          <p className="text-sm font-medium text-foreground">No skills found</p>
+          <p className="text-xs text-muted-foreground mt-1">Add a <code className="font-mono">SKILL.md</code> folder under <code className="font-mono">agents/skills/</code>.</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {visible.map(skill => {
+            const catStyle = CATEGORY_STYLE[skill.category] || CATEGORY_STYLE.general
+            return (
+              <button key={skill.slug} onClick={() => setSelectedSkill(skill)}
+                className="group text-left bg-card border border-border rounded-xl transition-all hover:border-primary/40 hover:shadow-sm flex flex-col">
+                <div className="p-4 flex flex-col gap-3 flex-1">
+                  {/* Title row */}
+                  <div className="flex items-start gap-3">
+                    <div className={`mt-0.5 w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 border ${catStyle}`}>
+                      <Zap className="w-3.5 h-3.5" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-semibold text-foreground leading-tight group-hover:text-primary transition-colors">
+                          {skill.title}
+                        </span>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded border capitalize font-medium ${catStyle}`}>
+                          {skill.category}
+                        </span>
+                        {skill.difficulty && (
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${
+                            skill.difficulty === 'beginner'
+                              ? 'bg-success/10 text-success border-success/20'
+                              : 'bg-warning/10 text-warning border-warning/20'
+                          }`}>
+                            {skill.difficulty}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1 leading-relaxed line-clamp-2">{skill.description}</p>
+                    </div>
+                  </div>
+
+                  {/* Integration badge only — actions shown on detail page */}
+                  {skill.requires_integration && (
+                    <div>
+                      <IntegrationBadge name={skill.requires_integration} onNavigate={onNavigate} />
+                    </div>
+                  )}
+                </div>
+
+                {/* Card footer */}
+                <div className="px-4 pb-3 flex items-center justify-end">
+                  <code className="text-[10px] font-mono text-muted-foreground/25">{skill.slug}</code>
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      )}
+
+      <p className="text-[11px] text-muted-foreground/40 pt-1">
+        Skills live in <code className="font-mono">agents/skills/*/SKILL.md</code> — drop a new folder to publish.
+      </p>
+    </div>
+  )
+}
+
+// ── Persona Detail Page ───────────────────────────────────────────────────────
+
+function PersonaDetail({ persona, onBack }) {
+  const { catalog } = useSkillsCatalog()
+  const [selectedSkill, setSelectedSkill] = useState(null)
+  useEscapeKey(() => selectedSkill ? setSelectedSkill(null) : onBack(), true)
+
+  const personaSkills = useMemo(() => {
+    const slugs = parseSkillSlugs(persona.capabilities)
+    if (slugs.length > 0) {
+      return slugs.map(slug => {
+        const found = catalog.find(s => s.slug === slug)
+        return found || { slug, title: slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) }
+      })
+    }
+    return parseSkills(persona.capabilities, catalog).map(title => ({ slug: null, title }))
+  }, [persona.capabilities, catalog])
+
+  const cleanPrompt = persona.prompt?.replace(/^## Skills[\s\S]*$/m, '').trim()
+
+  return (
+    <div className="space-y-6">
+      {/* Breadcrumb */}
+      <button onClick={onBack}
+        className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors group">
+        <ArrowLeft className="w-3.5 h-3.5 group-hover:-translate-x-0.5 transition-transform" />
+        Personas
+        <span className="text-muted-foreground/40 mx-0.5">/</span>
+        <span className="text-foreground">{persona.name}</span>
+      </button>
+
+      {/* Hero */}
+      <div className="bg-card border border-border rounded-2xl overflow-hidden">
+        <div className="flex gap-0">
+          {/* Figure */}
+          <div className="flex flex-col items-center justify-center px-8 py-6 bg-secondary/30 border-r border-border flex-shrink-0">
+            <HabboFigure figure={persona.figure} figureType={persona.figure_type} size="xl" animate={true} />
+          </div>
+          {/* Meta */}
+          <div className="flex-1 min-w-0 p-6 space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-xl font-bold text-foreground">{persona.name}</h2>
+              {persona.role && (
+                <span className="text-[11px] bg-primary/10 text-primary border border-primary/20 rounded-full px-2.5 py-0.5">
+                  {persona.role}
+                </span>
+              )}
+            </div>
+            {persona.description && (
+              <p className="text-sm text-muted-foreground leading-relaxed">{persona.description}</p>
+            )}
+            {/* Skills */}
+            {personaSkills.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground/50 font-medium uppercase tracking-wider self-center">
+                  <Sparkles className="w-2.5 h-2.5" /> Skills
+                </span>
+                {personaSkills.map((s, i) => (
+                  s.slug ? (
+                    <button key={i}
+                      onClick={() => setSelectedSkill(catalog.find(c => c.slug === s.slug) || s)}
+                      className="text-[11px] bg-secondary text-muted-foreground border border-border rounded-md px-2 py-0.5 hover:border-primary/40 hover:text-foreground hover:bg-primary/5 transition-colors cursor-pointer">
+                      {s.title}
+                    </button>
+                  ) : (
+                    <span key={i} className="text-[11px] bg-secondary text-muted-foreground border border-border rounded-md px-2 py-0.5">
+                      {s.title}
+                    </span>
+                  )
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Prompt / Instructions */}
+      {cleanPrompt && (
+        <div className="bg-card border border-border rounded-2xl overflow-hidden">
+          <div className="px-5 py-3 border-b border-border flex items-center gap-2">
+            <BookOpen className="w-3.5 h-3.5 text-muted-foreground" />
+            <span className="text-xs font-medium text-foreground">Identity &amp; Instructions</span>
+          </div>
+          <div className="p-5">
+            <div className="prose prose-sm prose-invert max-w-none
+              [&_h1]:text-base [&_h1]:font-bold [&_h1]:text-foreground [&_h1]:mt-0 [&_h1]:mb-3
+              [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:text-foreground [&_h2]:mt-5 [&_h2]:mb-2 [&_h2]:pb-1 [&_h2]:border-b [&_h2]:border-border
+              [&_h3]:text-xs [&_h3]:font-semibold [&_h3]:text-foreground/80 [&_h3]:mt-4 [&_h3]:mb-1.5
+              [&_p]:text-sm [&_p]:text-muted-foreground [&_p]:leading-relaxed [&_p]:my-2
+              [&_ul]:my-2 [&_ul]:space-y-1 [&_ul>li]:text-sm [&_ul>li]:text-muted-foreground
+              [&_ol]:my-2 [&_ol]:space-y-1 [&_ol>li]:text-sm [&_ol>li]:text-muted-foreground
+              [&_code]:text-xs [&_code]:font-mono [&_code]:bg-secondary [&_code]:text-primary/80 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded
+              [&_strong]:text-foreground [&_strong]:font-semibold
+              [&_blockquote]:border-l-2 [&_blockquote]:border-primary/40 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_blockquote]:italic">
+              <ReactMarkdown>{cleanPrompt}</ReactMarkdown>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Skill detail modal */}
+      {selectedSkill && createPortal(
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto"
+          onClick={e => { if (e.target === e.currentTarget) setSelectedSkill(null) }}>
+          <div className="bg-background border border-border rounded-2xl shadow-xl w-full max-w-4xl my-8">
+            <div className="flex items-center justify-end px-5 pt-4">
+              <button onClick={() => setSelectedSkill(null)}
+                className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="px-5 pb-6">
+              <SkillDetail skill={selectedSkill} onBack={() => setSelectedSkill(null)} />
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+    </div>
+  )
+}
+
+// ── Personas Tab ──────────────────────────────────────────────────────────────
+
+function PersonasTab() {
+  const { catalog: skills } = useSkillsCatalog()
+  const [personas, setPersonas] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [selectedPersona, setSelectedPersona] = useState(null)
+
+  useEffect(() => {
+    api('/api/agents/personas')
+      .then(pd => setPersonas(pd.personas || []))
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  if (loading) return (
+    <div className="flex items-center justify-center py-16">
+      <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+    </div>
+  )
+
+  if (selectedPersona) return (
+    <PersonaDetail persona={selectedPersona} onBack={() => setSelectedPersona(null)} />
+  )
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-lg font-semibold text-foreground">Personas</h2>
+        <p className="text-sm text-muted-foreground">Shared agent personas available in the marketplace. Install a team to get its personas in My Agents.</p>
+      </div>
+
+      {personas.length === 0 ? (
+        <div className="bg-card border border-border rounded-2xl p-8 text-center">
+          <Bot className="w-8 h-8 text-muted-foreground mx-auto mb-3" />
+          <p className="text-sm font-medium text-foreground">No personas yet</p>
+          <p className="text-xs text-muted-foreground mt-1">Personas appear here when teams are added to the marketplace.</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {personas.map(persona => {
+            const personaSkills = parseSkills(persona.capabilities, skills)
+            return (
+              <button key={persona.id} onClick={() => setSelectedPersona(persona)}
+                className="group text-left bg-card border border-border rounded-xl overflow-hidden hover:border-primary/40 hover:shadow-sm transition-all flex">
+                {/* Figure column */}
+                <div className="flex flex-col items-center justify-start pt-4 px-3 pb-4 bg-secondary/30 border-r border-border flex-shrink-0 w-20">
+                  <HabboFigure figure={persona.figure} figureType={persona.figure_type} size="xl" animate={false} />
+                </div>
+                <div className="flex-1 min-w-0 p-3 space-y-2 flex flex-col">
+                  <div>
+                    <p className="text-sm font-semibold text-foreground group-hover:text-primary transition-colors">{persona.name}</p>
+                    {persona.role && (
+                      <span className="inline-flex items-center text-[11px] bg-primary/10 text-primary border border-primary/20 rounded-full px-2 py-0.5 mt-1">
+                        {persona.role}
+                      </span>
+                    )}
+                  </div>
+
+                  {persona.description && (
+                    <p className="text-xs text-muted-foreground line-clamp-2 flex-1">{persona.description}</p>
+                  )}
+
+                  {/* Skills chips */}
+                  {personaSkills.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground/50 font-medium uppercase tracking-wider">
+                        <Sparkles className="w-2.5 h-2.5" /> Skills
+                      </span>
+                      {personaSkills.map((s, i) => (
+                        <span key={i} className="text-[11px] bg-secondary text-muted-foreground border border-border rounded-md px-2 py-0.5">
+                          {s}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  <p className="text-[10px] text-primary/40 group-hover:text-primary/70 transition-colors mt-auto pt-1">View persona →</p>
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Main view ─────────────────────────────────────────────────────────────────
 
-export function MarketplaceView({ me }) {
+const MARKETPLACE_TABS = [
+  { id: 'teams',    label: 'Teams',    icon: Users },
+  { id: 'personas', label: 'Personas', icon: Bot   },
+  { id: 'skills',   label: 'Skills',   icon: Zap   },
+]
+
+function TeamsTab({ me, isDev }) {
+  const { showToast } = useToast()
   const [teams, setTeams] = useState([])
   const [installedIds, setInstalledIds] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [installingId, setInstallingId] = useState(null)
-  const [toast, setToast] = useState(null)
   const [showCreate, setShowCreate] = useState(false)
   const [showImport, setShowImport] = useState(false)
   const [editingTeam, setEditingTeam] = useState(null)
   const [selectedTeam, setSelectedTeam] = useState(null)
+  const selectedTeamRef = useRef(null)
 
-  const isDev = me?.is_developer
+  const canInstall   = can(me, 'marketplace.install')
+  const canUninstall = can(me, 'marketplace.uninstall')
+
+  // Escape key: close active modal or deselect team
+  useEscapeKey(() => {
+    if (editingTeam) { setEditingTeam(null); return }
+    if (showCreate)  { setShowCreate(false); return }
+    if (showImport)  { setShowImport(false); return }
+    if (selectedTeam) setSelectedTeam(null)
+  }, !!(editingTeam || showCreate || showImport || selectedTeam))
+
+  // Keep ref in sync so load() can read current value without stale closure
+  useEffect(() => { selectedTeamRef.current = selectedTeam }, [selectedTeam])
 
   const load = useCallback(async () => {
     setLoading(true); setError(null)
@@ -519,23 +1092,29 @@ export function MarketplaceView({ me }) {
       )
       setTeams(teamsWithMembers)
       setInstalledIds(id.installed || [])
-      // Refresh selected team if still open
-      if (selectedTeam) {
-        const fresh = teamsWithMembers.find(t => t.id === selectedTeam.id)
-        if (fresh) setSelectedTeam(fresh)
-        else setSelectedTeam(null)
+      const current = selectedTeamRef.current
+      if (current) {
+        const fresh = teamsWithMembers.find(t => t.id === current.id)
+        setSelectedTeam(fresh || null)
       }
     } catch (e) { setError(friendlyFetchError(e)) } finally { setLoading(false) }
   }, [])
 
   useEffect(() => { load() }, [load])
 
-  function showToast(msg, type = 'success') { setToast({ msg, type }); setTimeout(() => setToast(null), 3500) }
-
   async function installTeam(teamId) {
     setInstallingId(teamId)
     try { await api(`/api/marketplace/teams/${teamId}/install`, { method: 'POST' }); setInstalledIds(prev => [...prev, teamId]); showToast('Team installed! Go to My Agents to configure bots and deploy.') }
     catch (e) { showToast(e.message, 'error') } finally { setInstallingId(null) }
+  }
+
+  async function uninstallTeam(teamId) {
+    setInstallingId(teamId)
+    try {
+      await api(`/api/marketplace/teams/${teamId}/uninstall`, { method: 'DELETE' })
+      setInstalledIds(prev => prev.filter(id => id !== teamId))
+      showToast('Team uninstalled.')
+    } catch (e) { showToast(e.message || 'Uninstall failed', 'error') } finally { setInstallingId(null) }
   }
 
   async function deleteTeam(team) {
@@ -562,25 +1141,19 @@ export function MarketplaceView({ me }) {
     } catch (e) { showToast(e.message, 'error') }
   }
 
-  const isBasic = me?.ai_tier === 'basic'
-
   if (loading) return <div className="flex items-center justify-center py-12"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>
   if (error) return <div className="bg-destructive/10 border border-destructive/30 rounded-xl p-4 text-center"><AlertCircle className="w-5 h-5 text-destructive mx-auto mb-2" /><p className="text-sm text-destructive/80">{error}</p></div>
 
   return (
     <div className="space-y-4">
-      {toast && (
-        <div className={`rounded-lg px-4 py-2.5 text-sm ${toast.type === 'error' ? 'bg-destructive/10 text-destructive/80 border border-destructive/30' : 'bg-success/10 text-success border border-success/30'}`}>{toast.msg}</div>
-      )}
-
-      {/* Detail page or grid */}
       {selectedTeam ? (
         <TeamDetail
           team={selectedTeam}
           installed={installedIds.includes(selectedTeam.id)}
           installing={installingId === selectedTeam.id}
-          onInstall={() => installTeam(selectedTeam.id)}
-          disabled={isBasic}
+          onInstall={canInstall ? () => installTeam(selectedTeam.id) : undefined}
+          onUninstall={canUninstall ? () => uninstallTeam(selectedTeam.id) : undefined}
+          disabled={!canInstall}
           isDev={isDev}
           onEdit={() => setEditingTeam(selectedTeam)}
           onExport={() => exportTeam(selectedTeam)}
@@ -588,10 +1161,9 @@ export function MarketplaceView({ me }) {
         />
       ) : (
         <>
-          {/* Header */}
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h2 className="text-lg font-semibold text-foreground">Marketplace</h2>
+              <h2 className="text-lg font-semibold text-foreground">Teams</h2>
               <p className="text-sm text-muted-foreground">Browse and install agent teams. After installing, configure bots in My Agents.</p>
             </div>
             {isDev && (
@@ -602,12 +1174,12 @@ export function MarketplaceView({ me }) {
             )}
           </div>
 
-          {isBasic && (
+          {!canInstall && (
             <div className="bg-warning/10 border border-warning/30 rounded-xl p-4 flex items-start gap-3">
               <AlertCircle className="w-4 h-4 text-warning mt-0.5 flex-shrink-0" />
               <div>
                 <p className="text-sm text-warning/80 font-medium">Pro tier required</p>
-                <p className="text-xs text-warning/80/70 mt-0.5">Upgrade to Pro to install and deploy agent teams.</p>
+                <p className="text-xs text-warning/60 mt-0.5">Upgrade to Pro to install and deploy agent teams.</p>
               </div>
             </div>
           )}
@@ -624,7 +1196,9 @@ export function MarketplaceView({ me }) {
                 <TeamCard
                   key={team.id} team={team}
                   installed={installedIds.includes(team.id)} installing={installingId === team.id}
-                  onInstall={() => installTeam(team.id)} disabled={isBasic} isDev={isDev}
+                  onInstall={canInstall ? () => installTeam(team.id) : undefined}
+                  onUninstall={canUninstall ? () => uninstallTeam(team.id) : undefined}
+                  disabled={!canInstall} isDev={isDev}
                   onEdit={() => setEditingTeam(team)} onDelete={() => deleteTeam(team)}
                   onExport={() => exportTeam(team)} onSelect={() => setSelectedTeam(team)}
                 />
@@ -633,11 +1207,48 @@ export function MarketplaceView({ me }) {
           )}
         </>
       )}
-
-      {/* Modals — portalled to body */}
       {showCreate && createPortal(<CreateModal onClose={() => setShowCreate(false)} onSaved={() => { showToast('Team created!'); load() }} />, document.body)}
-      {showImport && createPortal(<ImportModal onClose={() => setShowImport(false)} onImported={() => { showToast('Team imported!'); load() }} />, document.body)}
-      {editingTeam && createPortal(<EditModal team={editingTeam} onClose={() => setEditingTeam(null)} onSaved={() => { showToast('Team updated!'); load() }} />, document.body)}
+      {showImport && createPortal(<ImportModal onClose={() => setShowImport(false)} onSaved={() => { showToast('Team imported!'); load() }} />, document.body)}
+      {editingTeam && createPortal(<EditModal team={editingTeam} onClose={() => setEditingTeam(null)} onSaved={() => { showToast('Team updated!'); setEditingTeam(null); load() }} />, document.body)}
+    </div>
+  )
+}
+
+export function MarketplaceView({ me, onNavigate }) {
+  const [activeTab, setActiveTab] = useState('teams')
+  const isDev = !!me?.is_developer
+
+  return (
+    <div className="space-y-4">
+      {/* Page header */}
+      <div>
+        <h2 className="text-lg font-semibold text-foreground">Marketplace</h2>
+        <p className="text-sm text-muted-foreground">Browse teams, personas, and skills. Install teams to get started.</p>
+      </div>
+
+      {/* Tab bar */}
+      <div className="flex gap-1 p-1 bg-secondary/50 border border-border rounded-xl w-fit">
+        {MARKETPLACE_TABS.map(tab => {
+          const Icon = tab.icon
+          const active = activeTab === tab.id
+          return (
+            <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+              className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors ${
+                active
+                  ? 'bg-background text-foreground shadow-sm border border-border'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}>
+              <Icon className="w-3.5 h-3.5" />
+              {tab.label}
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Tab content */}
+      {activeTab === 'teams'    && <TeamsTab me={me} isDev={isDev} />}
+      {activeTab === 'personas' && <PersonasTab />}
+      {activeTab === 'skills'   && <SkillsTab onNavigate={onNavigate} />}
     </div>
   )
 }

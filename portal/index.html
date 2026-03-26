@@ -9,11 +9,14 @@
     <script>
       (function () {
         try {
-          if (localStorage.getItem('portal-theme') !== 'light') {
-            document.documentElement.classList.add('dark')
+          var t = localStorage.getItem('portal-theme');
+          if (t === 'abyss') {
+            document.documentElement.classList.add('dark', 'abyss');
+          } else if (t !== 'light') {
+            document.documentElement.classList.add('dark');
           }
         } catch (e) {
-          document.documentElement.classList.add('dark')
+          document.documentElement.classList.add('dark');
         }
       })()
     </script>

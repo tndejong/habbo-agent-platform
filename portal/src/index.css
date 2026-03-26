@@ -88,6 +88,46 @@
     --info:                   oklch(0.70 0.13 220);
     --info-foreground:        oklch(0.09 0 0);
   }
+
+  /* ── Abyss theme — VS Code Abyss (#000c18 deep navy, white UI text, blue accents) */
+  html.abyss {
+    color-scheme: dark;
+    --background:             #000c18;              /* editor.background            */
+    --foreground:             #ddeeff;              /* bright white-blue UI text    */
+    --card:                   #060d1f;              /* between sidebar + titlebar   */
+    --card-foreground:        #ddeeff;
+    --popover:                #10192c;              /* editorWidget.background tone */
+    --popover-foreground:     #ddeeff;
+    --primary:                #0063a5;              /* badge.background             */
+    --primary-foreground:     #ddeeff;              /* readable on blue             */
+    --secondary:              #152037;              /* list.inactiveSelectionBackground */
+    --secondary-foreground:   #c8dcf0;
+    --muted:                  #181f2f;              /* input.background             */
+    --muted-foreground:       #7a9abf;              /* readable mid-tone            */
+    --accent:                 #08286b;              /* list.activeSelectionBackground */
+    --accent-foreground:      #ddeeff;
+    --destructive:            #a22d44;              /* editorMarkerNavigationError  */
+    --destructive-foreground: #ffe0e8;
+    --border:                 #1d2e4a;              /* between border + tab.border  */
+    --input:                  #181f2f;
+    --ring:                   #1d4a87;              /* inputOption.activeBorder     */
+    --radius:                 0.375rem;
+    --sidebar:                #060621;              /* sideBar.background           */
+    --sidebar-foreground:     #ddeeff;
+    --sidebar-primary:        #0063a5;
+    --sidebar-primary-foreground: #ddeeff;
+    --sidebar-accent:         #08286b;
+    --sidebar-accent-foreground: #ddeeff;
+    --sidebar-border:         #1d2e4a;
+    --sidebar-ring:           #1d4a87;
+    /* Semantic status tokens */
+    --success:                #22aa44;              /* string token color           */
+    --success-foreground:     #000c18;
+    --warning:                #c49030;              /* amber — readable on dark navy */
+    --warning-foreground:     #000c18;
+    --info:                   #0063a5;
+    --info-foreground:        #ddeeff;
+  }
 }
 
 /* ── @theme inline: expose CSS vars as Tailwind utilities ───────────────── */
@@ -154,6 +194,10 @@
 img.pixel-art { image-rendering: pixelated; image-rendering: crisp-edges; }
 
 /* ── Animations ─────────────────────────────────────────────────────────── */
+@keyframes toast-slide-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
 @keyframes fade-up {
   from { opacity: 0; transform: translateY(10px); }
   to   { opacity: 1; transform: none; }

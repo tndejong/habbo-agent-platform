@@ -1,6 +1,6 @@
 import path from 'node:path';
 import net from 'node:net';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
@@ -172,6 +172,62 @@ function tierGate(minTier) {
       res.status(500).json({ error: 'Internal error' });
     }
   };
+}
+
+// ── Permission Registry ────────────────────────────────────────────────────
+// KEEP IN SYNC with portal/src/utils/permissions.js (frontend mirror).
+// Add new permission keys here AND in the frontend file whenever a new
+// gated feature is built. The pre-deploy analysis surfaces any drift.
+
+const TIER_RANK_PERM = { basic: 0, pro: 1, enterprise: 2 }
+
+const PERMISSIONS_MAP = {
+  'teams.view':          { minTier: 'basic', requiresDev: false },
+  'teams.deploy':        { minTier: 'pro',   requiresDev: false },
+  'teams.create':        { minTier: 'pro',   requiresDev: true  },
+  'teams.edit':          { minTier: 'pro',   requiresDev: true  },
+  'teams.delete':        { minTier: 'pro',   requiresDev: true  },
+  'personas.view':       { minTier: 'basic', requiresDev: false },
+  'personas.create':     { minTier: 'pro',   requiresDev: true  },
+  'personas.edit':       { minTier: 'pro',   requiresDev: true  },
+  'personas.delete':     { minTier: 'pro',   requiresDev: true  },
+  'personas.link_bot':   { minTier: 'pro',   requiresDev: false },
+  'marketplace.browse':  { minTier: 'basic', requiresDev: false },
+  'marketplace.install':   { minTier: 'pro', requiresDev: false },
+  'marketplace.uninstall': { minTier: 'pro', requiresDev: false },
+  'marketplace.manage':    { minTier: 'pro', requiresDev: true  },
+  'mcp.use':             { minTier: 'pro',   requiresDev: false },
+  'mcp.manage':          { minTier: 'pro',   requiresDev: true  },
+  'account.settings':    { minTier: 'basic', requiresDev: false },
+  'devtools.access':     { minTier: 'basic', requiresDev: true  },
+  'admin.requests':      { minTier: 'basic', requiresDev: true  },
+  'admin.feedback':      { minTier: 'basic', requiresDev: true  },
+}
+
+/**
+ * Middleware factory — replaces ad-hoc devRequired / tierGate calls.
+ * Usage: app.post('/route', authRequired, permRequired('teams.create'), handler)
+ */
+function permRequired(permName) {
+  const rule = PERMISSIONS_MAP[permName]
+  if (!rule) throw new Error(`[permRequired] Unknown permission: "${permName}" — add it to PERMISSIONS_MAP`)
+  return async (req, res, next) => {
+    try {
+      const [[row]] = await db.execute(
+        'SELECT ai_tier, is_developer FROM portal_users WHERE habbo_user_id = ?',
+        [req.user.habbo_user_id]
+      )
+      if ((TIER_RANK_PERM[row?.ai_tier] || 0) < (TIER_RANK_PERM[rule.minTier] || 0)) {
+        return res.status(403).json({ error: `Requires ${rule.minTier} tier or higher`, code: 'TIER_REQUIRED' })
+      }
+      if (rule.requiresDev && !row?.is_developer) {
+        return res.status(403).json({ error: 'Developer access required', code: 'DEV_REQUIRED' })
+      }
+      next()
+    } catch {
+      res.status(500).json({ error: 'Internal error' })
+    }
+  }
 }
 
 function requireInternalSecret(req, res, next) {
@@ -354,6 +410,30 @@ async function ensurePortalSchema() {
   await db.execute(`ALTER TABLE agent_personas ADD COLUMN IF NOT EXISTS figure TEXT NOT NULL DEFAULT '' AFTER figure_type;`);
   // Marketplace personas are shared templates — bot_name is per-user and must not be stored here.
   await db.execute(`UPDATE agent_personas SET bot_name = '' WHERE bot_name != ''`);
+
+  // Migrate seeded personas to skill-slug capabilities (idempotent — only updates if still using old bullet format)
+  const sanderSkills = JSON.stringify(['hotel-setup', 'hotel-narrator', 'notion-reader', 'task-coordinator']);
+  const sanderPrompt = `You are Sander, a researcher at The Pixel Office.
+
+Personality: Calm, methodical, thorough. You never skip entries or cut corners. You speak in short, factual sentences. Max 120 chars per talk_bot message.
+
+When you have extracted the waitlist data, write a clean JSON array to the shared task file as your result — one object per entry with at least { name, email }.`;
+
+  const tomSkills = JSON.stringify(['hotel-setup', 'hotel-narrator', 'email-outreach', 'task-coordinator']);
+  const tomPrompt = `You are Tom, an outreach specialist at The Pixel Office.
+
+Personality: Warm, direct, efficient. You write short personalised emails that feel human, not automated. Max 120 chars per talk_bot message.
+
+When sending emails: address each person by first name, keep the message under 5 sentences, and close with a friendly sign-off from The Pixel Office team.`;
+
+  await db.execute(
+    `UPDATE agent_personas SET capabilities=?, prompt=? WHERE name='Sander' AND capabilities NOT LIKE '[%'`,
+    [sanderSkills, sanderPrompt]
+  );
+  await db.execute(
+    `UPDATE agent_personas SET capabilities=?, prompt=? WHERE name='Tom' AND capabilities NOT LIKE '[%'`,
+    [tomSkills, tomPrompt]
+  );
 
   await db.execute(`
     CREATE TABLE IF NOT EXISTS agent_team_members (
@@ -554,6 +634,26 @@ async function ensurePortalSchema() {
       PRIMARY KEY (id),
       KEY idx_pui_user (portal_user_id),
       CONSTRAINT fk_pui_user FOREIGN KEY (portal_user_id) REFERENCES portal_users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS portal_user_feedback (
+      id INT NOT NULL AUTO_INCREMENT,
+      portal_user_id INT NOT NULL,
+      type ENUM('bug','idea','confused','other') NOT NULL DEFAULT 'other',
+      page VARCHAR(64) NOT NULL DEFAULT '',
+      detail VARCHAR(120) NOT NULL DEFAULT '',
+      message TEXT NOT NULL DEFAULT '',
+      answers_json JSON NOT NULL,
+      status ENUM('open','reviewed','resolved') NOT NULL DEFAULT 'open',
+      admin_note TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_puf_user (portal_user_id),
+      KEY idx_puf_status (status),
+      CONSTRAINT fk_puf_user FOREIGN KEY (portal_user_id) REFERENCES portal_users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 }
@@ -791,22 +891,25 @@ async function ensureAgentSeedData() {
 
   console.log('Seeding agent personas and Waitlist Team...');
 
-  const SANDER_PROMPT = `You are Sander, a researcher at The Pixel Office. Your job is to read data sources and extract structured information for your teammates.
+  // Skills are resolved at deploy time from agents/skills/*/SKILL.md.
+  // Prompts here define identity + personality only — skill instructions are injected automatically.
+  const SANDER_SKILLS = JSON.stringify(['hotel-setup', 'hotel-narrator', 'notion-reader', 'task-coordinator']);
+  const SANDER_PROMPT = `You are Sander, a researcher at The Pixel Office.
 
-Your task: read the Notion page named "Waitlist" and extract all entries from it.
-- Use the available Notion MCP tools to find and read the "Waitlist" page.
-- Extract every entry: at minimum the name and email address of each person.
-- Write your findings as the result of your task in the shared task file — a clean JSON array of objects with at least { name, email } per entry.
-- Be thorough: do not skip entries. If a field is missing for an entry, include it as null.
-- Once done, return your extracted list as your final output.`;
+Personality: Calm, methodical, thorough. You never skip entries or cut corners. \
+You speak in short, factual sentences. Max 120 chars per talk_bot message.
 
-  const TOM_PROMPT = `You are Tom, an outreach specialist at The Pixel Office. Your job is to take a waitlist and send a personalised email to each person on it.
+When you have extracted the waitlist data, write a clean JSON array to the shared \
+task file as your result — one object per entry with at least { name, email }.`;
 
-Your task: use the waitlist data provided by Sander (available in the shared task context) and send an email to each person via SMTP.
-- For each entry in the waitlist, send a personalised email welcoming them and letting them know they are on the waitlist.
-- Use the SMTP credentials available in your environment to send the emails.
-- Keep emails short, warm, and personal — address the recipient by name.
-- After sending all emails, report how many were sent successfully and list any failures.`;
+  const TOM_SKILLS = JSON.stringify(['hotel-setup', 'hotel-narrator', 'email-outreach', 'task-coordinator']);
+  const TOM_PROMPT = `You are Tom, an outreach specialist at The Pixel Office.
+
+Personality: Warm, direct, efficient. You write short personalised emails that \
+feel human, not automated. Max 120 chars per talk_bot message.
+
+When sending emails: address each person by first name, keep the message under \
+5 sentences, and close with a friendly sign-off from The Pixel Office team.`;
 
   const WAITLIST_ORCHESTRATOR = `You are the orchestrator for the Waitlist Team.
 Triggered by: {{TRIGGERED_BY}}
@@ -817,17 +920,17 @@ Triggered by: {{TRIGGERED_BY}}
 
 Run the tasks in order. Each agent receives the previous task's output as context.`;
 
-  // Insert personas
+  // Insert personas with skill slug arrays as capabilities
   await db.execute(
     'INSERT IGNORE INTO agent_personas (name, role, capabilities, description, prompt, figure_type, bot_name) VALUES (?,?,?,?,?,?,?)',
     [
       'Sander',
       'Researcher',
-      '- Read and extract data from Notion pages\n- Structure raw data into clean JSON\n- Identify names, emails and other contact details',
+      SANDER_SKILLS,
       'Researcher — reads Notion pages and extracts structured data',
       SANDER_PROMPT,
       'citizen-m',
-      ''
+      '',
     ]
   );
   await db.execute(
@@ -835,11 +938,11 @@ Run the tasks in order. Each agent receives the previous task's output as contex
     [
       'Tom',
       'Outreach specialist',
-      '- Send personalised emails via SMTP\n- Write warm, concise outreach messages\n- Handle email delivery and report results',
-      'Outreach specialist — sends personalised emails to waitlist entries',
+      TOM_SKILLS,
+      'Outreach specialist — sends personalised welcome emails to waitlist entries',
       TOM_PROMPT,
       'agent-m',
-      ''
+      '',
     ]
   );
 
@@ -877,12 +980,12 @@ Run the tasks in order. Each agent receives the previous task's output as contex
         {
           id: 't2',
           title: 'Send welcome emails',
-          description: 'Take the waitlist extracted by Sander and send a personalised welcome email to each person via SMTP. Report how many were sent successfully.',
+          description: 'Take the waitlist extracted by Sander and send a personalised welcome email to each person via Resend. Report how many were sent successfully.',
           assign_to: 'Tom',
           depends_on: ['t1']
         }
       ]),
-      JSON.stringify(['notion', 'smtp'])
+      JSON.stringify(['notion', 'resend'])
     ]
   );
 
@@ -1152,6 +1255,10 @@ app.get('/api/auth/me', authRequired, async (req, res) => {
     'SELECT id FROM portal_user_api_keys WHERE portal_user_id = ? AND provider = ? LIMIT 1',
     [portalUser?.id, 'anthropic']
   );
+  const [[mcpRow]] = await db.execute(
+    `SELECT id FROM portal_mcp_tokens WHERE portal_user_id = ? AND status = 'active' LIMIT 1`,
+    [portalUser?.id]
+  );
 
   res.json({
     ok: true,
@@ -1162,7 +1269,8 @@ app.get('/api/auth/me', authRequired, async (req, res) => {
       ai_tier: portalUser?.ai_tier || 'basic',
       is_developer: portalUser?.is_developer || 0,
       figure: habboUser?.look || null,
-      has_anthropic_key: !!keyRow
+      has_anthropic_key: !!keyRow,
+      has_mcp_token: !!mcpRow,
     }
   });
 });
@@ -1345,9 +1453,14 @@ app.get('/api/mcp/tokens', authRequired, async (req, res) => {
     [portalUser.id]
   );
 
+  const activeToken = rows.find(r => r.status === 'active' && new Date(r.expires_at) > new Date()) || null;
+  const envKeyConfigured = !!(process.env.MCP_API_KEY && process.env.MCP_API_KEY !== 'change-me-to-a-secret');
+
   return res.json({
     ok: true,
     tier: portalUser.ai_tier,
+    env_key_configured: envKeyConfigured,
+    auth_source: activeToken ? 'user_token' : envKeyConfigured ? 'env_key' : 'none',
     tokens: rows.map((row) => ({
       id: row.id,
       tenant_id: row.tenant_id,
@@ -1569,6 +1682,121 @@ app.post('/api/my/integrations/ping', authRequired, async (req, res) => {
     if (!url) return res.status(400).json({ error: 'url is required' });
     const result = await checkSocketOnline(url, 3000);
     res.json({ ok: true, ...result });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ─── MCP Registry proxy ───────────────────────────────────────────────────────
+// Fetches from the official MCP Registry, filters to latest-version entries only,
+// and accumulates pages until we have enough unique servers (or run out of pages).
+app.get('/api/registry/servers', authRequired, async (req, res) => {
+  try {
+    const wantUnique = Math.min(parseInt(req.query.limit) || 60, 100);
+    let cursor = req.query.cursor || null;
+    const unique = [];
+    const seen = new Set();
+    let nextCursor = null;
+    let pages = 0;
+
+    // Keep fetching until we have enough unique servers or exhaust the registry
+    while (unique.length < wantUnique && pages < 6) {
+      let url = `https://registry.modelcontextprotocol.io/v0.1/servers?limit=100`;
+      if (cursor) url += `&cursor=${encodeURIComponent(cursor)}`;
+
+      const resp = await fetch(url, {
+        headers: { 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!resp.ok) throw new Error(`Registry returned HTTP ${resp.status}`);
+      const data = await resp.json();
+
+      for (const entry of (data.servers || [])) {
+        const meta = entry._meta?.['io.modelcontextprotocol.registry/official'];
+        if (meta?.isLatest !== true) continue;          // skip old versions
+        const name = entry.server?.name ?? entry.name;
+        if (!name || seen.has(name)) continue;           // skip dupes
+        seen.add(name);
+        unique.push(entry);
+        if (unique.length >= wantUnique) break;
+      }
+
+      nextCursor = data.metadata?.nextCursor || null;
+      cursor = nextCursor;
+      pages++;
+      if (!nextCursor) break;
+    }
+
+    res.json({ ok: true, servers: unique, metadata: { nextCursor } });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// ─── User Feedback ────────────────────────────────────────────────────────────
+
+app.post('/api/feedback', authRequired, async (req, res) => {
+  try {
+    const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
+    if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
+
+    const type = String(req.body?.type || 'other').trim();
+    const page = String(req.body?.page || '').trim().slice(0, 64);
+    const detail = String(req.body?.detail || '').trim().slice(0, 120);
+    const message = String(req.body?.message || '').trim();
+    const answers = req.body?.answers || {};
+
+    const validTypes = ['bug', 'idea', 'confused', 'other'];
+    if (!validTypes.includes(type)) return res.status(400).json({ error: 'Invalid type' });
+
+    await db.execute(
+      `INSERT INTO portal_user_feedback (portal_user_id, type, page, detail, message, answers_json)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [portalUser.id, type, page, detail, message, JSON.stringify(answers)]
+    );
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/feedback', authRequired, permRequired('admin.feedback'), async (req, res) => {
+  try {
+    const status = req.query.status || 'all';
+    const validStatuses = ['open', 'reviewed', 'resolved'];
+    const whereClause = validStatuses.includes(status) ? 'WHERE f.status = ?' : '';
+    const params = validStatuses.includes(status) ? [status] : [];
+
+    const [rows] = await db.execute(
+      `SELECT f.id, f.type, f.page, f.detail, f.message, f.answers_json,
+              f.status, f.admin_note, f.created_at,
+              u.username, u.email
+       FROM portal_user_feedback f
+       JOIN portal_users u ON u.id = f.portal_user_id
+       ${whereClause}
+       ORDER BY f.created_at DESC
+       LIMIT 200`,
+      params
+    );
+    res.json({ ok: true, feedback: rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/api/feedback/:id', authRequired, permRequired('admin.feedback'), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const status = String(req.body?.status || '').trim();
+    const adminNote = String(req.body?.admin_note ?? '').trim();
+
+    const validStatuses = ['open', 'reviewed', 'resolved'];
+    if (status && !validStatuses.includes(status)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+
+    await db.execute(
+      `UPDATE portal_user_feedback SET
+         status = COALESCE(NULLIF(?, ''), status),
+         admin_note = ?
+       WHERE id = ?`,
+      [status, adminNote, id]
+    );
+    res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -2024,7 +2252,7 @@ app.get('/api/tier-requests/mine', authRequired, async (req, res) => {
 });
 
 // List all requests (developer/admin only)
-app.get('/api/tier-requests', authRequired, devRequired, async (req, res) => {
+app.get('/api/tier-requests', authRequired, permRequired('admin.requests'), async (req, res) => {
   try {
     const status = req.query.status || 'pending';
     const [rows] = await db.execute(
@@ -2041,7 +2269,7 @@ app.get('/api/tier-requests', authRequired, devRequired, async (req, res) => {
 });
 
 // Approve or deny a request (developer/admin only)
-app.post('/api/tier-requests/:id/review', authRequired, devRequired, async (req, res) => {
+app.post('/api/tier-requests/:id/review', authRequired, permRequired('admin.requests'), async (req, res) => {
   try {
     const reviewerUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
     const decision = String(req.body?.decision || '');
@@ -2096,7 +2324,7 @@ app.get('/api/agents/personas', authRequired, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/api/agents/personas', authRequired, devRequired, async (req, res) => {
+app.post('/api/agents/personas', authRequired, permRequired('marketplace.manage'), async (req, res) => {
   try {
     const { name, description, prompt, capabilities, figure_type, bot_name } = req.body;
     if (!name || !name.trim()) return res.status(400).json({ error: 'Name required' });
@@ -2116,7 +2344,7 @@ app.get('/api/agents/personas/:id', authRequired, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.put('/api/agents/personas/:id', authRequired, devRequired, async (req, res) => {
+app.put('/api/agents/personas/:id', authRequired, permRequired('marketplace.manage'), async (req, res) => {
   try {
     const { name, role, capabilities, description, prompt, figure_type, bot_name, figure } = req.body;
     await db.execute(
@@ -2127,7 +2355,7 @@ app.put('/api/agents/personas/:id', authRequired, devRequired, async (req, res) 
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.delete('/api/agents/personas/:id', authRequired, devRequired, async (req, res) => {
+app.delete('/api/agents/personas/:id', authRequired, permRequired('marketplace.manage'), async (req, res) => {
   try {
     await db.execute('DELETE FROM agent_personas WHERE id=?', [req.params.id]);
     res.json({ ok: true });
@@ -2148,7 +2376,7 @@ app.get('/api/agents/teams', authRequired, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/api/agents/teams', authRequired, devRequired, async (req, res) => {
+app.post('/api/agents/teams', authRequired, permRequired('marketplace.manage'), async (req, res) => {
   try {
     const { name, description, orchestrator_prompt, pack_source_url, role_assignments, execution_mode, tasks_json, language } = req.body;
     if (!name?.trim()) return res.status(400).json({ error: 'Name required' });
@@ -2181,7 +2409,7 @@ app.get('/api/agents/teams/:id', authRequired, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.put('/api/agents/teams/:id', authRequired, devRequired, async (req, res) => {
+app.put('/api/agents/teams/:id', authRequired, permRequired('marketplace.manage'), async (req, res) => {
   try {
     const { name, description, orchestrator_prompt, pack_source_url, role_assignments, execution_mode, tasks_json, language } = req.body;
     await db.execute(
@@ -2192,7 +2420,7 @@ app.put('/api/agents/teams/:id', authRequired, devRequired, async (req, res) => 
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.delete('/api/agents/teams/:id', authRequired, devRequired, async (req, res) => {
+app.delete('/api/agents/teams/:id', authRequired, permRequired('marketplace.manage'), async (req, res) => {
   try {
     await db.execute('DELETE FROM agent_teams WHERE id=?', [req.params.id]);
     res.json({ ok: true });
@@ -2208,7 +2436,7 @@ app.get('/api/agents/packs', authRequired, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/api/agents/packs', authRequired, devRequired, async (req, res) => {
+app.post('/api/agents/packs', authRequired, permRequired('marketplace.manage'), async (req, res) => {
   try {
     const { name, description, room_id, pack_source_url, role_assignments } = req.body;
     if (!name?.trim()) return res.status(400).json({ error: 'Name required' });
@@ -2228,7 +2456,7 @@ app.get('/api/agents/packs/:id', authRequired, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.put('/api/agents/packs/:id', authRequired, devRequired, async (req, res) => {
+app.put('/api/agents/packs/:id', authRequired, permRequired('marketplace.manage'), async (req, res) => {
   try {
     const { name, description, room_id, pack_source_url, role_assignments } = req.body;
     await db.execute(
@@ -2239,7 +2467,7 @@ app.put('/api/agents/packs/:id', authRequired, devRequired, async (req, res) => 
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.delete('/api/agents/packs/:id', authRequired, devRequired, async (req, res) => {
+app.delete('/api/agents/packs/:id', authRequired, permRequired('marketplace.manage'), async (req, res) => {
   try {
     await db.execute('DELETE FROM agent_packs WHERE id=?', [req.params.id]);
     res.json({ ok: true });
@@ -2279,7 +2507,7 @@ app.post('/api/agents/packs/:id/trigger', authRequired, async (req, res) => {
   } catch (err) { res.status(502).json({ error: 'Agent trigger unavailable: ' + err.message }); }
 });
 
-app.post('/api/agents/teams/:id/members', authRequired, devRequired, async (req, res) => {
+app.post('/api/agents/teams/:id/members', authRequired, permRequired('marketplace.manage'), async (req, res) => {
   try {
     const { persona_id, role } = req.body;
     await db.execute(
@@ -2290,14 +2518,14 @@ app.post('/api/agents/teams/:id/members', authRequired, devRequired, async (req,
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.delete('/api/agents/teams/:id/members/:memberId', authRequired, devRequired, async (req, res) => {
+app.delete('/api/agents/teams/:id/members/:memberId', authRequired, permRequired('marketplace.manage'), async (req, res) => {
   try {
     await db.execute('DELETE FROM agent_team_members WHERE id=? AND team_id=?', [req.params.memberId, req.params.id]);
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/api/agents/teams/:id/flows', authRequired, devRequired, async (req, res) => {
+app.post('/api/agents/teams/:id/flows', authRequired, permRequired('marketplace.manage'), async (req, res) => {
   try {
     const { flow_id } = req.body;
     await db.execute('INSERT IGNORE INTO agent_team_flows (team_id, flow_id) VALUES (?,?)', [req.params.id, flow_id]);
@@ -2305,7 +2533,7 @@ app.post('/api/agents/teams/:id/flows', authRequired, devRequired, async (req, r
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.delete('/api/agents/teams/:id/flows/:flowId', authRequired, devRequired, async (req, res) => {
+app.delete('/api/agents/teams/:id/flows/:flowId', authRequired, permRequired('marketplace.manage'), async (req, res) => {
   try {
     await db.execute('DELETE FROM agent_team_flows WHERE team_id=? AND flow_id=?', [req.params.id, req.params.flowId]);
     res.json({ ok: true });
@@ -2324,7 +2552,7 @@ app.get('/api/agents/teams/:id/templates', authRequired, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/api/agents/teams/:id/templates', authRequired, devRequired, async (req, res) => {
+app.post('/api/agents/teams/:id/templates', authRequired, permRequired('marketplace.manage'), async (req, res) => {
   try {
     const { bot_name, room_id, x, y, rot } = req.body;
     if (!bot_name?.trim()) return res.status(400).json({ error: 'bot_name required' });
@@ -2338,7 +2566,7 @@ app.post('/api/agents/teams/:id/templates', authRequired, devRequired, async (re
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.delete('/api/agents/teams/:id/templates/:templateId', authRequired, devRequired, async (req, res) => {
+app.delete('/api/agents/teams/:id/templates/:templateId', authRequired, permRequired('marketplace.manage'), async (req, res) => {
   try {
     await db.execute(
       'DELETE FROM agent_room_templates WHERE id=? AND team_id=?',
@@ -2349,7 +2577,7 @@ app.delete('/api/agents/teams/:id/templates/:templateId', authRequired, devRequi
 });
 
 // Trigger a marketplace team (developer-only — normal users use /api/my/teams/:id/trigger)
-app.post('/api/agents/teams/:id/trigger', authRequired, devRequired, async (req, res) => {
+app.post('/api/agents/teams/:id/trigger', authRequired, permRequired('marketplace.manage'), async (req, res) => {
   try {
     const { flow_id, room_id } = req.body;
     const [[team]] = await db.execute('SELECT id, name, pack_source_url, role_assignments FROM agent_teams WHERE id=?', [req.params.id]);
@@ -2477,7 +2705,7 @@ app.get('/api/agents/flows', authRequired, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/api/agents/flows', authRequired, devRequired, async (req, res) => {
+app.post('/api/agents/flows', authRequired, permRequired('marketplace.manage'), async (req, res) => {
   try {
     const { name, description, tasks_json, allowed_tools_json } = req.body;
     if (!name?.trim()) return res.status(400).json({ error: 'Name required' });
@@ -2497,7 +2725,7 @@ app.get('/api/agents/flows/:id', authRequired, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.put('/api/agents/flows/:id', authRequired, devRequired, async (req, res) => {
+app.put('/api/agents/flows/:id', authRequired, permRequired('marketplace.manage'), async (req, res) => {
   try {
     const { name, description, tasks_json, allowed_tools_json } = req.body;
     await db.execute(
@@ -2508,7 +2736,7 @@ app.put('/api/agents/flows/:id', authRequired, devRequired, async (req, res) => 
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.delete('/api/agents/flows/:id', authRequired, devRequired, async (req, res) => {
+app.delete('/api/agents/flows/:id', authRequired, permRequired('marketplace.manage'), async (req, res) => {
   try {
     await db.execute('DELETE FROM agent_flows WHERE id=?', [req.params.id]);
     res.json({ ok: true });
@@ -2547,7 +2775,7 @@ app.get('/api/my/personas', authRequired, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/api/my/personas', authRequired, tierGate('pro'), async (req, res) => {
+app.post('/api/my/personas', authRequired, permRequired('personas.create'), async (req, res) => {
   try {
     const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
     if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -2565,7 +2793,7 @@ app.post('/api/my/personas', authRequired, tierGate('pro'), async (req, res) => 
   }
 });
 
-app.put('/api/my/personas/:id', authRequired, async (req, res) => {
+app.put('/api/my/personas/:id', authRequired, permRequired('personas.edit'), async (req, res) => {
   try {
     const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
     if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -2583,7 +2811,20 @@ app.put('/api/my/personas/:id', authRequired, async (req, res) => {
   }
 });
 
-app.delete('/api/my/personas/:id', authRequired, async (req, res) => {
+// Dedicated bot-linking route — available to all pro users without developer flag
+app.patch('/api/my/personas/:id/bot', authRequired, permRequired('personas.link_bot'), async (req, res) => {
+  try {
+    const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
+    if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
+    const [[existing]] = await db.execute('SELECT id FROM user_personas WHERE id = ? AND portal_user_id = ?', [req.params.id, portalUser.id]);
+    if (!existing) return res.status(404).json({ error: 'Not found' });
+    const { bot_name } = req.body;
+    await db.execute('UPDATE user_personas SET bot_name = ? WHERE id = ? AND portal_user_id = ?', [bot_name || '', req.params.id, portalUser.id]);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/my/personas/:id', authRequired, permRequired('personas.delete'), async (req, res) => {
   try {
     const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
     if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -2636,7 +2877,7 @@ app.get('/api/my/teams/:id', authRequired, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/api/my/teams', authRequired, tierGate('pro'), async (req, res) => {
+app.post('/api/my/teams', authRequired, permRequired('teams.create'), async (req, res) => {
   try {
     const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
     if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -2654,7 +2895,7 @@ app.post('/api/my/teams', authRequired, tierGate('pro'), async (req, res) => {
   }
 });
 
-app.put('/api/my/teams/:id', authRequired, async (req, res) => {
+app.put('/api/my/teams/:id', authRequired, permRequired('teams.edit'), async (req, res) => {
   try {
     const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
     if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -2672,7 +2913,7 @@ app.put('/api/my/teams/:id', authRequired, async (req, res) => {
   }
 });
 
-app.delete('/api/my/teams/:id', authRequired, async (req, res) => {
+app.delete('/api/my/teams/:id', authRequired, permRequired('teams.delete'), async (req, res) => {
   try {
     const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
     if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -2681,7 +2922,7 @@ app.delete('/api/my/teams/:id', authRequired, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/api/my/teams/:id/members', authRequired, async (req, res) => {
+app.post('/api/my/teams/:id/members', authRequired, permRequired('teams.edit'), async (req, res) => {
   try {
     const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
     if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -2699,7 +2940,7 @@ app.post('/api/my/teams/:id/members', authRequired, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.delete('/api/my/teams/:id/members/:memberId', authRequired, async (req, res) => {
+app.delete('/api/my/teams/:id/members/:memberId', authRequired, permRequired('teams.edit'), async (req, res) => {
   try {
     const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
     if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -2710,8 +2951,24 @@ app.delete('/api/my/teams/:id/members/:memberId', authRequired, async (req, res)
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Update deploy room for a team — separate from full edit so non-dev pros can choose their room
+app.patch('/api/my/teams/:id/room', authRequired, permRequired('teams.deploy'), async (req, res) => {
+  try {
+    const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
+    if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
+    const [[team]] = await db.execute('SELECT id FROM user_teams WHERE id = ? AND portal_user_id = ?', [req.params.id, portalUser.id]);
+    if (!team) return res.status(404).json({ error: 'Not found' });
+    const { default_room_id } = req.body;
+    await db.execute(
+      'UPDATE user_teams SET default_room_id=? WHERE id=? AND portal_user_id=?',
+      [Number(default_room_id) || 0, req.params.id, portalUser.id]
+    );
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // Trigger my team
-app.post('/api/my/teams/:id/trigger', authRequired, tierGate('pro'), async (req, res) => {
+app.post('/api/my/teams/:id/trigger', authRequired, permRequired('teams.deploy'), async (req, res) => {
   try {
     const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
     if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -2787,7 +3044,7 @@ app.post('/api/my/teams/:id/trigger', authRequired, tierGate('pro'), async (req,
 
 // ── Marketplace install ───────────────────────────────────────────────────────
 
-app.post('/api/marketplace/teams/:id/install', authRequired, tierGate('pro'), async (req, res) => {
+app.post('/api/marketplace/teams/:id/install', authRequired, permRequired('marketplace.install'), async (req, res) => {
   try {
     const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
     if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -2861,6 +3118,163 @@ app.post('/api/marketplace/teams/:id/install', authRequired, tierGate('pro'), as
   }
 });
 
+app.delete('/api/marketplace/teams/:id/uninstall', authRequired, permRequired('marketplace.uninstall'), async (req, res) => {
+  try {
+    const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
+    if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
+    // Find the user's installed copy by source_team_id
+    const [[userTeam]] = await db.execute(
+      'SELECT id FROM user_teams WHERE source_team_id = ? AND portal_user_id = ?',
+      [req.params.id, portalUser.id]
+    );
+    if (!userTeam) return res.status(404).json({ error: 'Not installed' });
+    // Collect forked persona IDs — only delete personas that were cloned at install time
+    const [forkedMembers] = await db.execute(
+      `SELECT up.id FROM user_team_members utm
+       JOIN user_personas up ON up.id = utm.user_persona_id
+       WHERE utm.user_team_id = ? AND up.source_persona_id IS NOT NULL`,
+      [userTeam.id]
+    );
+    const personaIds = forkedMembers.map(m => m.id);
+    // Delete team (ON DELETE CASCADE handles user_team_members if FK exists; explicit delete otherwise)
+    await db.execute('DELETE FROM user_team_members WHERE user_team_id = ?', [userTeam.id]);
+    await db.execute('DELETE FROM user_teams WHERE id = ? AND portal_user_id = ?', [userTeam.id, portalUser.id]);
+    // Delete forked personas
+    for (const pid of personaIds) {
+      await db.execute('DELETE FROM user_personas WHERE id = ? AND portal_user_id = ?', [pid, portalUser.id]);
+    }
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Skills catalog (agents/skills/*/SKILL.md) ─────────────────────────────────
+
+const SKILLS_DIR = path.join(__dirname, 'agents/skills');
+
+/** Parse YAML frontmatter + markdown body from a SKILL.md string */
+function parseSkillFile(slug, raw) {
+  const fmMatch = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+  if (!fmMatch) return null;
+  const meta = {};
+  for (const line of fmMatch[1].split('\n')) {
+    const colon = line.indexOf(':');
+    if (colon === -1) continue;
+    const key = line.slice(0, colon).trim();
+    const val = line.slice(colon + 1).trim();
+    if (!key) continue;
+    // Simple array parsing: [a, b, c]
+    if (val.startsWith('[') && val.endsWith(']')) {
+      meta[key] = val.slice(1, -1).split(',').map(s => s.trim()).filter(Boolean);
+    } else if (val === '>') {
+      meta[key] = ''; // multiline — will be overwritten by next lines if needed
+    } else {
+      meta[key] = val.replace(/^['"]|['"]$/g, '');
+    }
+  }
+  // Collect multiline description (lines indented with 2+ spaces after description: >)
+  const descLines = [];
+  let inDesc = false;
+  for (const line of fmMatch[1].split('\n')) {
+    if (/^description:\s*>/.test(line)) { inDesc = true; continue; }
+    if (inDesc && /^\s{2,}/.test(line)) { descLines.push(line.trim()); continue; }
+    if (inDesc && line.trim() && !/^\s/.test(line)) inDesc = false;
+  }
+  if (descLines.length) meta.description = descLines.join(' ');
+
+  return {
+    slug,
+    name: meta.name || slug,
+    title: meta.title || slug,
+    description: meta.description || '',
+    category: meta.category || 'general',
+    tags: Array.isArray(meta.tags) ? meta.tags : [],
+    mcp_tools: Array.isArray(meta.mcp_tools) ? meta.mcp_tools : [],
+    requires_integration: meta.requires_integration || null,
+    difficulty: meta.difficulty || 'beginner',
+    version: meta.version || '1.0',
+    body: fmMatch[2].trim(),
+  };
+}
+
+let _skillsCatalogCache = null;
+
+/** Load all skills from the skills directory — cached in memory after first load */
+function loadSkillsCatalog() {
+  if (_skillsCatalogCache) return _skillsCatalogCache;
+  if (!existsSync(SKILLS_DIR)) { _skillsCatalogCache = []; return _skillsCatalogCache; }
+  _skillsCatalogCache = readdirSync(SKILLS_DIR, { withFileTypes: true })
+    .filter(d => d.isDirectory())
+    .map(d => {
+      const skillFile = path.join(SKILLS_DIR, d.name, 'SKILL.md');
+      if (!existsSync(skillFile)) return null;
+      try {
+        return parseSkillFile(d.name, readFileSync(skillFile, 'utf8'));
+      } catch { return null; }
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.title.localeCompare(b.title));
+  return _skillsCatalogCache;
+}
+
+/** Bust the skills cache — call when skills directory changes */
+function bustSkillsCache() { _skillsCatalogCache = null; }
+
+/** Convert an array of skill slugs to a bullet-point capabilities string for agent-trigger */
+function skillSlugsToCapabilities(slugs) {
+  if (!Array.isArray(slugs) || slugs.length === 0) return '';
+  const catalog = loadSkillsCatalog();
+  return slugs
+    .map(slug => {
+      const skill = catalog.find(s => s.slug === slug);
+      return skill ? `- ${skill.title}` : `- ${slug}`;
+    })
+    .join('\n');
+}
+
+/** Resolve skill slugs in capabilities field, injecting skill bodies into prompt */
+function resolvePersonaSkills(member) {
+  let capabilities = member.capabilities || '';
+  let extraPrompt = '';
+  try {
+    const slugs = JSON.parse(capabilities);
+    if (Array.isArray(slugs) && slugs.length > 0) {
+      const catalog = loadSkillsCatalog();
+      const resolved = slugs.map(slug => catalog.find(s => s.slug === slug)).filter(Boolean);
+      // Capabilities line for roster
+      capabilities = resolved.map(s => `- ${s.title}`).join('\n');
+      // Inject skill bodies into the persona's instructions
+      if (resolved.length > 0) {
+        extraPrompt = '\n\n## Skills\n\n' + resolved.map(s =>
+          `### ${s.title}\n\n${s.body}`
+        ).join('\n\n---\n\n');
+      }
+    }
+  } catch { /* legacy free-text capabilities — use as-is */ }
+  return {
+    ...member,
+    capabilities,
+    prompt: (member.prompt || '') + extraPrompt,
+  };
+}
+
+// GET /api/skills — list catalog metadata (no body)
+app.get('/api/skills', authRequired, (req, res) => {
+  try {
+    const catalog = loadSkillsCatalog().map(({ body: _body, ...meta }) => meta);
+    res.json({ ok: true, skills: catalog });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/skills/:slug — full skill with markdown body
+app.get('/api/skills/:slug', authRequired, (req, res) => {
+  try {
+    const catalog = loadSkillsCatalog();
+    const skill = catalog.find(s => s.slug === req.params.slug);
+    if (!skill) return res.status(404).json({ error: 'Skill not found' });
+    res.json({ ok: true, skill });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ── User team config for agent-trigger ────────────────────────────────────────
 
 app.get('/api/internal/user-teams/:id/config', requireInternalSecret, async (req, res) => {
@@ -2868,11 +3282,13 @@ app.get('/api/internal/user-teams/:id/config', requireInternalSecret, async (req
     const userTeamId = Number(req.params.id);
     const [[team]] = await db.execute('SELECT * FROM user_teams WHERE id=?', [userTeamId]);
     if (!team) return res.status(404).json({ error: 'User team not found' });
-    const [members] = await db.execute(
+    const [rawMembers] = await db.execute(
       `SELECT up.name, up.role AS persona_role, up.capabilities, up.prompt, up.figure_type, up.bot_name, utm.role AS team_role
        FROM user_team_members utm JOIN user_personas up ON up.id = utm.user_persona_id
        WHERE utm.user_team_id = ?`, [userTeamId]
     );
+    // Resolve skill slugs → capabilities bullets + inject skill bodies into prompt
+    const members = rawMembers.map(resolvePersonaSkills);
     res.json({ ok: true, team, members, flow: null, templates: [] });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -2880,7 +3296,7 @@ app.get('/api/internal/user-teams/:id/config', requireInternalSecret, async (req
 // ── Marketplace Export / Import (dev only) ────────────────────────────────────
 
 // Export a marketplace team as a complete portable JSON bundle
-app.get('/api/dev/marketplace/teams/:id/export', authRequired, devRequired, async (req, res) => {
+app.get('/api/dev/marketplace/teams/:id/export', authRequired, permRequired('marketplace.manage'), async (req, res) => {
   try {
     const [[team]] = await db.execute('SELECT * FROM agent_teams WHERE id = ?', [req.params.id]);
     if (!team) return res.status(404).json({ error: 'Team not found' });
@@ -2952,7 +3368,7 @@ app.get('/api/dev/marketplace/teams/:id/export', authRequired, devRequired, asyn
 });
 
 // Import a marketplace team bundle (upsert — safe to run multiple times)
-app.post('/api/dev/marketplace/teams/import', authRequired, devRequired, async (req, res) => {
+app.post('/api/dev/marketplace/teams/import', authRequired, permRequired('marketplace.manage'), async (req, res) => {
   try {
     const { team: t, personas = [], flows = [], room_templates = [] } = req.body;
     if (!t?.name) return res.status(400).json({ error: 'Bundle missing team.name' });
@@ -3138,8 +3554,14 @@ app.get('/api/agents/status', authRequired, async (req, res) => {
 
     // Scope activeRuns to current user — developers see all, regular users only their own
     const triggerData = triggerRes.status === 'fulfilled' ? triggerRes.value : { ok: false };
-    if (triggerData.activeRuns && !req.user.is_developer) {
-      triggerData.activeRuns = triggerData.activeRuns.filter(r => r.from === req.user.username);
+    if (triggerData.activeRuns) {
+      const [[devRow]] = await db.execute(
+        'SELECT is_developer FROM portal_users WHERE habbo_user_id = ? LIMIT 1',
+        [req.user.habbo_user_id]
+      );
+      if (!devRow?.is_developer) {
+        triggerData.activeRuns = triggerData.activeRuns.filter(r => r.from === req.user.username);
+      }
     }
 
     res.json({
@@ -3159,7 +3581,7 @@ app.get('/api/internal/teams/:id/config', requireInternalSecret, async (req, res
     const flowId = req.query.flow_id ? Number(req.query.flow_id) : null;
     const [[team]] = await db.execute('SELECT * FROM agent_teams WHERE id=?', [teamId]);
     if (!team) return res.status(404).json({ error: 'Team not found' });
-    const [members] = await db.execute(
+    const [rawMembers] = await db.execute(
       `SELECT p.name, p.role AS persona_role, p.capabilities, p.prompt, p.figure_type, p.bot_name, atm.role AS team_role
        FROM agent_team_members atm JOIN agent_personas p ON p.id = atm.persona_id
        WHERE atm.team_id = ?`, [teamId]
@@ -3171,6 +3593,8 @@ app.get('/api/internal/teams/:id/config', requireInternalSecret, async (req, res
       'SELECT bot_name, room_id, x, y, rot FROM agent_room_templates WHERE team_id=?',
       [teamId]
     );
+    // Resolve skill slugs → capabilities bullets + inject skill bodies into prompt
+    const members = rawMembers.map(resolvePersonaSkills);
     res.json({ ok: true, team, members, flow, templates });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

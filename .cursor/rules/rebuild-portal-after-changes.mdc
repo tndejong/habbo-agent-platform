@@ -1,21 +1,32 @@
 ---
-description: After portal changes, run production build before finishing
+description: After any portal change (frontend or backend), always build + restart the container
 globs: portal/**/*
 alwaysApply: false
 ---
 
-# Rebuild portal after changes
+# Rebuild & Restart portal after every change
 
-When you finish edits that affect the agent portal (anything under `portal/`, including `server.js`, `src/`, `vite.config.js`, `package.json`, or static assets used by the build):
+After finishing **any** edit under `portal/` — frontend (`src/`, `vite.config.js`, assets) or backend (`server.js`, `package.json`) — run both steps before telling the user you are done:
 
-1. Run a production build from the repo root:
+## Step 1 — Production build
 
-   ```bash
-   cd portal && npm run build
-   ```
+```bash
+cd /Users/tijmendejong/Documents/projects/personal/habbo-agent-platform/portal && npm run build
+```
 
-2. If the build fails, fix the errors and run `npm run build` again until it succeeds.
+If the build fails, fix all errors and re-run until it passes.
 
-3. Do **not** mark the task complete or tell the user you are done until the build has passed.
+## Step 2 — Restart container
 
-Docker-based workflows still need an up-to-date `portal/dist/` for the image or bind mount that serves static files.
+```bash
+docker restart agent-portal
+```
+
+The `agent-portal` container serves both the built `dist/` (static files) and `server.js` (API). A restart is required to pick up **all** changes — Node.js does not hot-reload.
+
+## Rule
+
+- ✅ Build passes → restart container → tell the user it is done
+- ❌ Never mark a task complete without running both steps
+- ❌ Never skip the restart even if only frontend files changed
+- ❌ **NEVER use `docker compose build`** — the container volume-mounts `./portal/dist` and `./portal/server.js` from the host. Only a local `npm run build` updates the dist the container actually serves. `docker compose build` rebuilds the image but the volume mount overrides it at runtime.

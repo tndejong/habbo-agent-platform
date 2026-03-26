@@ -1,17 +1,22 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { useEscapeKey } from './utils/useEscapeKey'
 import { createPortal } from 'react-dom'
 import { HabboFigure } from './components/HabboFigure'
 import { AgentDashboard, AccountView, LogPanel, OnlineView } from './components/AgentDashboard'
+import { FeedbackWidget, FeedbackView } from './components/FeedbackWidget'
 import { MarketplaceView } from './components/MarketplaceView'
 import { useTheme } from './ThemeContext'
 import { api } from './utils/api'
+import { useToast } from './ToastContext'
+import { can } from './utils/permissions'
 import {
   Home, Bot, Key, Users, LogOut, Hotel, ShoppingBag,
   Eye, EyeOff, Loader2, AlertCircle, CheckCircle,
   Wifi, WifiOff, Copy, Check, Trash2, RefreshCw,
   Edit, Settings, Square, User, ArrowUpCircle, Bell,
   ClipboardList, X, Sun, Moon, Network, Plus,
-  Terminal, ChevronDown, ChevronLeft, ChevronRight, Wrench, PanelLeft,
+  Terminal, ChevronDown, ChevronLeft, ChevronRight, Wrench, PanelLeft, MessageSquarePlus, Minus, Waves,
+  Search, Sparkles, LayoutGrid, ExternalLink,
 } from 'lucide-react'
 
 // ── Fallback figure types (if API is unavailable) ─────────────────────────
@@ -81,6 +86,7 @@ function AuthPage({ onLogin }) {
   const [showReset, setShowReset] = useState(hasResetParams)
   const [showForgot, setShowForgot] = useState(false)
   const [busy, setBusy] = useState(false)
+  useEscapeKey(() => { setShowForgot(false); setShowReset(false) }, !!(showForgot || showReset))
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -93,6 +99,14 @@ function AuthPage({ onLogin }) {
     token: params.get('token') || '',
     password: '',
   })
+
+  // Triggers form submission (with native validation) when Enter is pressed inside an input
+  function submitOnEnter(e) {
+    if (e.key === 'Enter' && e.target.tagName === 'INPUT') {
+      e.preventDefault()
+      e.currentTarget.requestSubmit()
+    }
+  }
 
   async function handleRegister(e) {
     e.preventDefault()
@@ -184,7 +198,7 @@ function AuthPage({ onLogin }) {
           {showReset ? (
             <div className="space-y-4">
               <h2 className="text-base font-semibold text-foreground">Reset Password</h2>
-              <form onSubmit={handleReset} className="space-y-3">
+              <form onSubmit={handleReset} onKeyDown={submitOnEnter} className="space-y-3">
                 <AuthInput
                   type="email" placeholder="Email address" required
                   value={resetForm.email}
@@ -226,7 +240,7 @@ function AuthPage({ onLogin }) {
 
               {/* Login form */}
               {authTab === 'login' && (
-                <form onSubmit={handleLogin} className="space-y-3">
+                <form onSubmit={handleLogin} onKeyDown={submitOnEnter} className="space-y-3">
                   <AuthInput
                     type="text" placeholder="Email or username" required
                     value={loginForm.login}
@@ -250,7 +264,7 @@ function AuthPage({ onLogin }) {
 
               {/* Register form */}
               {authTab === 'register' && (
-                <form onSubmit={handleRegister} className="space-y-3">
+                <form onSubmit={handleRegister} onKeyDown={submitOnEnter} className="space-y-3">
                   <AuthInput
                     type="email" placeholder="Email address" required
                     value={registerForm.email}
@@ -281,8 +295,8 @@ function AuthPage({ onLogin }) {
 
       {/* Forgot password modal */}
       {showForgot && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm">
-          <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm" onClick={() => { setShowForgot(false); setError('') }}>
+          <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-sm shadow-2xl" onClick={e => e.stopPropagation()}>
             <h2 className="text-base font-semibold mb-1">Forgot Password</h2>
             <p className="text-xs text-muted-foreground mb-4">
               Enter your account email to receive a password reset link.
@@ -293,7 +307,7 @@ function AuthPage({ onLogin }) {
                 <span>{error}</span>
               </div>
             )}
-            <form onSubmit={handleForgot} className="space-y-3">
+            <form onSubmit={handleForgot} onKeyDown={submitOnEnter} className="space-y-3">
               <AuthInput
                 type="email" placeholder="Email address" required
                 value={forgotForm.email}
@@ -305,7 +319,7 @@ function AuthPage({ onLogin }) {
                   Cancel
                 </button>
                 <button type="submit" disabled={busy}
-                  className="flex-1 h-9 rounded-md bg-primary text-primary-foreground text-sm hover:bg-primary/90 disabled:opacity-50 flex items-center justify-center gap-2">
+                  className="flex-1 h-9 rounded-md bg-primary text-primary-foreground text-sm hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
                   {busy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                   Send Link
                 </button>
@@ -336,6 +350,7 @@ function AuthInput({ type, placeholder, value, onChange, required, minLength, sh
       />
       {showToggle && (
         <button type="button" onClick={onToggle}
+          aria-label={showingPassword ? 'Hide password' : 'Show password'}
           className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors">
           {showingPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
         </button>
@@ -357,15 +372,22 @@ function AuthButton({ busy, label, busyLabel }) {
 // ── Dashboard ─────────────────────────────────────────────────────────────
 
 function Dashboard({ me, setMe }) {
-  const { theme, toggleTheme } = useTheme()
+  const { theme, toggleTheme, cycleTheme, setThemeByName } = useTheme()
   const [activeTab, setActiveTab] = useState('home')
   const [activeTeam, setActiveTeam] = useState(null)
   const [stopping, setStopping] = useState(false)
   const [busy, setBusy] = useState(false)
   const [pendingRequestCount, setPendingRequestCount] = useState(0)
+
+  const refreshMe = useCallback(() => {
+    api('/api/auth/me')
+      .then(d => setMe(d.user || null))
+      .catch(() => {})
+  }, [setMe])
+
   // Bumped when a MCP token is created/revoked in AccountView, so IntegratedView re-fetches hasMcpToken
   const [mcpTokenVersion, setMcpTokenVersion] = useState(0)
-  const handleTokenChange = useCallback(() => setMcpTokenVersion(v => v + 1), [])
+  const handleTokenChange = useCallback(() => { setMcpTokenVersion(v => v + 1); refreshMe() }, [refreshMe])
 
   // Sidebar collapsed state (persisted)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -392,9 +414,9 @@ function Dashboard({ me, setMe }) {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [showUserMenu])
 
-  // Poll for pending upgrade requests (developers only)
+  // Poll for pending upgrade requests (admin.requests permission only)
   useEffect(() => {
-    if (!me?.is_developer) return
+    if (!can(me, 'admin.requests')) return
     function loadCount() {
       api('/api/tier-requests?status=pending')
         .then(d => setPendingRequestCount((d.requests || []).length))
@@ -403,7 +425,7 @@ function Dashboard({ me, setMe }) {
     loadCount()
     const id = setInterval(loadCount, 30000)
     return () => clearInterval(id)
-  }, [me?.is_developer])
+  }, [me])
 
   async function stopTeam() {
     setStopping(true)
@@ -469,7 +491,7 @@ function Dashboard({ me, setMe }) {
     { id: 'marketplace', label: 'Marketplace', icon: ShoppingBag },
     { id: 'bots', label: 'Bots', icon: Users },
     { id: 'integrations', label: 'Integrations', icon: Network },
-    ...(me?.is_developer ? [{ id: 'requests', label: 'Requests', icon: ClipboardList, badge: pendingRequestCount }] : []),
+    ...(can(me, 'admin.requests') ? [{ id: 'requests', label: 'Requests', icon: ClipboardList, badge: pendingRequestCount }] : []),
   ]
 
   return (
@@ -478,14 +500,17 @@ function Dashboard({ me, setMe }) {
       {/* ── Collapsible Sidebar ── */}
       <aside className={`hidden md:flex flex-col flex-shrink-0 border-r border-border bg-card/60 backdrop-blur-sm transition-all duration-200 z-30 ${sidebarCollapsed ? 'w-14' : 'w-56'}`}>
         {/* Sidebar header / logo */}
-        <div className="h-14 flex items-center px-3 border-b border-border flex-shrink-0 gap-2.5 overflow-hidden">
+        <button
+          onClick={() => setActiveTab('home')}
+          className="h-14 flex items-center px-3 border-b border-border flex-shrink-0 gap-2.5 overflow-hidden w-full hover:bg-secondary/50 transition-colors"
+        >
           <div className="w-7 h-7 rounded-lg bg-primary flex items-center justify-center flex-shrink-0">
             <Hotel className="w-3.5 h-3.5 text-primary-foreground" />
           </div>
           {!sidebarCollapsed && (
             <span className="text-sm font-semibold tracking-tight text-foreground whitespace-nowrap">AgentHotel</span>
           )}
-        </div>
+        </button>
 
         {/* Nav items */}
         <nav className="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto overflow-x-hidden">
@@ -531,12 +556,15 @@ function Dashboard({ me, setMe }) {
           <div className="h-full px-4 flex items-center gap-3">
 
             {/* Mobile: logo + hamburger */}
-            <div className="md:hidden flex items-center gap-2 mr-auto">
+            <button
+              onClick={() => setActiveTab('home')}
+              className="md:hidden flex items-center gap-2 mr-auto hover:opacity-70 transition-opacity"
+            >
               <div className="w-7 h-7 rounded-lg bg-primary flex items-center justify-center">
                 <Hotel className="w-3.5 h-3.5 text-primary-foreground" />
               </div>
               <span className="text-sm font-semibold text-foreground">AgentHotel</span>
-            </div>
+            </button>
 
             {/* Spacer — pushes right-side controls to the right on desktop */}
             <div className="hidden md:block flex-1" />
@@ -606,7 +634,7 @@ function Dashboard({ me, setMe }) {
                     <Settings className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
                     Settings
                   </button>
-                  {me?.is_developer && (
+                  {can(me, 'devtools.access') && (
                     <button
                       onClick={() => { setActiveTab('devtools'); setShowUserMenu(false) }}
                       className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-foreground hover:bg-secondary transition-colors"
@@ -615,20 +643,45 @@ function Dashboard({ me, setMe }) {
                       Dev Tools
                     </button>
                   )}
+                  {can(me, 'admin.feedback') && (
+                    <button
+                      onClick={() => { setActiveTab('feedback'); setShowUserMenu(false) }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-foreground hover:bg-secondary transition-colors"
+                    >
+                      <MessageSquarePlus className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+                      Feedback
+                    </button>
+                  )}
 
                   <div className="border-t border-border my-0.5" />
 
-                  {/* Theme toggle */}
-                  <button
-                    onClick={() => { toggleTheme(); setShowUserMenu(false) }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-foreground hover:bg-secondary transition-colors"
-                  >
-                    {theme === 'dark'
-                      ? <Sun className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
-                      : <Moon className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
-                    }
-                    {theme === 'dark' ? 'Light mode' : 'Dark mode'}
-                  </button>
+                  {/* Theme switcher — segmented 3-icon control */}
+                  <div className="px-3 py-2.5">
+                    <p className="text-xs text-muted-foreground mb-2">Theme</p>
+                    <div className="relative flex items-center bg-secondary rounded-lg p-0.5 gap-0">
+                      {/* sliding indicator */}
+                      <div
+                        className="absolute top-0.5 bottom-0.5 w-1/3 rounded-md bg-background border border-border shadow-sm transition-all duration-200 ease-in-out"
+                        style={{ left: theme === 'light' ? '0.125rem' : theme === 'dark' ? 'calc(33.333% + 0.125rem)' : 'calc(66.666% + 0.125rem)' }}
+                      />
+                      {[
+                        { id: 'light', icon: Sun,   label: 'Light' },
+                        { id: 'dark',  icon: Moon,  label: 'Dark'  },
+                        { id: 'abyss', icon: Waves, label: 'Abyss' },
+                      ].map(({ id, icon: Icon, label }) => (
+                        <button
+                          key={id}
+                          title={label}
+                          onClick={() => { setThemeByName(id); setShowUserMenu(false) }}
+                          className={`relative z-10 flex-1 flex items-center justify-center h-7 rounded-md transition-colors duration-150 ${
+                            theme === id ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
+                          }`}
+                        >
+                          <Icon className="w-3.5 h-3.5" />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
 
                   <div className="border-t border-border my-0.5" />
 
@@ -669,9 +722,12 @@ function Dashboard({ me, setMe }) {
         <main className="flex-1 overflow-y-auto">
           <div key={activeTab} className="animate-fade-up">
           {activeTab === 'home' && (
-            <HomeTab me={me} hotelStatus={hotelStatus} onJoinHotel={handleJoinHotel} busy={busy} />
+            <HomeTab me={me} hotelStatus={hotelStatus} onNavigate={setActiveTab} />
           )}
-          {activeTab === 'requests' && me?.is_developer && (
+          {activeTab === 'tiers' && (
+            <TiersTab me={me} onNavigate={setActiveTab} />
+          )}
+          {activeTab === 'requests' && can(me, 'admin.requests') && (
             <UpgradeRequestsTab onCountChange={setPendingRequestCount} />
           )}
           {activeTab === 'agents' && (
@@ -679,12 +735,12 @@ function Dashboard({ me, setMe }) {
           )}
         {activeTab === 'marketplace' && (
           <div className="max-w-5xl mx-auto px-4 py-6">
-            <MarketplaceView me={me} />
+            <MarketplaceView me={me} onNavigate={setActiveTab} />
           </div>
         )}
 
           {activeTab === 'account' && (
-            <AccountView me={me} onTokenChange={handleTokenChange} />
+            <AccountView me={me} onTokenChange={handleTokenChange} onKeyUpdated={refreshMe} />
           )}
           {activeTab === 'bots' && (
             <BotsTab figureTypes={figureTypes} />
@@ -694,14 +750,20 @@ function Dashboard({ me, setMe }) {
           )}
           {activeTab === 'online' && (
             <div className="max-w-5xl mx-auto px-4 py-6">
-              <OnlineView me={me} />
+              <OnlineView />
             </div>
           )}
-          {activeTab === 'devtools' && me?.is_developer && (
+          {activeTab === 'devtools' && can(me, 'devtools.access') && (
             <DevToolsView me={me} />
+          )}
+          {activeTab === 'feedback' && can(me, 'admin.feedback') && (
+            <FeedbackView />
           )}
           </div>
         </main>
+
+        {/* Floating feedback widget — always visible regardless of active tab */}
+        <FeedbackWidget />
 
         <UiBuildFooter />
       </div>{/* end main area */}
@@ -716,7 +778,7 @@ function DevToolsView({ me }) {
   const [logPaused, setLogPaused] = useState(false)
 
   useEffect(() => {
-    if (!me?.is_developer) return
+    if (!can(me, 'devtools.access')) return
     async function fetchLogs() {
       if (logPaused) return
       try {
@@ -728,7 +790,7 @@ function DevToolsView({ me }) {
     fetchLogs()
     const id = setInterval(fetchLogs, 3000)
     return () => clearInterval(id)
-  }, [me?.is_developer, logPaused])
+  }, [me, logPaused])
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
@@ -749,7 +811,16 @@ function DevToolsView({ me }) {
 
 // ── Home Tab ──────────────────────────────────────────────────────────────
 
-function HomeTab({ me, hotelStatus, onJoinHotel, busy }) {
+const QUICK_LINKS = [
+  { label: 'My Agents',    description: 'Manage your agent teams',      icon: Bot,         tab: 'agents'       },
+  { label: 'My Teams',     description: 'View and configure teams',      icon: Users,       tab: 'agents'       },
+  { label: 'Marketplace',  description: 'Browse and install teams',      icon: ShoppingBag, tab: 'marketplace'  },
+  { label: 'Bots',         description: 'Manage hotel bot personas',     icon: User,        tab: 'bots'         },
+  { label: 'Integrations', description: 'Connect external services',     icon: Network,     tab: 'integrations' },
+  { label: 'Settings',     description: 'Account and API key settings',  icon: Settings,    tab: 'account'      },
+]
+
+function HomeTab({ me, hotelStatus, onNavigate }) {
   const activeTier = me?.ai_tier || 'basic'
   const [upgradeRequest, setUpgradeRequest] = useState(null)
   const [showUpgradeModal, setShowUpgradeModal] = useState(false)
@@ -771,7 +842,7 @@ function HomeTab({ me, hotelStatus, onJoinHotel, busy }) {
             <Bell className="w-4 h-4 text-warning shrink-0" />
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium text-warning/80">Upgrade request pending</p>
-              <p className="text-xs text-warning/80/70 mt-0.5">Your request for <span className="capitalize">{upgradeRequest.requested_tier}</span> tier is being reviewed. We'll email you when it's decided.</p>
+              <p className="text-xs text-warning/60 mt-0.5">Your request for <span className="capitalize">{upgradeRequest.requested_tier}</span> tier is being reviewed. We'll email you when it's decided.</p>
             </div>
           </div>
         ) : upgradeRequest?.status === 'denied' ? (
@@ -779,7 +850,7 @@ function HomeTab({ me, hotelStatus, onJoinHotel, busy }) {
             <AlertCircle className="w-4 h-4 text-destructive shrink-0" />
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium text-destructive/80">Upgrade request denied</p>
-              {upgradeRequest.admin_note && <p className="text-xs text-destructive/80/70 mt-0.5">{upgradeRequest.admin_note}</p>}
+              {upgradeRequest.admin_note && <p className="text-xs text-destructive/60 mt-0.5">{upgradeRequest.admin_note}</p>}
             </div>
             <button onClick={() => setShowUpgradeModal(true)}
               className="shrink-0 text-xs h-8 px-3 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">
@@ -808,36 +879,76 @@ function HomeTab({ me, hotelStatus, onJoinHotel, busy }) {
         />
       )}
 
-      {/* Welcome card */}
-      <div className="bg-card border border-border rounded-2xl p-6 card-lift">
-        <div className="flex items-center gap-5">
-          {me.figure && (
-            <div className="flex-shrink-0">
-              <HabboFigure figure={me.figure} size="md" animate={true} />
-            </div>
-          )}
-          <div className="flex-1 min-w-0">
-            <h2 className="text-2xl font-semibold tracking-tight text-foreground">Welcome back, {me.username}</h2>
-            <p className="text-sm text-muted-foreground mt-1">
-              Manage your hotel bots, agent teams, and MCP connections.
-            </p>
-            {me.habbo_username && (
-              <p className="text-xs text-muted-foreground mt-2 flex items-center gap-1.5">
-                <Users className="w-3 h-3" />
-                Habbo: <span className="font-retro">{me.habbo_username}</span>
-              </p>
-            )}
-          </div>
+      {/* Welcome card — clickable → Settings */}
+      {(() => {
+        const setupSteps = activeTier === 'basic'
+          ? [{ done: false, label: 'Upgrade to Pro to deploy agents', sub: 'Basic is read-only', tab: 'tiers' }]
+          : [
+              !me.has_anthropic_key && { done: false, label: 'Add your Anthropic API key', sub: 'Required for AI processing', tab: 'account' },
+              !me.has_mcp_token    && { done: false, label: 'Connect your Habbo MCP key',  sub: 'Required to deploy teams',    tab: 'account' },
+            ].filter(Boolean)
+
+        const allDone = setupSteps.length === 0
+
+        return (
           <button
-            onClick={onJoinHotel}
-            disabled={busy || !hotelStatus.socket_online}
-            className="hidden sm:flex items-center gap-2 h-9 px-4 text-sm font-medium bg-primary text-primary-foreground rounded-lg hover:opacity-80 disabled:opacity-40 transition-opacity flex-shrink-0"
+            type="button"
+            onClick={() => onNavigate('account')}
+            className="w-full text-left bg-card border border-border rounded-2xl p-6 card-lift cursor-pointer hover:border-primary/40 transition-colors"
           >
-            <Hotel className="w-4 h-4" />
-            Join Hotel
+            <div className="flex items-center gap-5">
+              {me.figure && (
+                <div className="flex-shrink-0">
+                  <HabboFigure figure={me.figure} size="md" animate={true} />
+                </div>
+              )}
+              <div className="flex-1 min-w-0">
+                <h2 className="text-2xl font-semibold tracking-tight text-foreground">Welcome back, {me.username}</h2>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Manage your hotel bots, agent teams, and MCP connections.
+                </p>
+                {me.habbo_username && (
+                  <p className="text-xs text-muted-foreground mt-2 flex items-center gap-1.5">
+                    <Users className="w-3 h-3" />
+                    Habbo: <span className="font-retro">{me.habbo_username}</span>
+                  </p>
+                )}
+              </div>
+              <Settings className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+            </div>
+
+            {/* Setup checklist */}
+            {!allDone && (
+              <div className="mt-4 pt-4 border-t border-border space-y-2" onClick={e => e.stopPropagation()}>
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Setup required</p>
+                {setupSteps.map((step, i) => (
+                  <button
+                    key={i}
+                    onClick={() => onNavigate(step.tab)}
+                    className="w-full flex items-center gap-3 rounded-lg px-3 py-2.5 bg-secondary/50 hover:bg-secondary transition-colors text-left"
+                  >
+                    <div className="w-5 h-5 rounded-full border-2 border-primary/40 flex items-center justify-center flex-shrink-0">
+                      <span className="text-[10px] font-bold text-primary/60">{i + 1}</span>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-foreground">{step.label}</p>
+                      <p className="text-xs text-muted-foreground">{step.sub}</p>
+                    </div>
+                    <ChevronRight className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {allDone && activeTier !== 'basic' && (
+              <div className="mt-4 pt-4 border-t border-border flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 text-success flex-shrink-0" />
+                <p className="text-xs text-success font-medium">All set — your agents are ready to deploy.</p>
+              </div>
+            )}
           </button>
-        </div>
-      </div>
+        )
+      })()}
 
       {/* Status grid */}
       <div className="grid grid-cols-3 gap-4 stagger-children">
@@ -850,28 +961,244 @@ function HomeTab({ me, hotelStatus, onJoinHotel, busy }) {
           label="AI Tier"
           value={activeTier.charAt(0).toUpperCase() + activeTier.slice(1)}
           icon={Key}
+          onClick={() => onNavigate('tiers')}
+          hint="View all plans →"
         />
         <StatusCard
           label="Hotel"
           value={hotelStatus.loading ? 'Checking…' : hotelStatus.socket_online ? 'Online' : 'Offline'}
           icon={hotelStatus.socket_online ? Wifi : WifiOff}
           valueClassName={hotelStatus.socket_online ? 'text-success' : 'text-muted-foreground'}
+          onClick={() => onNavigate('online')}
+          hint="View online agents →"
         />
+      </div>
+
+      {/* Quick Links */}
+      <div className="space-y-3">
+        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Quick Links</p>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          {QUICK_LINKS.map(({ label, description, icon: Icon, tab }) => (
+            <button
+              key={label}
+              onClick={() => onNavigate(tab)}
+              className="text-left bg-card border border-border rounded-xl p-4 hover:border-primary/40 hover:bg-primary/5 cursor-pointer transition-all"
+            >
+              <div className="w-7 h-7 rounded-md bg-secondary flex items-center justify-center mb-3">
+                <Icon className="w-3.5 h-3.5 text-foreground" />
+              </div>
+              <p className="text-sm font-medium text-foreground">{label}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   )
 }
 
-function StatusCard({ label, value, icon: Icon, valueClassName = '' }) {
+function StatusCard({ label, value, icon: Icon, valueClassName = '', onClick, hint }) {
+  const isClickable = !!onClick
   return (
-    <div className="bg-card border border-border rounded-xl p-5 card-lift">
+    <div
+      onClick={onClick}
+      className={`border rounded-xl p-5 transition-colors ${
+        isClickable
+          ? 'bg-card border-border card-lift cursor-pointer hover:border-primary/40'
+          : 'bg-muted/30 border-border/40 opacity-60 select-none'
+      }`}
+    >
       <div className="flex items-center justify-between mb-4">
         <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{label}</p>
-        <div className="w-7 h-7 rounded-md bg-secondary flex items-center justify-center">
-          <Icon className="w-3.5 h-3.5 text-foreground" />
+        <div className={`w-7 h-7 rounded-md flex items-center justify-center ${isClickable ? 'bg-secondary' : 'bg-muted/50'}`}>
+          <Icon className="w-3.5 h-3.5 text-muted-foreground" />
         </div>
       </div>
-      <p className={`text-2xl font-semibold tracking-tight text-foreground ${valueClassName}`}>{value}</p>
+      <p className={`text-2xl font-semibold tracking-tight ${isClickable ? 'text-foreground' : 'text-muted-foreground'} ${valueClassName}`}>{value}</p>
+      {hint && <p className="text-xs text-primary mt-1">{hint}</p>}
+    </div>
+  )
+}
+
+// ── Tiers Tab ─────────────────────────────────────────────────────────────
+
+const TIER_PLANS = [
+  {
+    id: 'basic',
+    name: 'Basic',
+    price: 'Free',
+    description: 'Read-only access to explore the platform.',
+    features: [
+      { label: 'Browse Marketplace',                 included: true  },
+      { label: 'View agent teams (read-only)',        included: true  },
+      { label: 'View Bots list',                     included: true  },
+      { label: 'Create & deploy agent teams',        included: false },
+      { label: 'Custom agent personas',              included: false },
+      { label: 'MCP integrations',                   included: false },
+      { label: 'Anthropic API key support',          included: false },
+    ],
+  },
+  {
+    id: 'pro',
+    name: 'Pro',
+    price: 'On request',
+    description: 'Full access to deploy and manage hotel agents.',
+    features: [
+      { label: 'Everything in Basic',               included: true  },
+      { label: 'Create & deploy agent teams',       included: true  },
+      { label: 'Install teams from Marketplace',    included: true  },
+      { label: 'Custom agent personas',             included: true  },
+      { label: 'MCP integrations',                  included: true  },
+      { label: 'Anthropic API key support',         included: true  },
+      { label: 'Custom agent logic',                included: false },
+    ],
+  },
+  {
+    id: 'enterprise',
+    name: 'Enterprise',
+    price: 'Custom',
+    description: 'Tailored solutions for large-scale hotel operations.',
+    features: [
+      { label: 'Everything in Pro',                 included: true  },
+      { label: 'Custom agent logic on request',     included: true  },
+      { label: 'Multi-team orchestration',          included: true  },
+      { label: 'Dedicated support channel',         included: true  },
+      { label: 'White-label options',               included: true  },
+      { label: 'Priority onboarding',               included: true  },
+    ],
+  },
+]
+
+function TiersTab({ me, onNavigate }) {
+  const activeTier = me?.ai_tier || 'basic'
+  const [upgradeRequest, setUpgradeRequest] = useState(null)
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false)
+
+  useEffect(() => {
+    api('/api/tier-requests/mine')
+      .then(d => setUpgradeRequest(d.request || null))
+      .catch(() => {})
+  }, [])
+
+  const hasPendingRequest = upgradeRequest?.status === 'pending'
+
+  return (
+    <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
+      {/* Breadcrumb */}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => onNavigate('home')}
+          className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors group"
+        >
+          <ChevronLeft className="w-3.5 h-3.5 group-hover:-translate-x-0.5 transition-transform" />
+          Home
+        </button>
+        <span className="text-muted-foreground/40 text-sm">/</span>
+        <span className="text-sm text-foreground font-medium">Plans & Tiers</span>
+      </div>
+
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight text-foreground">Plans & Tiers</h1>
+        <p className="text-sm text-muted-foreground mt-1">Compare what's included in each plan.</p>
+      </div>
+
+      {hasPendingRequest && (
+        <div className="flex items-center gap-3 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3">
+          <Bell className="w-4 h-4 text-warning shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-warning/80">Upgrade request pending</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Your request for <span className="capitalize font-medium">{upgradeRequest.requested_tier}</span> is being reviewed.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {showUpgradeModal && (
+        <UpgradeRequestModal
+          onClose={() => setShowUpgradeModal(false)}
+          onSubmitted={(req) => { setUpgradeRequest(req); setShowUpgradeModal(false) }}
+        />
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {TIER_PLANS.map(plan => {
+          const tierRank = { basic: 0, pro: 1, enterprise: 2 }
+          const isCurrent = activeTier === plan.id
+          const isBelow = tierRank[activeTier] > tierRank[plan.id]
+
+          let cta = null
+          if (plan.id === 'enterprise') {
+            cta = (
+              <a
+                href="mailto:hello@thepixeloffice.ai"
+                className="block text-center text-sm font-medium h-9 px-4 leading-9 rounded-lg border border-border hover:bg-secondary transition-colors"
+              >
+                Contact us
+              </a>
+            )
+          } else if (isCurrent) {
+            cta = (
+              <div className="h-9 px-4 flex items-center justify-center rounded-lg bg-secondary text-sm text-muted-foreground">
+                Current plan
+              </div>
+            )
+          } else if (isBelow) {
+            cta = (
+              <div className="h-9 px-4 flex items-center justify-center rounded-lg bg-secondary/50 text-sm text-muted-foreground/60">
+                Included in your plan
+              </div>
+            )
+          } else if (hasPendingRequest && upgradeRequest?.requested_tier === plan.id) {
+            cta = (
+              <div className="h-9 px-4 flex items-center justify-center rounded-lg bg-warning/10 text-sm text-warning/80">
+                Request pending
+              </div>
+            )
+          } else {
+            cta = (
+              <button
+                onClick={() => setShowUpgradeModal(true)}
+                className="w-full h-9 px-4 text-sm font-medium bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
+              >
+                Request upgrade
+              </button>
+            )
+          }
+
+          return (
+            <div
+              key={plan.id}
+              className={`bg-card border rounded-2xl p-6 flex flex-col gap-4 ${isCurrent ? 'ring-2 ring-primary border-primary/40' : 'border-border'}`}
+            >
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <h3 className="text-lg font-semibold text-foreground">{plan.name}</h3>
+                  {isCurrent && (
+                    <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-primary/15 text-primary">Current</span>
+                  )}
+                </div>
+                <p className="text-2xl font-bold text-foreground">{plan.price}</p>
+                <p className="text-xs text-muted-foreground mt-1">{plan.description}</p>
+              </div>
+
+              <ul className="space-y-2 flex-1">
+                {plan.features.map(f => (
+                  <li key={f.label} className="flex items-center gap-2 text-sm">
+                    {f.included
+                      ? <Check className="w-3.5 h-3.5 text-success flex-shrink-0" />
+                      : <Minus className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+                    }
+                    <span className={f.included ? 'text-foreground' : 'text-muted-foreground'}>{f.label}</span>
+                  </li>
+                ))}
+              </ul>
+
+              {cta}
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -888,6 +1215,7 @@ function BotsTab({ figureTypes }) {
   const [botBusy, setBotBusy] = useState({})
   const [botMsg, setBotMsg] = useState({})
   const [confirmDelete, setConfirmDelete] = useState(null)
+  useEscapeKey(() => { if (confirmDelete) { setConfirmDelete(null) } else { cancelEditBot() } }, !!(editingBotId || confirmDelete))
   const [botsMeta, setBotsMeta] = useState(null)
 
   const fetchBots = useCallback(async () => {
@@ -1046,7 +1374,7 @@ function BotsTab({ figureTypes }) {
             let statusBadgeClass = 'bg-muted text-muted-foreground border border-border'
             let statusLabel = 'In inventory'
             if (ghost) {
-              statusBadgeClass = 'bg-orange-500/10 text-orange-400 border border-orange-500/20'
+              statusBadgeClass = 'bg-destructive/10 text-destructive border border-destructive/20'
               statusLabel = `Stale DB · room ${bot.stale_db_room_id || '?'}`
             } else if (live) {
               statusBadgeClass = 'bg-success/10 text-success border border-success/20'
@@ -1137,11 +1465,16 @@ function BotsTab({ figureTypes }) {
             onClick={cancelEditBot}>
             <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-lg shadow-2xl"
               onClick={e => e.stopPropagation()}>
-              <div className="mb-4">
-                <h2 className="text-base font-semibold">Edit Bot</h2>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Changes to name, motto &amp; appearance apply <span className="text-foreground font-medium">live in the hotel</span> immediately after saving.
-                </p>
+              <div className="flex items-start justify-between mb-4">
+                <div>
+                  <h2 className="text-base font-semibold">Edit Bot</h2>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Changes to name, motto &amp; appearance apply <span className="text-foreground font-medium">live in the hotel</span> immediately after saving.
+                  </p>
+                </div>
+                <button onClick={cancelEditBot} aria-label="Close" className="text-muted-foreground hover:text-foreground transition-colors ml-4 flex-shrink-0">
+                  <X className="w-4 h-4" />
+                </button>
               </div>
               <div className="flex gap-5">
                 {editForm.figure && (
@@ -1212,6 +1545,7 @@ function UpgradeRequestModal({ onClose, onSubmitted }) {
   const [motivation, setMotivation] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  useEscapeKey(onClose)
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -1238,7 +1572,7 @@ function UpgradeRequestModal({ onClose, onSubmitted }) {
             <h2 className="text-base font-semibold text-foreground">Request Tier Upgrade</h2>
             <p className="text-xs text-muted-foreground mt-1">Tell us what you'd like to do — an admin will review your request.</p>
           </div>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors shrink-0">
+          <button onClick={onClose} aria-label="Close" className="text-muted-foreground hover:text-foreground transition-colors shrink-0">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -1303,13 +1637,13 @@ function UpgradeRequestModal({ onClose, onSubmitted }) {
 // ── Upgrade Requests Tab (developer) ─────────────────────────────────────
 
 function UpgradeRequestsTab({ onCountChange }) {
+  const { showToast } = useToast()
   const [requests, setRequests] = useState([])
   const [filter, setFilter] = useState('pending')
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState({})
   const [reviewing, setReviewing] = useState(null) // { id, decision }
   const [adminNote, setAdminNote] = useState('')
-  const [toast, setToast] = useState(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -1323,11 +1657,6 @@ function UpgradeRequestsTab({ onCountChange }) {
   }, [filter, onCountChange])
 
   useEffect(() => { load() }, [load])
-
-  function showToast(msg, type = 'success') {
-    setToast({ msg, type })
-    setTimeout(() => setToast(null), 3500)
-  }
 
   async function submitReview(requestId, decision) {
     setBusy(b => ({ ...b, [requestId]: true }))
@@ -1354,16 +1683,10 @@ function UpgradeRequestsTab({ onCountChange }) {
           <h2 className="font-semibold text-foreground">Tier Upgrade Requests</h2>
           <p className="text-xs text-muted-foreground mt-0.5">Review and approve or deny user upgrade requests.</p>
         </div>
-        <button onClick={load} className="text-muted-foreground hover:text-foreground transition-colors">
+        <button onClick={load} aria-label="Refresh requests" className="text-muted-foreground hover:text-foreground transition-colors">
           <RefreshCw className="w-4 h-4" />
         </button>
       </div>
-
-      {toast && (
-        <div className={`rounded-lg px-4 py-2.5 text-sm ${toast.type === 'error' ? 'bg-destructive/10 text-destructive border border-destructive/30' : 'bg-success/10 text-success border border-success/30'}`}>
-          {toast.msg}
-        </div>
-      )}
 
       {/* Filter pills */}
       <div className="flex gap-2">
@@ -1480,258 +1803,677 @@ function UpgradeRequestsTab({ onCountChange }) {
 
 // ── Integrations Tab ──────────────────────────────────────────────────────
 
-const BLANK_INTEGRATION = { name: '', url: '', api_key: '' }
+// Skill-linked integrations (referenced by requires_integration in SKILL.md files)
+const CURATED_INTEGRATIONS = [
+  {
+    slug: 'atlassian',
+    name: 'Atlassian',
+    title: 'Atlassian (Jira & Confluence)',
+    description: 'Connect Jira for sprint planning, issue tracking, and Confluence knowledge bases.',
+    icon: '/integrations/atlassian.svg',
+    defaultUrl: 'https://mcp.atlassian.com/rest/mcp/1.0',
+    headers: [{ name: 'Authorization', description: 'Bearer token — get one at id.atlassian.com → Security → API tokens', isRequired: true, isSecret: true }],
+    docsUrl: 'https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/',
+  },
+  {
+    slug: 'notion',
+    name: 'Notion',
+    title: 'Notion',
+    description: 'Read and search pages, databases, and structured content in your Notion workspace.',
+    icon: '/integrations/notion.svg',
+    defaultUrl: 'https://mcp.notion.com/mcp',
+    headers: [{ name: 'Authorization', description: 'Bearer token — create an integration at notion.so/my-integrations', isRequired: true, isSecret: true }],
+    docsUrl: 'https://developers.notion.com/docs/getting-started',
+  },
+  {
+    slug: 'resend',
+    name: 'Resend',
+    title: 'Resend Email',
+    description: 'Send transactional emails, manage contacts, domains and broadcasts via Resend\'s official MCP server. Free tier available.',
+    icon: 'https://www.google.com/s2/favicons?domain=resend.com&sz=64',
+    defaultUrl: '',
+    headers: [{ name: 'RESEND_API_KEY', description: 'Your Resend API key (starts with re_) — sign up free at resend.com', isRequired: true, isSecret: true }],
+    docsUrl: 'https://resend.com/docs/mcp-server',
+  },
+]
+
+// Popular integrations sourced from the official MCP Registry
+const POPULAR_INTEGRATIONS = [
+  {
+    slug: 'airtable',
+    name: 'Airtable',
+    description: 'Access and manage your Airtable bases, tables, and records.',
+    icon: 'https://www.airtable.com/images/favicon/baymax/apple-touch-icon.png',
+    defaultUrl: 'https://waystation.ai/airtable/mcp',
+    headers: [{ name: 'Authorization', description: 'Bearer token from waystation.ai — connect your Airtable account', isRequired: true, isSecret: true }],
+    docsUrl: 'https://waystation.ai',
+  },
+  {
+    slug: 'gmail',
+    name: 'Gmail',
+    description: 'Manage Gmail messages, threads, labels, drafts, and send emails.',
+    icon: 'https://ssl.gstatic.com/ui/v1/icons/mail/rfr/gmail.ico',
+    defaultUrl: 'https://server.smithery.ai/@faithk7/gmail-mcp/mcp',
+    headers: [{ name: 'Authorization', description: 'Bearer token from smithery.ai — required for Smithery-hosted servers', isRequired: true, isSecret: true }],
+    docsUrl: 'https://smithery.ai',
+  },
+  {
+    slug: 'onedrive',
+    name: 'OneDrive',
+    description: 'Access OneDrive and SharePoint files via Microsoft\'s official MCP server.',
+    icon: 'https://www.google.com/s2/favicons?domain=onedrive.live.com&sz=64',
+    defaultUrl: 'https://agent365.svc.cloud.microsoft/agents/tenants/{tenant_id}/servers/mcp_ODSPRemoteServer',
+    headers: [{ name: 'Authorization', description: 'Replace {tenant_id} in the URL with your Azure tenant ID, then use a Microsoft Entra bearer token', isRequired: true, isSecret: true }],
+    docsUrl: 'https://learn.microsoft.com/en-us/onedrive/',
+  },
+  {
+    slug: 'supabase',
+    name: 'Supabase',
+    description: 'Query and manage your Supabase database, auth, and schemas.',
+    icon: 'https://supabase.com/favicon/favicon-32x32.png',
+    defaultUrl: 'https://waystation.ai/supabase/mcp',
+    headers: [{ name: 'Authorization', description: 'Bearer token from waystation.ai — connect your Supabase project', isRequired: true, isSecret: true }],
+    docsUrl: 'https://supabase.com/docs',
+  },
+  {
+    slug: 'lucid',
+    name: 'Lucidchart',
+    description: 'Create diagrams, search and share Lucidchart documents from your agents.',
+    icon: 'https://corporate-assets.lucid.co/co/cab2c5c2-21ed-4272-8606-4ce6e117da17.png',
+    defaultUrl: 'https://mcp.lucid.app/mcp',
+    headers: [{ name: 'Authorization', description: 'Bearer token from your Lucid developer settings', isRequired: true, isSecret: true }],
+    docsUrl: 'https://developer.lucid.co/',
+  },
+  {
+    slug: 'linear',
+    name: 'Linear',
+    description: 'Project management and issue tracking via Linear\'s official MCP server.',
+    icon: 'https://linear.app/favicon.ico',
+    defaultUrl: 'https://mcp.linear.app/sse',
+    headers: [{ name: 'Authorization', description: 'Bearer token — linear.app → Settings → API → Personal API keys', isRequired: true, isSecret: true }],
+    docsUrl: 'https://developers.linear.app/docs',
+  },
+  {
+    slug: 'telegram',
+    name: 'Telegram',
+    description: 'Browse Telegram chats, read and summarize messages from your AI assistant.',
+    icon: 'https://telegram.org/img/apple-touch-icon.png',
+    defaultUrl: 'https://mcp.ai.church/mcp',
+    headers: [{ name: 'Authorization', description: 'Bearer token from mcp.ai.church — connect your Telegram account', isRequired: true, isSecret: true }],
+    docsUrl: 'https://mcp.ai.church',
+  },
+  {
+    slug: 'prince',
+    name: 'Prince Cloud',
+    description: 'Convert Markdown, HTML, and web pages to high-quality PDF documents.',
+    icon: 'https://www.google.com/s2/favicons?domain=prince.cloud&sz=64',
+    defaultUrl: 'https://prince.cloud/mcp',
+    headers: [{ name: 'Authorization', description: 'Bearer token — get your API key after signing up at prince.cloud', isRequired: true, isSecret: true }],
+    docsUrl: 'https://prince.cloud',
+  },
+  {
+    slug: 'crabbitmq',
+    name: 'CrabbitMQ',
+    description: 'Async message queue for AI agents. Self-provision queues, push/poll messages.',
+    icon: '',
+    defaultUrl: 'https://crabbitmq.com/mcp',
+    headers: [],
+    docsUrl: 'https://crabbitmq.com',
+  },
+  {
+    slug: 'mailjunky',
+    name: 'MailJunky',
+    description: 'Send and manage emails via the MailJunky API using Bearer token auth.',
+    icon: 'https://mailjunky.ai/favicon.ico',
+    defaultUrl: 'https://mcp.mailjunky.ai/sse',
+    headers: [{ name: 'Authorization', description: 'Your MailJunky API key in Bearer format (e.g. Bearer mj_live_xxx) — get one at mailjunky.ai', isRequired: true, isSecret: true }],
+    docsUrl: 'https://mailjunky.ai',
+  },
+  {
+    slug: 'trends-mcp',
+    name: 'Trends MCP',
+    description: 'Live trend data from 12+ sources: Google, YouTube, TikTok, Reddit, Amazon, Wikipedia, news sentiment, and more.',
+    icon: 'https://www.google.com/s2/favicons?domain=trendsmcp.com&sz=64',
+    defaultUrl: 'https://api.trendsmcp.com/mcp',
+    headers: [{ name: 'Authorization', description: 'Your Trends MCP API key — free tier included (100 req/day), get one at trendsmcp.com', isRequired: true, isSecret: true }],
+    docsUrl: 'https://trendsmcp.com',
+  },
+  {
+    slug: 'unulu',
+    name: 'Unulu',
+    description: 'AI-powered link-in-bio site builder. Create, update, and publish sites instantly via MCP — no auth needed.',
+    icon: 'https://www.google.com/s2/favicons?domain=unulu.ai&sz=64',
+    defaultUrl: 'https://mcp.unulu.ai',
+    headers: [],
+    docsUrl: 'https://unulu.ai',
+  },
+  {
+    slug: 'slack',
+    name: 'Slack',
+    description: 'Send messages, manage channels, search conversations, and interact with Slack workspaces.',
+    icon: 'https://a.slack-edge.com/80588/marketing/img/meta/favicon-32.png',
+    defaultUrl: '',
+    headers: [{ name: 'Authorization', description: 'Slack Bot Token (starts with xoxb-) — create a Slack app at api.slack.com and install it to your workspace', isRequired: true, isSecret: true }],
+    docsUrl: 'https://api.slack.com/docs/mcp',
+  },
+  {
+    slug: 'agentictotem',
+    name: 'AgenticTotem Web Extractor',
+    description: 'Send URLs + a JSON schema and get clean structured data back. Pay-per-use via x402/MPP — no API keys required.',
+    icon: 'https://www.google.com/s2/favicons?domain=agentictotem.com&sz=64',
+    defaultUrl: 'https://agentictotem.com/mcp',
+    headers: [],
+    docsUrl: 'https://agentictotem.com',
+  },
+]
+
+const ALL_CURATED = [...CURATED_INTEGRATIONS, ...POPULAR_INTEGRATIONS]
 
 function IntegrationsTab() {
-  const [integrations, setIntegrations] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [toast, setToast] = useState(null)
-  const [showForm, setShowForm] = useState(false)
-  const [form, setForm] = useState(BLANK_INTEGRATION)
-  const [editingId, setEditingId] = useState(null)
+  const { showToast } = useToast()
+  const [myIntegrations, setMyIntegrations] = useState([])
+  const [loadingMy, setLoadingMy] = useState(true)
+  const [setupTarget, setSetupTarget] = useState(null)
+  const [pingStatus, setPingStatus] = useState({})
+  const [confirmDelete, setConfirmDelete] = useState(null)
   const [busy, setBusy] = useState(false)
-  const [pingStatus, setPingStatus] = useState({}) // { [id]: 'checking'|'online'|'offline' }
-  const [showApiKey, setShowApiKey] = useState({}) // { [id]: bool }
 
-  function showToast(text, type = 'success') {
-    setToast({ text, type })
-    setTimeout(() => setToast(null), 3500)
-  }
+  const [registryServers, setRegistryServers] = useState([])
+  const [registryLoading, setRegistryLoading] = useState(false)
+  const [registryNextCursor, setRegistryNextCursor] = useState(null)
+  const [registryQuery, setRegistryQuery] = useState('')
+  const [registryFetched, setRegistryFetched] = useState(false)
 
-  const load = useCallback(async () => {
-    setLoading(true)
+  useEscapeKey(() => {
+    if (confirmDelete) setConfirmDelete(null)
+    else if (setupTarget) setSetupTarget(null)
+  }, !!(confirmDelete || setupTarget))
+
+  const loadMy = useCallback(async () => {
+    setLoadingMy(true)
     try {
       const data = await api('/api/my/integrations')
-      setIntegrations(data.integrations || [])
-    } catch (err) {
-      showToast(err.message, 'error')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+      setMyIntegrations(data.integrations || [])
+    } catch (err) { showToast(err.message, 'error') }
+    finally { setLoadingMy(false) }
+  }, [showToast])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { loadMy() }, [loadMy])
+
+  async function loadRegistry(cursor = null) {
+    setRegistryLoading(true)
+    try {
+      const qs = cursor ? `?cursor=${encodeURIComponent(cursor)}&limit=60` : '?limit=60'
+      const data = await api(`/api/registry/servers${qs}`)
+      const servers = (data.servers || []).map(s => s.server ?? s)
+      setRegistryServers(prev => cursor ? [...prev, ...servers] : servers)
+      setRegistryNextCursor(data.metadata?.nextCursor || null)
+      setRegistryFetched(true)
+    } catch (err) { showToast('Registry unavailable: ' + err.message, 'error') }
+    finally { setRegistryLoading(false) }
+  }
+
+  function findCuratedMatch(integration) {
+    const n = integration.name.toLowerCase()
+    return ALL_CURATED.find(c => n.includes(c.slug) || c.slug.includes(n.split(/\s/)[0])) || null
+  }
+
+  function getCuratedStatus(curated) {
+    return myIntegrations.find(i => {
+      const n = i.name.toLowerCase()
+      return n.includes(curated.slug) || curated.slug.includes(n.split(/\s/)[0])
+    }) || null
+  }
+
+  function openCuratedSetup(curated, existingIntegration = null) {
+    setSetupTarget({
+      name: existingIntegration?.name ?? curated.name,
+      title: curated.title,
+      icon: curated.icon,
+      defaultUrl: existingIntegration?.url ?? curated.defaultUrl,
+      headers: curated.headers,
+      docsUrl: curated.docsUrl,
+      existingId: existingIntegration?.id ?? null,
+    })
+  }
+
+  function openRegistrySetup(server) {
+    const remote = server.remotes?.[0]
+    setSetupTarget({
+      name: server.title || server.name?.split('/').pop() || server.name,
+      title: server.title || server.name,
+      icon: server.icons?.[0]?.src ?? null,
+      defaultUrl: remote?.url ?? '',
+      headers: remote?.headers ?? [],
+      docsUrl: server.websiteUrl ?? null,
+      existingId: null,
+    })
+  }
+
+  function openEditSetup(integration) {
+    const curated = findCuratedMatch(integration)
+    if (curated) { openCuratedSetup(curated, integration); return }
+    setSetupTarget({
+      name: integration.name, title: integration.name,
+      icon: null, defaultUrl: integration.url,
+      headers: [], docsUrl: null, existingId: integration.id,
+    })
+  }
 
   async function pingIntegration(id, url) {
     setPingStatus(s => ({ ...s, [id]: 'checking' }))
     try {
-      const data = await api('/api/my/integrations/ping', {
-        method: 'POST',
-        body: JSON.stringify({ url }),
-      })
+      const data = await api('/api/my/integrations/ping', { method: 'POST', body: JSON.stringify({ url }) })
       setPingStatus(s => ({ ...s, [id]: data.online ? 'online' : 'offline' }))
-    } catch {
-      setPingStatus(s => ({ ...s, [id]: 'offline' }))
-    }
+    } catch { setPingStatus(s => ({ ...s, [id]: 'offline' })) }
   }
+
+  async function handleDelete(id) {
+    if (confirmDelete !== id) { setConfirmDelete(id); return }
+    setConfirmDelete(null)
+    setBusy(true)
+    try {
+      await api(`/api/my/integrations/${id}`, { method: 'DELETE' })
+      setMyIntegrations(prev => prev.filter(i => i.id !== id))
+      showToast('Integration removed.')
+    } catch (err) { showToast(err.message, 'error') }
+    finally { setBusy(false) }
+  }
+
+  const deduped = useMemo(() => {
+    const q = registryQuery.trim().toLowerCase()
+    if (!q) return registryServers
+    return registryServers.filter(s => {
+      const name = (s.name || '').toLowerCase()
+      const title = (s.title || '').toLowerCase()
+      const desc = (s.description || '').toLowerCase()
+      return name.includes(q) || title.includes(q) || desc.includes(q)
+    })
+  }, [registryServers, registryQuery])
+
+  return (
+    <div className="max-w-5xl mx-auto px-4 py-6 space-y-8">
+      <div>
+        <h2 className="font-semibold text-foreground">Integrations</h2>
+        <p className="text-xs text-muted-foreground mt-1">
+          Connect external MCP servers. Configured integrations are injected into your agent runs automatically.
+        </p>
+      </div>
+
+      {/* My Configured Integrations */}
+      {!loadingMy && myIntegrations.length > 0 && (
+        <section className="space-y-3">
+          <IntSectionHeading icon={CheckCircle} label="Configured" />
+          <div className="space-y-2">
+            {myIntegrations.map(integration => {
+              const ping = pingStatus[integration.id]
+              const curated = findCuratedMatch(integration)
+              return (
+                <div key={integration.id} className="flex items-center gap-3 p-3 rounded-xl border border-success/20 bg-card">
+                  <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-secondary flex items-center justify-center overflow-hidden">
+                    {curated
+                      ? <img src={curated.icon} alt={curated.name} className="w-5 h-5 object-contain" onError={e => { e.currentTarget.style.display = 'none' }} />
+                      : <Network className="w-4 h-4 text-muted-foreground" />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-foreground">{integration.name}</p>
+                    <p className="text-xs text-muted-foreground truncate">{integration.url}</p>
+                  </div>
+                  <span className="flex items-center gap-1 text-[10px] text-success font-medium flex-shrink-0">
+                    <Check className="w-3 h-3" /> Connected
+                  </span>
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <button onClick={() => pingIntegration(integration.id, integration.url)} disabled={ping === 'checking'}
+                      title="Test connection"
+                      className="h-7 w-7 flex items-center justify-center rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40">
+                      {ping === 'checking'
+                        ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        : ping === 'online' ? <Wifi className="w-3.5 h-3.5 text-success" />
+                        : ping === 'offline' ? <WifiOff className="w-3.5 h-3.5 text-destructive" />
+                        : <Wifi className="w-3.5 h-3.5" />}
+                    </button>
+                    <button onClick={() => openEditSetup(integration)} title="Edit"
+                      className="h-7 w-7 flex items-center justify-center rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
+                      <Edit className="w-3.5 h-3.5" />
+                    </button>
+                    <button onClick={() => handleDelete(integration.id)} disabled={busy}
+                      title={confirmDelete === integration.id ? 'Click again to confirm' : 'Remove'}
+                      className={`h-7 px-2 text-xs rounded-md border transition-colors disabled:opacity-40 flex items-center gap-1 ${
+                        confirmDelete === integration.id
+                          ? 'border-destructive bg-destructive text-white'
+                          : 'border-destructive/30 text-destructive hover:bg-destructive/10'
+                      }`}>
+                      {confirmDelete === integration.id ? 'Sure?' : <Trash2 className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* Skill-linked integrations */}
+      <section className="space-y-3">
+        <IntSectionHeading icon={Sparkles} label="Required by skills" />
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {CURATED_INTEGRATIONS.map(curated => {
+            const configured = getCuratedStatus(curated)
+            return (
+              <CuratedIntCard key={curated.slug} curated={curated} configured={configured}
+                onSetup={() => openCuratedSetup(curated, configured ?? undefined)} />
+            )
+          })}
+        </div>
+      </section>
+
+      {/* Popular integrations */}
+      <section className="space-y-3">
+        <IntSectionHeading icon={LayoutGrid} label="Popular" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {POPULAR_INTEGRATIONS.map(curated => {
+            const configured = getCuratedStatus(curated)
+            return (
+              <CuratedIntCard key={curated.slug} curated={curated} configured={configured}
+                onSetup={() => openCuratedSetup(curated, configured ?? undefined)} />
+            )
+          })}
+        </div>
+      </section>
+
+      {/* Browse MCP Registry */}
+      <section className="space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <IntSectionHeading icon={LayoutGrid} label="Browse MCP Registry" />
+          {registryFetched && registryServers.length > 0 && (
+            <span className="text-[10px] text-muted-foreground">{registryServers.length} servers loaded</span>
+          )}
+        </div>
+
+        {/* Search — always visible since approved cards are always shown */}
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+          <input type="text" placeholder="Search servers…" value={registryQuery}
+            onChange={e => setRegistryQuery(e.target.value)}
+            className="w-full h-9 pl-9 pr-3 rounded-lg border border-input bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
+        </div>
+
+        {/* Unified grid — approved cards always pinned first, registry streams in below */}
+        {(() => {
+          const q = registryQuery.trim().toLowerCase()
+          const approvedVisible = ALL_CURATED.filter(c =>
+            !q || c.name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q) || c.slug.includes(q)
+          )
+          const registryVisible = deduped // already filtered by registryQuery via useMemo
+          const hasResults = approvedVisible.length > 0 || registryVisible.length > 0
+
+          return hasResults ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {approvedVisible.map(curated => {
+                const configured = getCuratedStatus(curated)
+                return (
+                  <RegistryIntCard
+                    key={`approved-${curated.slug}`}
+                    server={{
+                      name: curated.slug,
+                      title: curated.name,
+                      description: curated.description,
+                      icons: curated.icon ? [{ src: curated.icon }] : [],
+                      websiteUrl: curated.docsUrl,
+                    }}
+                    approved
+                    configured={!!configured}
+                    onAdd={() => openCuratedSetup(curated, configured ?? undefined)}
+                  />
+                )
+              })}
+
+              {registryFetched && registryVisible.map(server => (
+                <RegistryIntCard key={server.name} server={server} onAdd={() => openRegistrySetup(server)} />
+              ))}
+
+              {registryFetched && registryNextCursor && !q && (
+                <RegistryScrollSentinel loading={registryLoading} onVisible={() => loadRegistry(registryNextCursor)} />
+              )}
+            </div>
+          ) : (
+            <p className="text-center py-8 text-sm text-muted-foreground">No matching servers.</p>
+          )
+        })()}
+
+        {/* Load full registry CTA */}
+        {!registryFetched && !registryLoading && (
+          <button onClick={() => loadRegistry()}
+            className="w-full flex items-center justify-center gap-2 h-9 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
+            <Plus className="w-3.5 h-3.5" />
+            Browse 800+ more servers from the official MCP Registry
+          </button>
+        )}
+        {registryLoading && !registryFetched && (
+          <div className="flex items-center justify-center py-6">
+            <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+          </div>
+        )}
+      </section>
+
+      {/* Setup modal */}
+      {setupTarget && (
+        <IntegrationSetupModal target={setupTarget} onClose={() => setSetupTarget(null)}
+          onSaved={() => { setSetupTarget(null); loadMy() }} />
+      )}
+    </div>
+  )
+}
+
+function RegistryScrollSentinel({ loading, onVisible }) {
+  const ref = useRef(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting && !loading) onVisible() },
+      { rootMargin: '200px' }
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [loading, onVisible])
+
+  return (
+    <div ref={ref} className="col-span-full flex justify-center py-4">
+      {loading && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />}
+    </div>
+  )
+}
+
+function IntSectionHeading({ icon: Icon, label }) {
+  return (
+    <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+      <Icon className="w-3.5 h-3.5 opacity-70" />
+      {label}
+    </div>
+  )
+}
+
+function CuratedIntCard({ curated, configured, onSetup }) {
+  const [imgError, setImgError] = useState(false)
+  return (
+    <div className={`relative bg-card border rounded-xl p-4 flex flex-col gap-3 transition-colors ${configured ? 'border-success/30' : 'border-border'}`}>
+      {configured && (
+        <span className="absolute top-3 right-3 flex items-center gap-1 text-[10px] text-success font-medium">
+          <Check className="w-3 h-3" /> Connected
+        </span>
+      )}
+      <div className="flex items-center gap-3">
+        <div className="w-9 h-9 rounded-lg bg-secondary flex items-center justify-center overflow-hidden flex-shrink-0">
+          {curated.icon && !imgError
+            ? <img src={curated.icon} alt={curated.name} className="w-6 h-6 object-contain" onError={() => setImgError(true)} />
+            : <span className="text-sm font-bold text-muted-foreground">{curated.name[0]?.toUpperCase() ?? '?'}</span>}
+        </div>
+        <p className="text-sm font-semibold text-foreground leading-tight">{curated.name}</p>
+      </div>
+      <p className="text-xs text-muted-foreground leading-relaxed flex-1">{curated.description}</p>
+      {curated.docsUrl && (
+        <a href={curated.docsUrl} target="_blank" rel="noopener noreferrer"
+          className="flex items-center gap-1 text-[11px] text-primary/70 hover:text-primary transition-colors"
+          onClick={e => e.stopPropagation()}>
+          <ExternalLink className="w-3 h-3" /> Docs
+        </a>
+      )}
+      <button onClick={onSetup}
+        className={`w-full h-8 rounded-md text-xs font-medium transition-colors ${
+          configured ? 'border border-border text-muted-foreground hover:bg-secondary' : 'bg-primary text-primary-foreground hover:bg-primary/90'
+        }`}>
+        {configured ? 'Edit' : 'Connect'}
+      </button>
+    </div>
+  )
+}
+
+function RegistryIntCard({ server, onAdd, approved = false, configured = false }) {
+  const [imgError, setImgError] = useState(false)
+  const icon = server.icons?.[0]?.src
+  const title = server.title || server.name?.split('/').pop() || server.name
+  const desc = server.description || ''
+  let hostname = null
+  try { if (server.websiteUrl) hostname = new URL(server.websiteUrl).hostname } catch {}
+
+  return (
+    <div className={`relative bg-card border rounded-xl p-3 flex flex-col gap-2 ${approved ? 'border-primary/20' : 'border-border'}`}>
+      {approved && (
+        <span className="absolute top-2 right-2 flex items-center gap-0.5 text-[9px] font-semibold text-primary bg-primary/10 border border-primary/20 rounded px-1.5 py-0.5 leading-none">
+          ★ hotel approved
+        </span>
+      )}
+      <div className="flex items-start gap-2.5">
+        <div className="w-8 h-8 rounded-md bg-secondary flex items-center justify-center overflow-hidden flex-shrink-0 mt-0.5">
+          {icon && !imgError
+            ? <img src={icon} alt={title} className="w-5 h-5 object-contain" onError={() => setImgError(true)} />
+            : <span className="text-xs font-bold text-muted-foreground">{title[0]?.toUpperCase() ?? '?'}</span>}
+        </div>
+        <div className="flex-1 min-w-0 pr-16">
+          <p className="text-xs font-semibold text-foreground leading-tight truncate">{title}</p>
+          {hostname && (
+            <a href={server.websiteUrl} target="_blank" rel="noopener noreferrer"
+              className="text-[10px] text-muted-foreground hover:text-primary truncate block"
+              onClick={e => e.stopPropagation()}>
+              {hostname}
+            </a>
+          )}
+        </div>
+      </div>
+      <p className="text-[11px] text-muted-foreground leading-relaxed line-clamp-2 flex-1">{desc}</p>
+      <button onClick={onAdd}
+        className={`w-full h-7 rounded-md text-xs font-medium transition-colors ${
+          configured
+            ? 'border border-success/30 text-success hover:bg-success/10'
+            : approved
+              ? 'bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20'
+              : 'border border-border text-muted-foreground hover:text-foreground hover:bg-secondary'
+        }`}>
+        {configured ? '✓ Configured' : 'Add'}
+      </button>
+    </div>
+  )
+}
+
+function IntegrationSetupModal({ target, onClose, onSaved }) {
+  const { showToast } = useToast()
+  const [form, setForm] = useState({ name: target.name || '', url: target.defaultUrl || '', api_key: '' })
+  const [busy, setBusy] = useState(false)
+  useEscapeKey(onClose)
+
+  const header = target.headers?.[0] ?? null
 
   async function handleSubmit(e) {
     e.preventDefault()
     setBusy(true)
     try {
-      if (editingId) {
-        await api(`/api/my/integrations/${editingId}`, {
-          method: 'PUT',
-          body: JSON.stringify(form),
-        })
+      if (target.existingId) {
+        await api(`/api/my/integrations/${target.existingId}`, { method: 'PUT', body: JSON.stringify(form) })
         showToast('Integration updated.')
       } else {
-        await api('/api/my/integrations', {
-          method: 'POST',
-          body: JSON.stringify(form),
-        })
-        showToast('Integration added.')
+        await api('/api/my/integrations', { method: 'POST', body: JSON.stringify(form) })
+        showToast('Integration connected.')
       }
-      setForm(BLANK_INTEGRATION)
-      setEditingId(null)
-      setShowForm(false)
-      await load()
-    } catch (err) {
-      showToast(err.message, 'error')
-    } finally {
-      setBusy(false)
-    }
+      onSaved()
+    } catch (err) { showToast(err.message, 'error') }
+    finally { setBusy(false) }
   }
 
-  async function handleDelete(id) {
-    setBusy(true)
-    try {
-      await api(`/api/my/integrations/${id}`, { method: 'DELETE' })
-      setIntegrations(prev => prev.filter(i => i.id !== id))
-      showToast('Integration removed.')
-    } catch (err) {
-      showToast(err.message, 'error')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  function startEdit(integration) {
-    setForm({ name: integration.name, url: integration.url, api_key: '' })
-    setEditingId(integration.id)
-    setShowForm(true)
-  }
-
-  function cancelForm() {
-    setForm(BLANK_INTEGRATION)
-    setEditingId(null)
-    setShowForm(false)
-  }
-
-  return (
-    <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="font-semibold text-foreground">Integrations</h2>
-          <p className="text-xs text-muted-foreground mt-1">
-            Connect external MCP servers to your agent teams. Each server is available per-run.
-          </p>
-        </div>
-        {!showForm && (
-          <button
-            onClick={() => { setShowForm(true); setEditingId(null); setForm(BLANK_INTEGRATION) }}
-            className="flex items-center gap-1.5 h-8 px-3 text-xs font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            Add server
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-md shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-start justify-between mb-5">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-secondary flex items-center justify-center overflow-hidden flex-shrink-0">
+              {target.icon
+                ? <img src={target.icon} alt={target.name} className="w-7 h-7 object-contain" onError={e => { e.currentTarget.style.display = 'none' }} />
+                : <Network className="w-5 h-5 text-muted-foreground" />}
+            </div>
+            <div>
+              <h2 className="text-base font-semibold text-foreground">
+                {target.existingId ? 'Edit' : 'Connect'} {target.name}
+              </h2>
+              {target.title && target.title !== target.name && (
+                <p className="text-xs text-muted-foreground">{target.title}</p>
+              )}
+            </div>
+          </div>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors ml-4 flex-shrink-0">
+            <X className="w-4 h-4" />
           </button>
-        )}
-      </div>
-
-      {/* Toast */}
-      {toast && (
-        <div className={`flex items-start gap-2 p-3 rounded-lg text-sm border ${
-          toast.type === 'error'
-            ? 'bg-destructive/10 border-destructive/20 text-destructive'
-            : 'bg-success/10 border-success/20 text-success'
-        }`}>
-          {toast.type === 'error'
-            ? <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-            : <CheckCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />}
-          {toast.text}
         </div>
-      )}
 
-      {/* Add/Edit form */}
-      {showForm && (
-        <form onSubmit={handleSubmit} className="bg-card border border-border rounded-2xl p-4 space-y-3">
-          <h3 className="text-sm font-medium">{editingId ? 'Edit integration' : 'Add MCP server'}</h3>
-          <div className="grid gap-2 sm:grid-cols-2">
-            <div>
-              <label className="block text-xs text-muted-foreground mb-1">Name</label>
-              <input
-                required
-                placeholder="e.g. My Notion MCP"
-                value={form.name}
-                onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-muted-foreground mb-1">Server URL</label>
-              <input
-                required
-                type="url"
-                placeholder="https://mcp.example.com"
-                value={form.url}
-                onChange={e => setForm(f => ({ ...f, url: e.target.value }))}
-                className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
-              />
-            </div>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-foreground">Name</label>
+            <input required value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+              className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
           </div>
-          <div>
-            <label className="block text-xs text-muted-foreground mb-1">
-              API key <span className="text-muted-foreground/60">(optional — leave blank to keep existing)</span>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-foreground">Server URL</label>
+            <input required type="url" placeholder="https://mcp.example.com" value={form.url}
+              onChange={e => setForm(f => ({ ...f, url: e.target.value }))}
+              className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-foreground flex items-center gap-1">
+              {header ? header.name : 'API Key'}
+              {header?.isRequired && <span className="text-destructive">*</span>}
+              {header && !header.isRequired && <span className="text-muted-foreground font-normal">(optional)</span>}
             </label>
-            <input
-              type="password"
-              placeholder={editingId ? '••••••• (leave blank to keep current)' : 'API key or bearer token'}
-              value={form.api_key}
-              onChange={e => setForm(f => ({ ...f, api_key: e.target.value }))}
-              className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
-            />
+            {header?.description && (
+              <p className="text-[11px] text-muted-foreground leading-relaxed">{header.description}</p>
+            )}
+            <input type="password"
+              placeholder={target.existingId ? '••••••• (leave blank to keep current)' : (header?.name ?? 'API key or bearer token')}
+              value={form.api_key} onChange={e => setForm(f => ({ ...f, api_key: e.target.value }))}
+              className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
           </div>
+
+          {target.docsUrl && (
+            <a href={target.docsUrl} target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 transition-colors">
+              <ExternalLink className="w-3 h-3" /> Setup guide & docs
+            </a>
+          )}
+
           <div className="flex gap-2 pt-1">
-            <button type="submit" disabled={busy}
-              className="h-8 px-4 rounded-md bg-primary text-primary-foreground text-sm hover:bg-primary/90 disabled:opacity-50 flex items-center gap-2">
-              {busy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-              {editingId ? 'Save changes' : 'Add server'}
-            </button>
-            <button type="button" onClick={cancelForm}
-              className="h-8 px-3 rounded-md border border-border text-sm text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
+            <button type="button" onClick={onClose}
+              className="flex-1 h-10 rounded-lg border border-border text-sm hover:bg-secondary transition-colors">
               Cancel
+            </button>
+            <button type="submit" disabled={busy}
+              className="flex-1 h-10 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 flex items-center justify-center gap-2 transition-colors">
+              {busy && <Loader2 className="w-4 h-4 animate-spin" />}
+              {target.existingId ? 'Save changes' : 'Connect'}
             </button>
           </div>
         </form>
-      )}
-
-      {/* Integration list */}
-      {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
-        </div>
-      ) : integrations.length === 0 ? (
-        <div className="bg-card border border-border rounded-2xl p-8 text-center">
-          <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-3">
-            <Network className="w-5 h-5 text-primary" />
-          </div>
-          <p className="text-sm font-medium text-foreground">No integrations yet</p>
-          <p className="text-xs text-muted-foreground mt-1">Add an external MCP server to make it available to your agent teams.</p>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {integrations.map(integration => {
-            const ping = pingStatus[integration.id]
-            return (
-              <div key={integration.id} className="flex items-center gap-3 p-4 rounded-xl border border-border bg-card">
-                {/* Ping dot */}
-                <div className="flex-shrink-0">
-                  {ping === 'checking' ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
-                  ) : ping === 'online' ? (
-                    <span className="w-2 h-2 rounded-full bg-success block" title="Reachable" />
-                  ) : ping === 'offline' ? (
-                    <span className="w-2 h-2 rounded-full bg-destructive block" title="Unreachable" />
-                  ) : (
-                    <span className="w-2 h-2 rounded-full bg-muted-foreground/30 block" title="Not pinged yet" />
-                  )}
-                </div>
-
-                {/* Info */}
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-foreground">{integration.name}</p>
-                  <p className="text-xs text-muted-foreground truncate">{integration.url}</p>
-                </div>
-
-                {/* Actions */}
-                <div className="flex items-center gap-1.5 flex-shrink-0">
-                  <button
-                    onClick={() => pingIntegration(integration.id, integration.url)}
-                    disabled={ping === 'checking'}
-                    title="Test connection"
-                    className="h-7 w-7 flex items-center justify-center rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40">
-                    <Wifi className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    onClick={() => startEdit(integration)}
-                    title="Edit"
-                    className="h-7 w-7 flex items-center justify-center rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
-                    <Edit className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    onClick={() => handleDelete(integration.id)}
-                    disabled={busy}
-                    title="Remove"
-                    className="h-7 w-7 flex items-center justify-center rounded-md border border-destructive/30 text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-40">
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      )}
-    </div>
+      </div>
+    </div>,
+    document.body
   )
 }

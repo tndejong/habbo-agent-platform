@@ -1,14 +1,20 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
 import { HabboFigure } from './HabboFigure'
+import { SkillDetail } from './MarketplaceView'
 import { api } from '../utils/api'
 import { friendlyFetchError } from '../utils/fetchError'
-import { useTheme } from '../ThemeContext'
+import { useToast } from '../ToastContext'
+import { can } from '../utils/permissions'
+import { parseSkillSlugs, parseSkills } from '../utils/parseSkills'
+import { useSkillsCatalog } from '../utils/useSkillsCatalog'
+import { useEscapeKey } from '../utils/useEscapeKey'
 import {
   Bot, Edit2, Trash2, Plus, X, Check,
   Loader2, AlertCircle, AlertTriangle, Users, Zap, ChevronDown, ChevronUp, ChevronLeft, Square,
   Shield, Wifi, WifiOff, Key, ServerCog, Terminal, RefreshCw, User, Eye, EyeOff,
-  Sun, Moon, Phone, Copy,
+  Phone, Copy, Sparkles, LinkIcon,
   Bold, Italic, Code, Heading2, List, ListOrdered, Link, Minus,
 } from 'lucide-react'
 
@@ -138,7 +144,8 @@ function MarkdownEditor({ value, onChange, placeholder, rows = 16 }) {
 // ── Account View ──────────────────────────────────────────────────────────
 
 export function AccountView({ me, onKeyUpdated, onTokenChange }) {
-  const { theme, toggleTheme } = useTheme()
+  const [settingsTab, setSettingsTab] = useState('account') // 'account' | 'auth'
+
   const [keys, setKeys] = useState([])
   const [loading, setLoading] = useState(true)
   const [newKey, setNewKey] = useState('')
@@ -163,6 +170,8 @@ export function AccountView({ me, onKeyUpdated, onTokenChange }) {
 
   // MCP tokens + Habbo MCP connection status — dev only
   const [mcpTokens, setMcpTokens] = useState([])
+  const [mcpAuthSource, setMcpAuthSource] = useState(null) // 'user_token' | 'env_key' | 'none'
+  const [mcpEnvKeyConfigured, setMcpEnvKeyConfigured] = useState(false)
   const [mcpCalls, setMcpCalls] = useState([])
   const [mcpLoading, setMcpLoading] = useState(false)
   const [mcpBusy, setMcpBusy] = useState(false)
@@ -190,6 +199,8 @@ export function AccountView({ me, onKeyUpdated, onTokenChange }) {
         api('/api/mcp/calls?limit=30'),
       ])
       setMcpTokens(tokenData.tokens || [])
+      setMcpAuthSource(tokenData.auth_source || 'none')
+      setMcpEnvKeyConfigured(!!tokenData.env_key_configured)
       setMcpCalls(callData.calls || [])
     } catch {
       // non-blocking — tokens section will be empty
@@ -354,425 +365,433 @@ export function AccountView({ me, onKeyUpdated, onTokenChange }) {
     }
   }
 
+  // ── subtab helpers ──────────────────────────────────────────────────────────
+  const SETTINGS_TABS = [
+    { id: 'account', label: 'Account', icon: User },
+    { id: 'auth',    label: 'Authorization', icon: Shield },
+  ]
+
   return (
     <div className="max-w-5xl mx-auto px-4 py-8 space-y-6">
 
-      {/* Row 1: Profile + Phone */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
-        {/* Profile */}
-        <section className="space-y-3">
-          <h2 className="text-sm font-semibold text-foreground flex items-center gap-2.5">
-            <span className="w-6 h-6 rounded-md bg-secondary flex items-center justify-center flex-shrink-0"><User className="w-3.5 h-3.5" /></span>
-            Profile
-          </h2>
-          <div className="bg-card border border-border rounded-xl p-4 space-y-2">
-            <div className="flex items-center gap-3">
-              {me?.figure && <HabboFigure figure={me.figure} size="sm" animate={false} />}
-              <div>
-                <p className="text-sm font-medium text-foreground">{me?.habbo_username}</p>
-                <p className="text-xs text-muted-foreground">{me?.email}</p>
-              </div>
-              {me?.is_developer && (
-                <span className="ml-auto text-xs bg-primary/10 text-primary border border-primary/20 rounded px-2 py-0.5">Developer</span>
-              )}
-            </div>
-          </div>
-        </section>
-
-        {/* Phone Number */}
-        <section className="space-y-3">
-          <h2 className="text-sm font-semibold text-foreground flex items-center gap-2.5">
-            <span className="w-6 h-6 rounded-md bg-secondary flex items-center justify-center flex-shrink-0"><Phone className="w-3.5 h-3.5" /></span>
-            Phone Number
-          </h2>
-          <div className="bg-card border border-border rounded-xl p-4 space-y-4">
-            <p className="text-xs text-muted-foreground">
-              Link your number to trigger agents by SMS or voice via Twilio. Use E.164 format, e.g. <span className="font-mono">+31612345678</span>.
-            </p>
-            {phoneMsg && (
-              <div className={`text-xs rounded-lg px-3 py-2 flex items-center gap-2 ${phoneMsg.type === 'success' ? 'bg-success/10 text-success border border-success/20' : 'bg-destructive/10 text-destructive border border-destructive/20'}`}>
-                {phoneMsg.type === 'success' ? <Check className="w-3.5 h-3.5 flex-shrink-0" /> : <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />}
-                {phoneMsg.text}
-              </div>
-            )}
-            {phone && (
-              <div className="flex items-center justify-between bg-background rounded-lg border border-border px-3 py-2">
-                <div>
-                  <p className="text-xs text-muted-foreground mb-0.5">Current number</p>
-                  <p className="text-sm font-mono text-foreground">{phone}</p>
-                </div>
-                <button onClick={handleDeletePhone} disabled={phoneDeleting}
-                  className="flex items-center gap-1 text-xs text-destructive hover:text-destructive/70 border border-destructive/30 hover:border-destructive/50 rounded px-2 py-1 transition-colors disabled:opacity-50">
-                  {phoneDeleting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />} Remove
-                </button>
-              </div>
-            )}
-            <div className="flex gap-2">
-              <input type="tel" value={phoneInput} onChange={e => setPhoneInput(e.target.value)} placeholder="+31612345678"
-                className="flex-1 bg-background border border-border rounded-lg px-3 py-2 text-sm font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
-                onKeyDown={e => e.key === 'Enter' && handleSavePhone()} />
-              <button onClick={handleSavePhone} disabled={phoneSaving || !phoneInput.trim()}
-                className="flex items-center gap-1.5 px-3 py-2 bg-primary text-primary-foreground rounded-lg text-xs font-medium hover:opacity-80 disabled:opacity-50 transition-opacity">
-                {phoneSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />} Save
-              </button>
-            </div>
-          </div>
-        </section>
+      {/* Subtab bar */}
+      <div className="flex items-center gap-1 border-b border-border pb-0">
+        {SETTINGS_TABS.map(t => {
+          const Icon = t.icon
+          const active = settingsTab === t.id
+          return (
+            <button
+              key={t.id}
+              onClick={() => setSettingsTab(t.id)}
+              className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                active
+                  ? 'border-primary text-foreground'
+                  : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
+              }`}
+            >
+              <Icon className="w-3.5 h-3.5" />
+              {t.label}
+            </button>
+          )
+        })}
       </div>
 
-      {/* Row 2: API Key + Password */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+      {/* ── Account tab ─────────────────────────────────────────────────────── */}
+      {settingsTab === 'account' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
 
-      {/* API Keys */}
-      <section className="space-y-3">
-        <h2 className="text-sm font-semibold text-foreground flex items-center gap-2.5">
-          <span className="w-6 h-6 rounded-md bg-secondary flex items-center justify-center flex-shrink-0"><Key className="w-3.5 h-3.5" /></span>
-          Anthropic API Key
-        </h2>
-        <div className="bg-card border border-border rounded-xl p-4 space-y-4">
-          <p className="text-xs text-muted-foreground">
-            Your personal key is used when you trigger agent teams. It overrides the server default so your usage is billed to your own Anthropic account.
-            The key is stored AES-256-GCM encrypted — it is never stored in plain text.
-          </p>
-
-          {msg && (
-            <div className={`text-xs rounded-lg px-3 py-2 flex items-center gap-2 ${msg.type === 'success' ? 'bg-success/10 text-success border border-success/20' : 'bg-destructive/10 text-destructive border border-destructive/20'}`}>
-              {msg.type === 'success' ? <Check className="w-3.5 h-3.5 flex-shrink-0" /> : <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />}
-              {msg.text}
-            </div>
-          )}
-
-          {loading ? (
-            <div className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…</div>
-          ) : anthropicKey ? (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between bg-background rounded-lg border border-border px-3 py-2">
+          {/* Profile */}
+          <section className="space-y-3">
+            <h2 className="text-sm font-semibold text-foreground flex items-center gap-2.5">
+              <span className="w-6 h-6 rounded-md bg-secondary flex items-center justify-center flex-shrink-0"><User className="w-3.5 h-3.5" /></span>
+              Profile
+            </h2>
+            <div className="bg-card border border-border rounded-xl p-4 space-y-2">
+              <div className="flex items-center gap-3">
+                {me?.figure && <HabboFigure figure={me.figure} size="sm" animate={false} />}
                 <div>
-                  <p className="text-xs text-muted-foreground mb-0.5">Current key</p>
-                  <p className="text-sm font-mono text-foreground">{anthropicKey.masked}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">Updated {new Date(anthropicKey.updated_at).toLocaleDateString()}</p>
+                  <p className="text-sm font-medium text-foreground">{me?.habbo_username}</p>
+                  <p className="text-xs text-muted-foreground">{me?.email}</p>
                 </div>
-                <div className="flex items-center gap-1.5 ml-4">
-                  <button
-                    onClick={handleDelete}
-                    disabled={deleting}
-                    className="flex items-center gap-1 text-xs text-destructive hover:text-destructive/70 border border-destructive/30 hover:border-destructive/50 rounded px-2 py-1 transition-colors disabled:opacity-50"
-                  >
-                    {deleting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
-                    Remove
+                {!!me?.is_developer && (
+                  <span className="ml-auto text-xs bg-primary/10 text-primary border border-primary/20 rounded px-2 py-0.5">Developer</span>
+                )}
+              </div>
+            </div>
+          </section>
+
+          {/* Phone Number */}
+          <section className="space-y-3">
+            <h2 className="text-sm font-semibold text-foreground flex items-center gap-2.5">
+              <span className="w-6 h-6 rounded-md bg-secondary flex items-center justify-center flex-shrink-0"><Phone className="w-3.5 h-3.5" /></span>
+              Phone Number
+            </h2>
+            <div className="bg-card border border-border rounded-xl p-4 space-y-4">
+              <p className="text-xs text-muted-foreground">
+                Link your number to trigger agents by SMS or voice via Twilio. Use E.164 format, e.g. <span className="font-mono">+31612345678</span>.
+              </p>
+              {phoneMsg && (
+                <div className={`text-xs rounded-lg px-3 py-2 flex items-center gap-2 ${phoneMsg.type === 'success' ? 'bg-success/10 text-success border border-success/20' : 'bg-destructive/10 text-destructive border border-destructive/20'}`}>
+                  {phoneMsg.type === 'success' ? <Check className="w-3.5 h-3.5 flex-shrink-0" /> : <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />}
+                  {phoneMsg.text}
+                </div>
+              )}
+              {phone && (
+                <div className="flex items-center justify-between bg-background rounded-lg border border-border px-3 py-2">
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-0.5">Current number</p>
+                    <p className="text-sm font-mono text-foreground">{phone}</p>
+                  </div>
+                  <button onClick={handleDeletePhone} disabled={phoneDeleting}
+                    className="flex items-center gap-1 text-xs text-destructive hover:text-destructive/70 border border-destructive/30 hover:border-destructive/50 rounded px-2 py-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                    {phoneDeleting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />} Remove
+                  </button>
+                </div>
+              )}
+              <div className="flex gap-2">
+                <input type="tel" value={phoneInput} onChange={e => setPhoneInput(e.target.value)} placeholder="+31612345678"
+                  className="flex-1 bg-background border border-border rounded-lg px-3 py-2 text-sm font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+                  onKeyDown={e => e.key === 'Enter' && handleSavePhone()} />
+                <button onClick={handleSavePhone} disabled={phoneSaving || !phoneInput.trim()}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-primary text-primary-foreground rounded-lg text-xs font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+                  {phoneSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />} Save
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {/* ── Authorization tab ────────────────────────────────────────────────── */}
+      {settingsTab === 'auth' && (
+        <div className="space-y-6">
+
+          {/* Anthropic API Key + Change Password — side by side */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+
+            {/* Anthropic API Key */}
+            <section className="space-y-3">
+              <h2 className="text-sm font-semibold text-foreground flex items-center gap-2.5">
+                <span className="w-6 h-6 rounded-md bg-secondary flex items-center justify-center flex-shrink-0"><Key className="w-3.5 h-3.5" /></span>
+                Anthropic API Key
+              </h2>
+              <div className="bg-card border border-border rounded-xl p-4 space-y-4">
+                <p className="text-xs text-muted-foreground">
+                  Your personal key is used when you trigger agent teams. It overrides the server default so your usage is billed to your own Anthropic account.
+                  Stored AES-256-GCM encrypted — never in plain text.
+                </p>
+
+                {msg && (
+                  <div className={`text-xs rounded-lg px-3 py-2 flex items-center gap-2 ${msg.type === 'success' ? 'bg-success/10 text-success border border-success/20' : 'bg-destructive/10 text-destructive border border-destructive/20'}`}>
+                    {msg.type === 'success' ? <Check className="w-3.5 h-3.5 flex-shrink-0" /> : <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />}
+                    {msg.text}
+                  </div>
+                )}
+
+                {loading ? (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…</div>
+                ) : anthropicKey ? (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between bg-background rounded-lg border border-border px-3 py-2">
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-0.5">Current key</p>
+                        <p className="text-sm font-mono text-foreground">{anthropicKey.masked}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">Updated {new Date(anthropicKey.updated_at).toLocaleDateString()}</p>
+                      </div>
+                      <div className="flex items-center gap-1.5 ml-4">
+                        <button onClick={handleDelete} disabled={deleting}
+                          className="flex items-center gap-1 text-xs text-destructive hover:text-destructive/70 border border-destructive/30 hover:border-destructive/50 rounded px-2 py-1 transition-colors disabled:opacity-50">
+                          {deleting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />} Remove
+                        </button>
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground">To replace, enter a new key below and save.</p>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <AlertCircle className="w-3.5 h-3.5 text-warning" />
+                    No personal key stored — server default key will be used.
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <label className="text-xs font-medium text-foreground">{anthropicKey ? 'Replace key' : 'Add your key'}</label>
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <input
+                        type={showKey ? 'text' : 'password'}
+                        value={newKey}
+                        onChange={e => setNewKey(e.target.value)}
+                        placeholder="sk-ant-api03-..."
+                        className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 pr-10"
+                        onKeyDown={e => e.key === 'Enter' && handleSave()}
+                      />
+                      <button type="button" onClick={() => setShowKey(v => !v)}
+                        aria-label={showKey ? 'Hide API key' : 'Show API key'}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors">
+                        {showKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                    <button onClick={handleSave} disabled={saving || !newKey.trim()}
+                      className="flex items-center gap-1.5 px-3 py-2 bg-primary text-primary-foreground rounded-lg text-xs font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+                      {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />} Save
+                    </button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">Get your key at <a href="https://console.anthropic.com" target="_blank" rel="noreferrer" className="text-primary hover:underline">console.anthropic.com</a></p>
+                </div>
+              </div>
+            </section>
+
+            {/* Change Password */}
+            <section className="space-y-3">
+              <h2 className="text-sm font-semibold text-foreground flex items-center gap-2.5">
+                <span className="w-6 h-6 rounded-md bg-secondary flex items-center justify-center flex-shrink-0"><Shield className="w-3.5 h-3.5" /></span>
+                Change Password
+              </h2>
+              <div className="bg-card border border-border rounded-xl p-4 space-y-4">
+                {pwMsg && (
+                  <div className={`text-xs rounded-lg px-3 py-2 flex items-center gap-2 ${pwMsg.type === 'success' ? 'bg-success/10 text-success border border-success/20' : 'bg-destructive/10 text-destructive border border-destructive/20'}`}>
+                    {pwMsg.type === 'success' ? <Check className="w-3.5 h-3.5 flex-shrink-0" /> : <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />}
+                    {pwMsg.text}
+                  </div>
+                )}
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-foreground">Current password</label>
+                    <div className="relative">
+                      <input type={showCurrentPw ? 'text' : 'password'} value={currentPassword}
+                        onChange={e => setCurrentPassword(e.target.value)} placeholder="••••••••"
+                        className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 pr-10" />
+                      <button type="button" onClick={() => setShowCurrentPw(v => !v)}
+                        aria-label={showCurrentPw ? 'Hide password' : 'Show password'}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors">
+                        {showCurrentPw ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-foreground">New password</label>
+                    <div className="relative">
+                      <input type={showNewPw ? 'text' : 'password'} value={newPassword}
+                        onChange={e => setNewPassword(e.target.value)} placeholder="Min. 8 characters"
+                        className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 pr-10" />
+                      <button type="button" onClick={() => setShowNewPw(v => !v)}
+                        aria-label={showNewPw ? 'Hide new password' : 'Show new password'}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors">
+                        {showNewPw ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-foreground">Confirm new password</label>
+                    <input type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)}
+                      placeholder="Repeat new password" onKeyDown={e => e.key === 'Enter' && handleChangePassword()}
+                      className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+                  </div>
+                  <button onClick={handleChangePassword}
+                    disabled={pwSaving || !currentPassword || !newPassword || !confirmPassword}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-primary text-primary-foreground rounded-lg text-xs font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+                    {pwSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                    Update password
                   </button>
                 </div>
               </div>
-              <p className="text-xs text-muted-foreground">To replace, enter a new key below and save.</p>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <AlertCircle className="w-3.5 h-3.5 text-warning" />
-              No personal key stored — server default key will be used.
-            </div>
-          )}
-
-          {/* Add / replace key */}
-          <div className="space-y-2">
-            <label className="text-xs font-medium text-foreground">{anthropicKey ? 'Replace key' : 'Add your key'}</label>
-            <div className="flex gap-2">
-              <div className="relative flex-1">
-                <input
-                  type={showKey ? 'text' : 'password'}
-                  value={newKey}
-                  onChange={e => setNewKey(e.target.value)}
-                  placeholder="sk-ant-api03-..."
-                  className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 pr-10"
-                  onKeyDown={e => e.key === 'Enter' && handleSave()}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowKey(v => !v)}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                >
-                  {showKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                </button>
-              </div>
-              <button
-                onClick={handleSave}
-                disabled={saving || !newKey.trim()}
-                className="flex items-center gap-1.5 px-3 py-2 bg-primary text-primary-foreground rounded-lg text-xs font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
-              >
-                {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
-                Save
-              </button>
-            </div>
-            <p className="text-xs text-muted-foreground">Get your key at <a href="https://console.anthropic.com" target="_blank" rel="noreferrer" className="text-primary hover:underline">console.anthropic.com</a></p>
+            </section>
           </div>
-        </div>
-      </section>
 
-      {/* Change Password */}
-      <section className="space-y-3">
-        <h2 className="text-sm font-semibold text-foreground flex items-center gap-2.5">
-          <span className="w-6 h-6 rounded-md bg-secondary flex items-center justify-center flex-shrink-0"><Shield className="w-3.5 h-3.5" /></span>
-          Change Password
-        </h2>
-        <div className="bg-card border border-border rounded-xl p-4 space-y-4">
-          {pwMsg && (
-            <div className={`text-xs rounded-lg px-3 py-2 flex items-center gap-2 ${pwMsg.type === 'success' ? 'bg-success/10 text-success border border-success/20' : 'bg-destructive/10 text-destructive border border-destructive/20'}`}>
-              {pwMsg.type === 'success' ? <Check className="w-3.5 h-3.5 flex-shrink-0" /> : <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />}
-              {pwMsg.text}
-            </div>
-          )}
+          {/* MCP Tokens — developer only */}
+          {!!me?.is_developer && (
+            <section className="space-y-3">
+              <h2 className="text-sm font-semibold text-foreground flex items-center gap-2.5">
+                <span className="w-6 h-6 rounded-md bg-secondary flex items-center justify-center flex-shrink-0"><Key className="w-3.5 h-3.5" /></span>
+                MCP Tokens
+                <span className="ml-auto text-[10px] bg-primary/10 text-primary border border-primary/20 rounded px-1.5 py-0.5">Developer</span>
+              </h2>
 
-          <div className="space-y-3">
-            {/* Current password */}
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-foreground">Current password</label>
-              <div className="relative">
-                <input
-                  type={showCurrentPw ? 'text' : 'password'}
-                  value={currentPassword}
-                  onChange={e => setCurrentPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 pr-10"
-                />
-                <button type="button" onClick={() => setShowCurrentPw(v => !v)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
-                  {showCurrentPw ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                </button>
-              </div>
-            </div>
+              {mcpMsg && (
+                <div className={`text-xs rounded-lg px-3 py-2 flex items-center gap-2 ${mcpMsg.type === 'success' ? 'bg-success/10 text-success border border-success/20' : 'bg-destructive/10 text-destructive border border-destructive/20'}`}>
+                  {mcpMsg.type === 'success' ? <Check className="w-3.5 h-3.5 flex-shrink-0" /> : <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />}
+                  {mcpMsg.text}
+                </div>
+              )}
 
-            {/* New password */}
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-foreground">New password</label>
-              <div className="relative">
-                <input
-                  type={showNewPw ? 'text' : 'password'}
-                  value={newPassword}
-                  onChange={e => setNewPassword(e.target.value)}
-                  placeholder="Min. 8 characters"
-                  className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 pr-10"
-                />
-                <button type="button" onClick={() => setShowNewPw(v => !v)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
-                  {showNewPw ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                </button>
-              </div>
-            </div>
+              {/* Habbo MCP connection + auth source */}
+              {(() => {
+                const loadingStatus = habboMcpStatus === null
+                const habboServer = habboMcpStatus?.servers?.find(s =>
+                  s.name?.toLowerCase().includes('hotel') ||
+                  s.name?.toLowerCase().includes('habbo') ||
+                  s.name?.toLowerCase().includes('mcp')
+                ) ?? habboMcpStatus?.servers?.[0] ?? null
+                return (
+                  <div className="bg-card border border-border rounded-xl p-4 space-y-2">
+                    <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                      <ServerCog className="w-3.5 h-3.5" />
+                      Habbo MCP Connection
+                    </h3>
+                    {loadingStatus ? (
+                      <div className="flex items-center gap-2 text-muted-foreground">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span className="text-xs">Checking…</span>
+                      </div>
+                    ) : habboMcpStatus?.error ? (
+                      <div className="flex items-center gap-2 text-warning">
+                        <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+                        <span className="text-xs">{habboMcpStatus.error}</span>
+                      </div>
+                    ) : habboServer ? (
+                      <div className="flex items-center gap-3">
+                        <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${habboServer.reachable ? 'bg-success' : 'bg-destructive'}`} />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-foreground">{habboServer.name}</p>
+                          <p className="text-xs text-muted-foreground truncate">{habboServer.url}</p>
+                        </div>
+                        <div className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md border font-medium flex-shrink-0 ${
+                          habboServer.reachable
+                            ? 'text-success border-success/30 bg-success/10'
+                            : 'text-destructive border-destructive/30 bg-destructive/10'
+                        }`}>
+                          {habboServer.reachable
+                            ? <><Wifi className="w-3 h-3 mr-1" />Connected</>
+                            : <><WifiOff className="w-3 h-3 mr-1" />Unreachable</>
+                          }
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">No Habbo MCP server detected. Configure it in agent-trigger.</p>
+                    )}
 
-            {/* Confirm new password */}
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-foreground">Confirm new password</label>
-              <input
-                type="password"
-                value={confirmPassword}
-                onChange={e => setConfirmPassword(e.target.value)}
-                placeholder="Repeat new password"
-                onKeyDown={e => e.key === 'Enter' && handleChangePassword()}
-                className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
-              />
-            </div>
-
-            <button
-              onClick={handleChangePassword}
-              disabled={pwSaving || !currentPassword || !newPassword || !confirmPassword}
-              className="flex items-center gap-1.5 px-3 py-2 bg-primary text-primary-foreground rounded-lg text-xs font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
-            >
-              {pwSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
-              Update password
-            </button>
-          </div>
-        </div>
-      </section>
-
-      </div>{/* end Row 2 */}
-
-      {/* Row 3: Appearance — full width */}
-      <section className="space-y-3">
-        <h2 className="text-sm font-semibold text-foreground flex items-center gap-2.5">
-          <span className="w-6 h-6 rounded-md bg-secondary flex items-center justify-center flex-shrink-0"><Sun className="w-3.5 h-3.5" /></span>
-          Appearance
-        </h2>
-        <div className="bg-card border border-border rounded-xl p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-foreground">Theme</p>
-              <p className="text-xs text-muted-foreground mt-0.5">Choose light or dark interface.</p>
-            </div>
-            <div className="flex items-center gap-1 p-1 bg-secondary rounded-lg border border-border">
-              <button onClick={() => theme === 'dark' && toggleTheme()}
-                className={`flex items-center gap-1.5 h-7 px-3 text-xs rounded-md transition-colors ${theme === 'light' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-                aria-pressed={theme === 'light'}>
-                <Sun className="w-3.5 h-3.5" /> Light
-              </button>
-              <button onClick={() => theme === 'light' && toggleTheme()}
-                className={`flex items-center gap-1.5 h-7 px-3 text-xs rounded-md transition-colors ${theme === 'dark' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-                aria-pressed={theme === 'dark'}>
-                <Moon className="w-3.5 h-3.5" /> Dark
-              </button>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Row 4: MCP Tokens — developer only */}
-      {me?.is_developer && (
-        <section className="space-y-3">
-          <h2 className="text-sm font-semibold text-foreground flex items-center gap-2.5">
-            <span className="w-6 h-6 rounded-md bg-secondary flex items-center justify-center flex-shrink-0"><Key className="w-3.5 h-3.5" /></span>
-            MCP Tokens
-            <span className="ml-auto text-[10px] bg-primary/10 text-primary border border-primary/20 rounded px-1.5 py-0.5">Developer</span>
-          </h2>
-
-          {/* Feedback message */}
-          {mcpMsg && (
-            <div className={`text-xs rounded-lg px-3 py-2 flex items-center gap-2 ${mcpMsg.type === 'success' ? 'bg-success/10 text-success border border-success/20' : 'bg-destructive/10 text-destructive border border-destructive/20'}`}>
-              {mcpMsg.type === 'success' ? <Check className="w-3.5 h-3.5 flex-shrink-0" /> : <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />}
-              {mcpMsg.text}
-            </div>
-          )}
-
-          {/* Habbo MCP connection status */}
-          {(() => {
-            const loadingStatus = habboMcpStatus === null
-            const habboServer = habboMcpStatus?.servers?.find(s =>
-              s.name?.toLowerCase().includes('hotel') ||
-              s.name?.toLowerCase().includes('habbo') ||
-              s.name?.toLowerCase().includes('mcp')
-            ) ?? habboMcpStatus?.servers?.[0] ?? null
-            return (
-              <div className="bg-card border border-border rounded-xl p-4 space-y-2">
-                <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
-                  <ServerCog className="w-3.5 h-3.5" />
-                  Habbo MCP Connection
-                </h3>
-                {loadingStatus ? (
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    <span className="text-xs">Checking…</span>
+                    {mcpAuthSource !== null && (
+                      <div className="pt-2 mt-2 border-t border-border flex items-center gap-2 flex-wrap">
+                        <span className="text-xs text-muted-foreground">Auth source:</span>
+                        {mcpAuthSource === 'user_token' && (
+                          <span className="inline-flex items-center gap-1.5 text-xs font-medium px-2 py-0.5 rounded-full bg-success/10 text-success border border-success/20">
+                            <Key className="w-3 h-3" /> User-generated token
+                          </span>
+                        )}
+                        {mcpAuthSource === 'env_key' && (
+                          <span className="inline-flex items-center gap-1.5 text-xs font-medium px-2 py-0.5 rounded-full bg-warning/10 text-warning border border-warning/20">
+                            <Key className="w-3 h-3" /> .env MCP_API_KEY (fallback)
+                          </span>
+                        )}
+                        {mcpAuthSource === 'none' && (
+                          <span className="inline-flex items-center gap-1.5 text-xs font-medium px-2 py-0.5 rounded-full bg-destructive/10 text-destructive border border-destructive/20">
+                            <AlertCircle className="w-3 h-3" /> No key configured
+                          </span>
+                        )}
+                        {mcpAuthSource === 'env_key' && (
+                          <span className="text-xs text-muted-foreground ml-auto">Generate a token below to use user auth instead</span>
+                        )}
+                      </div>
+                    )}
                   </div>
-                ) : habboMcpStatus?.error ? (
-                  <div className="flex items-center gap-2 text-warning">
-                    <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
-                    <span className="text-xs">{habboMcpStatus.error}</span>
-                  </div>
-                ) : habboServer ? (
-                  <div className="flex items-center gap-3">
-                    <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${habboServer.reachable ? 'bg-success' : 'bg-destructive'}`} />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-foreground">{habboServer.name}</p>
-                      <p className="text-xs text-muted-foreground truncate">{habboServer.url}</p>
-                    </div>
-                    <div className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md border font-medium flex-shrink-0 ${
-                      habboServer.reachable
-                        ? 'text-success border-success/30 bg-success/10'
-                        : 'text-destructive border-destructive/30 bg-destructive/10'
-                    }`}>
-                      {habboServer.reachable
-                        ? <><Wifi className="w-3 h-3 mr-1" />Connected</>
-                        : <><WifiOff className="w-3 h-3 mr-1" />Unreachable</>
-                      }
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-xs text-muted-foreground">No Habbo MCP server detected. Configure it in agent-trigger.</p>
-                )}
-              </div>
-            )
-          })()}
+                )
+              })()}
 
-          {/* Revealed new token (shown once) */}
-          {newMcpToken && (
-            <div className="bg-success/10 border border-success/20 rounded-xl p-4 space-y-2">
-              <p className="text-xs font-medium text-success">Copy this token now — it is only shown once!</p>
-              <div className="flex items-center gap-2">
-                <code className="flex-1 font-mono text-xs bg-background/50 border border-border rounded-lg px-3 py-2 break-all">
-                  {newMcpToken}
-                </code>
-                <button onClick={() => copyMcpToken(newMcpToken)}
-                  className="h-8 w-8 flex-shrink-0 flex items-center justify-center border border-border rounded-lg hover:bg-secondary transition-colors">
-                  {copiedToken ? <Check className="w-3.5 h-3.5 text-success" /> : <Copy className="w-3.5 h-3.5" />}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Generate token */}
-          <div className="bg-card border border-border rounded-xl p-4 space-y-3">
-            <p className="text-xs text-muted-foreground">
-              Tokens authenticate your Habbo hotel MCP server. Required before deploying agent teams.
-              Endpoint: <code className="font-mono bg-muted px-1 py-0.5 rounded">/mcp</code> on your hosted <code className="font-mono bg-muted px-1 py-0.5 rounded">hotel-mcp</code> domain.
-            </p>
-            <div className="flex gap-2">
-              <input
-                placeholder="Token label (optional)"
-                value={tokenLabel}
-                onChange={e => setTokenLabel(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleCreateToken()}
-                className="flex-1 h-9 rounded-md border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
-              />
-              <button onClick={handleCreateToken} disabled={mcpBusy}
-                className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm hover:bg-primary/90 disabled:opacity-50 flex items-center gap-2 flex-shrink-0">
-                {mcpBusy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                Generate
-              </button>
-            </div>
-          </div>
-
-          {/* Token list */}
-          <div className="bg-card border border-border rounded-xl p-4 space-y-3">
-            <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Your Tokens</h3>
-            {mcpLoading ? (
-              <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
-                <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…
-              </div>
-            ) : mcpTokens.length === 0 ? (
-              <p className="text-xs text-muted-foreground">No tokens generated yet.</p>
-            ) : (
-              <div className="space-y-2">
-                {mcpTokens.map(token => (
-                  <div key={token.id} className="flex items-center gap-3 p-3 rounded-lg border border-border bg-background">
-                    <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${token.status === 'active' ? 'bg-success' : 'bg-muted-foreground/40'}`} />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-foreground">#{token.id} {token.token_label || '(no label)'}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {token.status} · expires {new Date(token.expires_at).toLocaleDateString()} · last used {token.last_used_at ? new Date(token.last_used_at).toLocaleDateString() : 'never'}
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => handleRevokeToken(token.id)}
-                      disabled={mcpBusy || token.status !== 'active'}
-                      className="h-7 px-3 text-xs border border-destructive/30 text-destructive rounded-md hover:bg-destructive/10 disabled:opacity-40 transition-colors flex-shrink-0">
-                      Revoke
+              {/* Revealed new token (shown once) */}
+              {newMcpToken && (
+                <div className="bg-success/10 border border-success/20 rounded-xl p-4 space-y-2">
+                  <p className="text-xs font-medium text-success">Copy this token now — it is only shown once!</p>
+                  <div className="flex items-center gap-2">
+                    <code className="flex-1 font-mono text-xs bg-background/50 border border-border rounded-lg px-3 py-2 break-all">
+                      {newMcpToken}
+                    </code>
+                    <button onClick={() => copyMcpToken(newMcpToken)} aria-label="Copy token"
+                      className="h-8 w-8 flex-shrink-0 flex items-center justify-center border border-border rounded-lg hover:bg-secondary transition-colors">
+                      {copiedToken ? <Check className="w-3.5 h-3.5 text-success" /> : <Copy className="w-3.5 h-3.5" />}
                     </button>
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
+                </div>
+              )}
 
-          {/* Recent MCP calls */}
-          <div className="bg-card border border-border rounded-xl p-4 space-y-3">
-            <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Recent MCP Calls</h3>
-            {mcpCalls.length === 0 ? (
-              <p className="text-xs text-muted-foreground">No MCP calls yet.</p>
-            ) : (
-              <div className="space-y-1.5 max-h-64 overflow-y-auto">
-                {mcpCalls.map(call => (
-                  <div key={call.id} className="flex items-start gap-2.5 p-2.5 rounded-lg border border-border bg-background/50">
-                    <div className={`w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0 ${call.success ? 'bg-success' : 'bg-destructive'}`} />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium text-foreground">
-                        {call.tool_name}
-                        <span className="text-muted-foreground font-normal ml-1">({call.channel})</span>
-                      </p>
-                      <p className="text-xs text-muted-foreground">{call.duration_ms}ms · {new Date(call.created_at).toLocaleString()}</p>
-                    </div>
-                    <span className={`text-xs flex-shrink-0 ${call.success ? 'text-success' : 'text-destructive'}`}>
-                      {call.success ? 'ok' : call.error_code || 'err'}
-                    </span>
+              {/* Generate token + token list — side by side on large screens */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+                <div className="bg-card border border-border rounded-xl p-4 space-y-3">
+                  <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Generate Token</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Tokens authenticate your Habbo hotel MCP server. Required before deploying agent teams.
+                    Endpoint: <code className="font-mono bg-muted px-1 py-0.5 rounded">/mcp</code> on your hosted <code className="font-mono bg-muted px-1 py-0.5 rounded">hotel-mcp</code> domain.
+                  </p>
+                  <div className="flex gap-2">
+                    <input placeholder="Token label (optional)" value={tokenLabel}
+                      onChange={e => setTokenLabel(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && handleCreateToken()}
+                      className="flex-1 h-9 rounded-md border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
+                    <button onClick={handleCreateToken} disabled={mcpBusy}
+                      className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm hover:bg-primary/90 disabled:opacity-50 flex items-center gap-2 flex-shrink-0">
+                      {mcpBusy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                      Generate
+                    </button>
                   </div>
-                ))}
+                </div>
+
+                <div className="bg-card border border-border rounded-xl p-4 space-y-3">
+                  <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Your Tokens</h3>
+                  {mcpLoading ? (
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…
+                    </div>
+                  ) : mcpTokens.length === 0 ? (
+                    <div className="flex flex-col items-center gap-1.5 py-4 text-center">
+                      <Key className="w-5 h-5 text-muted-foreground/40" />
+                      <p className="text-xs font-medium text-foreground">No tokens yet</p>
+                      <p className="text-xs text-muted-foreground">Generate a token above to connect via MCP.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {mcpTokens.map(token => (
+                        <div key={token.id} className="flex items-center gap-3 p-3 rounded-lg border border-border bg-background">
+                          <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${token.status === 'active' ? 'bg-success' : 'bg-muted-foreground/40'}`} />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-foreground">#{token.id} {token.token_label || '(no label)'}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {token.status} · expires {new Date(token.expires_at).toLocaleDateString()} · last used {token.last_used_at ? new Date(token.last_used_at).toLocaleDateString() : 'never'}
+                            </p>
+                          </div>
+                          <button onClick={() => handleRevokeToken(token.id)}
+                            disabled={mcpBusy || token.status !== 'active'}
+                            className="h-7 px-3 text-xs border border-destructive/30 text-destructive rounded-md hover:bg-destructive/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0">
+                            Revoke
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
-            )}
-          </div>
-        </section>
+
+              {/* Recent MCP calls */}
+              <div className="bg-card border border-border rounded-xl p-4 space-y-3">
+                <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Recent MCP Calls</h3>
+                {mcpCalls.length === 0 ? (
+                  <div className="flex flex-col items-center gap-1.5 py-4 text-center">
+                    <Terminal className="w-5 h-5 text-muted-foreground/40" />
+                    <p className="text-xs font-medium text-foreground">No calls yet</p>
+                    <p className="text-xs text-muted-foreground">Tool calls from your agents will appear here.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                    {mcpCalls.map(call => (
+                      <div key={call.id} className="flex items-start gap-2.5 p-2.5 rounded-lg border border-border bg-background/50">
+                        <div className={`w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0 ${call.success ? 'bg-success' : 'bg-destructive'}`} />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium text-foreground">
+                            {call.tool_name}
+                            <span className="text-muted-foreground font-normal ml-1">({call.channel})</span>
+                          </p>
+                          <p className="text-xs text-muted-foreground">{call.duration_ms}ms · {new Date(call.created_at).toLocaleString()}</p>
+                        </div>
+                        <span className={`text-xs flex-shrink-0 ${call.success ? 'text-success' : 'text-destructive'}`}>
+                          {call.success ? 'ok' : call.error_code || 'err'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+        </div>
       )}
     </div>
   )
@@ -892,7 +911,7 @@ export function AgentDashboard({ me, onActiveTeamChange, onStopTeam, mcpTokenVer
         <div className={`border-b px-4 py-3 flex items-center gap-3 ${
           teamError.type === 'billing'
             ? 'bg-warning/10 border-warning/30'
-            : 'bg-destructive/10 border-red-500/30'
+            : 'bg-destructive/10 border-destructive/30'
         }`}>
           <AlertCircle className={`w-4 h-4 flex-shrink-0 ${teamError.type === 'billing' ? 'text-warning' : 'text-destructive'}`} />
           <span className={`text-sm flex-1 ${teamError.type === 'billing' ? 'text-warning/80' : 'text-destructive/80'}`}>
@@ -905,7 +924,7 @@ export function AgentDashboard({ me, onActiveTeamChange, onStopTeam, mcpTokenVer
               </a>
             )}
           </span>
-          <button onClick={() => setTeamError(null)} className="text-muted-foreground hover:text-foreground ml-auto flex-shrink-0">
+          <button onClick={() => setTeamError(null)} aria-label="Dismiss error" className="text-muted-foreground hover:text-foreground ml-auto flex-shrink-0 transition-colors">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -998,7 +1017,7 @@ export function LogPanel({ lines, paused, onTogglePause }) {
 
 // ── Online View ───────────────────────────────────────────────────────────
 
-export function OnlineView({ me }) {
+export function OnlineView() {
   const [personas, setPersonas] = useState([])
   const [liveBots, setLiveBots] = useState([])
 
@@ -1051,8 +1070,10 @@ export function OnlineView({ me }) {
         </div>
 
         {roomCount === 0 ? (
-          <div className="rounded-xl border border-border bg-card/50 p-6 text-center text-sm text-muted-foreground">
-            No agents deployed in any room.
+          <div className="rounded-xl border border-border bg-card/50 p-8 flex flex-col items-center gap-2 text-center">
+            <WifiOff className="w-7 h-7 text-muted-foreground/40" />
+            <p className="text-sm font-medium text-foreground">No agents online</p>
+            <p className="text-xs text-muted-foreground">Deploy a team to a hotel room to see agents here.</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -1120,19 +1141,27 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0
   const [bots, setBots] = useState([])
   const [rooms, setRooms] = useState([])
   const [loading, setLoading] = useState(true)
+  const { showToast } = useToast()
   const [error, setError] = useState(null)
   // teamPage / personaPage: null = list view, { item: null } = new, { item: {...} } = edit
   const [teamPage, setTeamPage] = useState(null)
   const [personaPage, setPersonaPage] = useState(null)
   // confirmModal: null | { title, message, onConfirm }
   const [confirmModal, setConfirmModal] = useState(null)
-  const [toast, setToast] = useState(null)
   const [deployingIds, setDeployingIds] = useState(new Set())
   const [hasApiKey, setHasApiKey] = useState(true)
   const [hasMcpToken, setHasMcpToken] = useState(true)
 
-  const isBasic = me?.ai_tier === 'basic'
-  const isDev = me?.is_developer
+  useEscapeKey(() => {
+    if (personaPage) { setPersonaPage(null); return }
+    if (confirmModal) setConfirmModal(null)
+  }, !!(personaPage || confirmModal))
+
+  // Permission shortcuts — derived from the canonical PERMISSIONS registry
+  const canViewTeams      = can(me, 'teams.view')
+  const canManageTeams    = can(me, 'teams.create')   // create implies edit/delete
+  const canManagePersonas = can(me, 'personas.create')
+  const canLinkBot        = can(me, 'personas.link_bot')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -1164,10 +1193,6 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0
   // Re-load when mcpTokenVersion bumps (token generated/revoked in Settings while view is mounted)
   useEffect(() => { load() }, [load, mcpTokenVersion])
 
-  function showToast(msg, type = 'success') {
-    setToast({ msg, type })
-    setTimeout(() => setToast(null), 3500)
-  }
 
   async function deployTeam(team, roomId) {
     setDeployingIds(prev => new Set([...prev, team.id]))
@@ -1219,43 +1244,43 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0
     })
   }
 
+  async function linkPersonaBot(personaId, botName) {
+    await api(`/api/my/personas/${personaId}/bot`, { method: 'PATCH', body: JSON.stringify({ bot_name: botName || null }) })
+    setPersonas(prev => prev.map(p => p.id === personaId ? { ...p, bot_name: botName || null } : p))
+  }
+
   async function savePersona(data) {
-    if (personaPage?.persona) {
+    const isEdit = !!personaPage?.persona
+    if (isEdit) {
       await api(`/api/my/personas/${personaPage.persona.id}`, { method: 'PUT', body: JSON.stringify(data) })
     } else {
       await api('/api/my/personas', { method: 'POST', body: JSON.stringify(data) })
     }
+    showToast(isEdit ? `Agent "${data.name}" updated` : `Agent "${data.name}" created`)
     setPersonaPage(null)
     load()
   }
 
   async function saveTeamRoomId(teamId, roomId) {
+    // Optimistic local update
     setTeams(prev => prev.map(t => t.id === teamId ? { ...t, default_room_id: roomId } : t))
     try {
-      const team = teams.find(t => t.id === teamId)
-      if (team) {
-        // tasks_json from the DB is already a string — unwrap all stringify layers
-        // before sending so the PUT endpoint doesn't double-stringify it
-        let parsedTasks = []
-        try {
-          let v = JSON.parse(team.tasks_json || '[]')
-          let guard = 0
-          while (typeof v === 'string' && guard++ < 5) { try { v = JSON.parse(v) } catch { break } }
-          parsedTasks = Array.isArray(v) ? v : []
-        } catch { /* keep [] */ }
-        await api(`/api/my/teams/${teamId}`, { method: 'PUT', body: JSON.stringify({ ...team, tasks_json: parsedTasks, default_room_id: roomId }) })
-      }
+      // Use the dedicated PATCH endpoint so deploy-only (non-dev) pro users can
+      // select a room without needing the full teams.edit permission.
+      await api(`/api/my/teams/${teamId}/room`, { method: 'PATCH', body: JSON.stringify({ default_room_id: roomId }) })
     } catch { /* non-fatal — local state already updated */ }
   }
 
   async function saveTeam(data) {
+    const isEdit = !!teamPage?.team
     let teamId = teamPage?.team?.id
-    if (teamPage?.team) {
+    if (isEdit) {
       await api(`/api/my/teams/${teamPage.team.id}`, { method: 'PUT', body: JSON.stringify(data) })
     } else {
       const r = await api('/api/my/teams', { method: 'POST', body: JSON.stringify(data) })
       teamId = r.id
     }
+    showToast(isEdit ? `Team "${data.name}" updated` : `Team "${data.name}" created`)
     setTeamPage(null)
     load()
     return { id: teamId }
@@ -1265,7 +1290,8 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0
   if (error) return <ErrorBanner message={error} onRetry={load} />
 
   // ── Dedicated persona edit/new page ──────────────────────────────────────
-  if (personaPage !== null) {
+  // Guard: only devs can reach the edit/create form (non-dev pros never set personaPage)
+  if (personaPage !== null && canManagePersonas) {
     const isEditing = !!personaPage.persona
     return (
       <div className="space-y-6">
@@ -1296,7 +1322,8 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0
   }
 
   // ── Dedicated team edit/new page ──────────────────────────────────────────
-  if (teamPage !== null) {
+  // Guard: only devs can reach the edit/create form (non-dev pros never set teamPage)
+  if (teamPage !== null && canManageTeams) {
     const isEditing = !!teamPage.team
     return (
       <div className="space-y-6">
@@ -1319,7 +1346,7 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0
           team={teamPage.team}
           personas={personas}
           rooms={rooms}
-          isDev={isDev}
+          isDev={canManageTeams}
           onSave={saveTeam}
           onCancel={() => setTeamPage(null)}
         />
@@ -1327,57 +1354,52 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0
     )
   }
 
-  if (isBasic && !isDev) {
+  if (!canViewTeams) {
     return (
       <div className="bg-card border border-border rounded-2xl p-8 text-center space-y-3">
         <AlertCircle className="w-8 h-8 text-warning mx-auto" />
         <h3 className="text-sm font-semibold text-foreground">Pro tier required</h3>
-        <p className="text-xs text-muted-foreground">Upgrade to Pro to create and deploy agent teams. Browse available teams in the Marketplace.</p>
+        <p className="text-xs text-muted-foreground">Upgrade to Pro to deploy agent teams. Browse available teams in the Marketplace.</p>
       </div>
     )
   }
 
   return (
     <div className="space-y-8">
-      {/* Toast */}
-      {toast && (
-        <div className={`flex items-center gap-2 px-4 py-3 rounded-lg text-sm ${
-          toast.type === 'error'
-            ? 'bg-destructive/10 border border-destructive/30 text-destructive'
-            : 'bg-success/10 border border-success/30 text-success'
-        }`}>
-          {toast.type === 'error' ? <AlertCircle className="w-4 h-4 flex-shrink-0" /> : <Check className="w-4 h-4 flex-shrink-0" />}
-          <span className="flex-1">{toast.msg}</span>
-          <button onClick={() => setToast(null)} className="ml-2 opacity-60 hover:opacity-100 transition-opacity flex-shrink-0">
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      )}
-
       {/* ── Teams or Personas — controlled by activeSection prop ── */}
       {activeSection === 'teams' && <section className="space-y-4">
         <div className="flex items-center justify-between">
           <div>
             <h2 className="font-semibold text-foreground">Teams</h2>
-            <p className="text-xs text-muted-foreground mt-0.5">Group agents into a deployable team</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {canManageTeams ? 'Create and deploy agent teams' : 'Deploy your assigned agent teams'}
+            </p>
           </div>
-          <button
-            onClick={() => setTeamPage({ team: null })}
-            className="flex items-center gap-1.5 text-xs bg-primary text-primary-foreground px-3 py-1.5 rounded-md hover:opacity-80 transition-opacity"
-          >
-            <Plus className="w-3 h-3" /> New Team
-          </button>
+          {canManageTeams && (
+            <button
+              onClick={() => setTeamPage({ team: null })}
+              className="flex items-center gap-1.5 text-xs bg-primary text-primary-foreground px-3 py-1.5 rounded-md hover:bg-primary/90 transition-colors"
+            >
+              <Plus className="w-3 h-3" /> New Team
+            </button>
+          )}
         </div>
 
         {teams.length === 0 ? (
-          <EmptyState icon={Users} title="No teams yet" description="Create a team to group and deploy your integrated agents" />
+          <EmptyState
+            icon={Users}
+            title="No teams yet"
+            description={canManageTeams
+              ? 'Create a team to group and deploy your integrated agents'
+              : 'No teams have been set up for your account yet. Contact your administrator.'}
+          />
         ) : (
           <div className="space-y-3 stagger-children">
             {teams.map(team => (
               <IntegratedTeamCard
                 key={team.id}
                 team={team}
-                isDev={isDev}
+                canManage={canManageTeams}
                 bots={bots}
                 liveBots={liveBots}
                 rooms={rooms}
@@ -1386,8 +1408,8 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0
                 hasMcpToken={hasMcpToken}
                 onDeploy={(roomId) => deployTeam(team, roomId)}
                 onRoomChange={(roomId) => saveTeamRoomId(team.id, roomId)}
-                onEdit={() => setTeamPage({ team })}
-                onDelete={() => deleteTeam(team)}
+                onEdit={canManageTeams ? () => setTeamPage({ team }) : undefined}
+                onDelete={canManageTeams ? () => deleteTeam(team) : undefined}
               />
             ))}
           </div>
@@ -1398,18 +1420,28 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0
         <div className="flex items-center justify-between">
           <div>
             <h2 className="font-semibold text-foreground">Personas</h2>
-            <p className="text-xs text-muted-foreground mt-0.5">Individual hotel agent personas</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {canManagePersonas ? 'Individual hotel agent personas' : 'Your assigned hotel agent personas'}
+            </p>
           </div>
-          <button
-            onClick={() => setPersonaPage({ persona: null })}
-            className="flex items-center gap-1.5 text-xs bg-primary text-primary-foreground px-3 py-1.5 rounded-md hover:opacity-80 transition-opacity"
-          >
-            <Plus className="w-3 h-3" /> Add Persona
-          </button>
+          {canManagePersonas && (
+            <button
+              onClick={() => setPersonaPage({ persona: null })}
+              className="flex items-center gap-1.5 text-xs bg-primary text-primary-foreground px-3 py-1.5 rounded-md hover:bg-primary/90 transition-colors"
+            >
+              <Plus className="w-3 h-3" /> Add Persona
+            </button>
+          )}
         </div>
 
         {personas.length === 0 ? (
-          <EmptyState icon={Bot} title="No agents yet" description="Add your first hotel agent to get started" />
+          <EmptyState
+            icon={Bot}
+            title="No agents yet"
+            description={canManagePersonas
+              ? 'Add your first hotel agent to get started'
+              : 'No agent personas have been set up for your account yet. Contact your administrator.'}
+          />
         ) : (
           <div className="space-y-3">
             {personas.map(persona => (
@@ -1417,8 +1449,9 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0
                 key={persona.id}
                 persona={persona}
                 bots={bots}
-                onEdit={() => setPersonaPage({ persona })}
-                onDelete={() => deletePersona(persona)}
+                onEdit={canManagePersonas ? () => setPersonaPage({ persona }) : undefined}
+                onDelete={canManagePersonas ? () => deletePersona(persona) : undefined}
+                onLinkBot={canLinkBot ? linkPersonaBot : undefined}
               />
             ))}
           </div>
@@ -1463,7 +1496,7 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0
 
 // ── Integrated Team Card ───────────────────────────────────────────────────
 
-function IntegratedTeamCard({ team, isDev, bots = [], liveBots = [], rooms = [], deploying, hasApiKey = true, hasMcpToken = true, onDeploy, onRoomChange, onEdit, onDelete }) {
+function IntegratedTeamCard({ team, canManage = false, bots = [], liveBots = [], rooms = [], deploying, hasApiKey = true, hasMcpToken = true, onDeploy, onRoomChange, onEdit, onDelete }) {
   const [expanded, setExpanded] = useState(false)
   const [members, setMembers] = useState(team.members || null) // null = still loading
   const [selectedRoomId, setSelectedRoomId] = useState(team.default_room_id || rooms[0]?.id || null)
@@ -1547,12 +1580,16 @@ function IntegratedTeamCard({ team, isDev, bots = [], liveBots = [], rooms = [],
           <span className="text-xs text-muted-foreground flex-shrink-0">{team.member_count ?? (members || []).length} agent{(team.member_count ?? (members || []).length) !== 1 ? 's' : ''}</span>
           {expanded ? <ChevronUp className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" /> : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />}
         </button>
-        <button onClick={onEdit} className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex-shrink-0">
-          <Edit2 className="w-3.5 h-3.5" />
-        </button>
-        <button onClick={onDelete} className="p-1.5 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors flex-shrink-0">
-          <Trash2 className="w-3.5 h-3.5" />
-        </button>
+        {canManage && (
+          <>
+            <button onClick={onEdit} aria-label="Edit team" className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex-shrink-0">
+              <Edit2 className="w-3.5 h-3.5" />
+            </button>
+            <button onClick={onDelete} aria-label="Delete team" className="p-1.5 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors flex-shrink-0">
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </>
+        )}
         <button
           onClick={() => onDeploy(selectedRoomId)}
           disabled={deploying || blocked}
@@ -2069,47 +2106,348 @@ function IntegratedTeamForm({ team, personas, rooms = [], isDev, onSave, onCance
 
 // ── Persona Card ──────────────────────────────────────────────────────────
 
-function PersonaCard({ persona, bots = [], onEdit, onDelete }) {
-  const figure = persona.figure || bots.find(b => b.name === persona.bot_name)?.figure || null
+function PersonaCard({ persona, bots = [], onEdit, onDelete, onLinkBot }) {
+  const { showToast } = useToast()
+  const { catalog } = useSkillsCatalog()
+  const figure = persona.figure || bots.find(b => b.name === persona.bot_name)?.figure || ''
+
+  const [linking, setLinking] = useState(false)
+  const [selectedBot, setSelectedBot] = useState(persona.bot_name || '')
+  const [savingBot, setSavingBot] = useState(false)
+  const [skillDetail, setSkillDetail] = useState(null) // skill object to show in modal
+  useEscapeKey(() => setSkillDetail(null), !!skillDetail)
+
+  // Keep selectedBot in sync if persona.bot_name changes externally
+  useEffect(() => { setSelectedBot(persona.bot_name || '') }, [persona.bot_name])
+
+  // Resolve slugs to { slug, title } pairs so chips are clickable
+  const skills = useMemo(() => {
+    const slugs = parseSkillSlugs(persona.capabilities)
+    if (slugs.length > 0) {
+      return slugs.slice(0, 5).map(slug => {
+        const found = catalog.find(s => s.slug === slug)
+        return found ? { slug: found.slug, title: found.title } : { slug, title: slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) }
+      })
+    }
+    // Legacy text capabilities — no slug, not clickable
+    return parseSkills(persona.capabilities, catalog, { max: 5 }).map(title => ({ slug: null, title }))
+  }, [persona.capabilities, catalog])
+
+  async function handleLinkBot() {
+    setSavingBot(true)
+    try {
+      await onLinkBot(persona.id, selectedBot)
+      showToast(
+        selectedBot
+          ? `"${selectedBot}" linked to ${persona.name}`
+          : `Bot unlinked from ${persona.name}`,
+        'success'
+      )
+      setLinking(false)
+    } catch (e) {
+      showToast(e.message || 'Failed to link bot', 'error')
+    } finally {
+      setSavingBot(false)
+    }
+  }
+
   return (
-    <button
-      onClick={onEdit}
-      className="w-full rounded-xl border border-border bg-card card-lift text-left hover:border-primary/40 transition-colors"
-    >
-      <div className="flex items-center gap-4 p-4">
-        <HabboFigure figure={figure} size="xl" animate={true} />
-        <div className="flex-1 min-w-0">
-          <p className="font-semibold text-sm text-foreground">{persona.name}</p>
-          {persona.role && <p className="text-xs text-muted-foreground mt-0.5">{persona.role}</p>}
-          {(persona.prompt || persona.description) && (
-            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
-              {persona.prompt || persona.description}
-            </p>
+    <>
+    <div className="rounded-xl border border-border bg-card overflow-hidden">
+      <div className="flex gap-0">
+
+        {/* Figure column */}
+        <div className="flex flex-col items-center justify-start pt-4 px-4 pb-4 bg-secondary/30 border-r border-border flex-shrink-0 w-24">
+          <HabboFigure figure={figure} figureType={persona.figure_type} size="xl" animate={true} />
+          {persona.bot_name && !linking && (
+            <span className="mt-2 text-[10px] text-center text-info font-medium leading-tight truncate w-full text-center">
+              {persona.bot_name}
+            </span>
           )}
         </div>
-        {persona.bot_name && (
-          <span className="inline-flex items-center text-xs bg-info/10 text-info border border-info/20 px-2 py-0.5 rounded-full flex-shrink-0">
-            {persona.bot_name}
-          </span>
-        )}
-        <div className="flex gap-1 flex-shrink-0" onClick={e => e.stopPropagation()}>
-          <button
-            onClick={onEdit}
-            className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-            title="Edit agent"
-          >
-            <Edit2 className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={onDelete}
-            className="p-1.5 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
-            title="Delete agent"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
+
+        {/* Main content */}
+        <div className="flex-1 min-w-0 p-4 flex flex-col gap-2">
+
+          {/* Header row */}
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <p className="font-semibold text-sm text-foreground truncate">{persona.name}</p>
+              {persona.role && (
+                <span className="inline-flex items-center gap-1 text-[11px] bg-primary/10 text-primary border border-primary/20 rounded-full px-2 py-0.5 mt-1">
+                  {persona.role}
+                </span>
+              )}
+            </div>
+            {(onEdit || onDelete) && (
+              <div className="flex gap-1 flex-shrink-0">
+                {onEdit && (
+                  <button onClick={onEdit}
+                    className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                    title="Edit agent">
+                    <Edit2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
+                {onDelete && (
+                  <button onClick={onDelete}
+                    className="p-1.5 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                    title="Delete agent">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Description */}
+          {(persona.prompt || persona.description) && (
+            <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
+              {(persona.prompt || persona.description).replace(/^You are[^.]+\.\s*/i, '')}
+            </p>
+          )}
+
+          {/* Skills */}
+          {skills.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground/60 font-medium uppercase tracking-wider mr-0.5">
+                <Sparkles className="w-2.5 h-2.5" /> Skills
+              </span>
+              {skills.map((skill, i) => (
+                skill.slug ? (
+                  <button key={i} onClick={() => setSkillDetail(catalog.find(s => s.slug === skill.slug) || { slug: skill.slug, title: skill.title })}
+                    className="inline-flex items-center text-[11px] bg-secondary text-muted-foreground border border-border rounded-md px-2 py-0.5 max-w-[180px] truncate hover:border-primary/40 hover:text-foreground hover:bg-primary/5 transition-colors cursor-pointer"
+                    title={`View ${skill.title} skill`}>
+                    {skill.title}
+                  </button>
+                ) : (
+                  <span key={i}
+                    className="inline-flex items-center text-[11px] bg-secondary text-muted-foreground border border-border rounded-md px-2 py-0.5 max-w-[180px] truncate"
+                    title={skill.title}>
+                    {skill.title}
+                  </span>
+                )
+              ))}
+            </div>
+          )}
+
+          {/* Bot link footer — only shown when caller has personas.link_bot permission */}
+          <div className="mt-auto pt-2 border-t border-border flex items-center gap-2">
+            {onLinkBot && linking ? (
+              <>
+                <Bot className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+                <select
+                  value={selectedBot}
+                  onChange={e => setSelectedBot(e.target.value)}
+                  className="flex-1 h-7 text-xs bg-background border border-border rounded-md px-2 focus:outline-none focus:ring-1 focus:ring-primary/40 text-foreground"
+                  autoFocus
+                >
+                  <option value="">— No bot —</option>
+                  {bots.map(b => (
+                    <option key={b.id ?? b.name} value={b.name}>{b.name}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={handleLinkBot}
+                  disabled={savingBot}
+                  className="h-7 px-3 text-xs bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50 flex items-center gap-1 flex-shrink-0"
+                >
+                  {savingBot ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                  {savingBot ? 'Saving…' : 'Save'}
+                </button>
+                <button
+                  onClick={() => { setLinking(false); setSelectedBot(persona.bot_name || '') }}
+                  className="h-7 w-7 flex items-center justify-center border border-border rounded-md hover:bg-secondary transition-colors flex-shrink-0"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </>
+            ) : (
+              <>
+                {persona.bot_name ? (
+                  <span className="inline-flex items-center gap-1.5 text-xs bg-info/10 text-info border border-info/20 rounded-full px-2.5 py-0.5">
+                    <Bot className="w-3 h-3" /> {persona.bot_name}
+                  </span>
+                ) : (
+                  <span className="text-xs text-muted-foreground/50 italic">No bot linked</span>
+                )}
+                {onLinkBot && (
+                  <button
+                    onClick={() => setLinking(true)}
+                    className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground border border-border hover:border-primary/40 rounded-md px-2.5 py-1 transition-colors flex-shrink-0"
+                  >
+                    <LinkIcon className="w-3 h-3" />
+                    {persona.bot_name ? 'Change bot' : 'Link bot'}
+                  </button>
+                )}
+              </>
+            )}
+          </div>
         </div>
       </div>
-    </button>
+    </div>
+
+    {skillDetail && createPortal(
+      <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto"
+        onClick={e => { if (e.target === e.currentTarget) setSkillDetail(null) }}>
+        <div className="bg-background border border-border rounded-2xl shadow-xl w-full max-w-2xl my-8">
+          <div className="flex items-center justify-end px-5 pt-4">
+            <button onClick={() => setSkillDetail(null)} aria-label="Close skill detail"
+              className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="px-5 pb-6">
+            <SkillDetail skill={skillDetail} onBack={() => setSkillDetail(null)} />
+          </div>
+        </div>
+      </div>,
+      document.body
+    )}
+    </>
+  )
+}
+
+// ── Skill Browser (used inside PersonaEditor) ─────────────────────────────
+
+const CATEGORY_COLORS = {
+  hotel:         'bg-blue-500/10 text-blue-400 border-blue-500/20',
+  research:      'bg-violet-500/10 text-violet-400 border-violet-500/20',
+  coordination:  'bg-amber-500/10 text-amber-400 border-amber-500/20',
+  communication: 'bg-green-500/10 text-green-400 border-green-500/20',
+  general:       'bg-secondary text-muted-foreground border-border',
+}
+
+function SkillBrowser({ selectedSlugs, onChange }) {
+  const { catalog, loading } = useSkillsCatalog()
+  const [activeCategory, setActiveCategory] = useState('all')
+  const [expandedSlug, setExpandedSlug] = useState(null)
+
+  const categories = useMemo(() => {
+    const cats = [...new Set(catalog.map(s => s.category))].sort()
+    return ['all', ...cats]
+  }, [catalog])
+
+  const visible = activeCategory === 'all'
+    ? catalog
+    : catalog.filter(s => s.category === activeCategory)
+
+  function toggle(slug) {
+    onChange(
+      selectedSlugs.includes(slug)
+        ? selectedSlugs.filter(s => s !== slug)
+        : [...selectedSlugs, slug]
+    )
+  }
+
+  if (loading) return (
+    <div className="flex items-center gap-2 text-xs text-muted-foreground py-3">
+      <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading skills…
+    </div>
+  )
+
+  if (catalog.length === 0) return (
+    <div className="flex flex-col items-center gap-2 py-6 text-center">
+      <Zap className="w-6 h-6 text-muted-foreground/40" />
+      <p className="text-sm font-medium text-foreground">No skills available</p>
+      <p className="text-xs text-muted-foreground">Add skill files to the agents/skills/ folder to get started.</p>
+    </div>
+  )
+
+  return (
+    <div className="space-y-3">
+      {/* Category filter */}
+      <div className="flex flex-wrap gap-1.5">
+        {categories.map(cat => (
+          <button
+            key={cat}
+            onClick={() => setActiveCategory(cat)}
+            className={`text-[11px] px-2.5 py-1 rounded-full border capitalize transition-colors ${
+              activeCategory === cat
+                ? 'bg-primary text-primary-foreground border-primary'
+                : 'border-border text-muted-foreground hover:text-foreground hover:border-primary/40'
+            }`}
+          >
+            {cat}
+          </button>
+        ))}
+      </div>
+
+      {/* Skill cards */}
+      <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+        {visible.map(skill => {
+          const selected = selectedSlugs.includes(skill.slug)
+          const expanded = expandedSlug === skill.slug
+          const catColor = CATEGORY_COLORS[skill.category] || CATEGORY_COLORS.general
+          return (
+            <div
+              key={skill.slug}
+              onClick={() => toggle(skill.slug)}
+              className={`rounded-lg border transition-colors cursor-pointer ${
+                selected
+                  ? 'border-primary/40 bg-primary/5'
+                  : 'border-border bg-card hover:border-primary/20'
+              }`}
+            >
+              <div className="flex items-start gap-3 p-3">
+                {/* Select toggle */}
+                <button
+                  onClick={() => toggle(skill.slug)}
+                  className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 mt-0.5 border transition-colors ${
+                    selected
+                      ? 'bg-primary border-primary text-primary-foreground'
+                      : 'border-border hover:border-primary/60'
+                  }`}
+                >
+                  {selected && <Check className="w-3 h-3" />}
+                </button>
+
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-medium text-foreground">{skill.title}</span>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded border capitalize ${catColor}`}>
+                      {skill.category}
+                    </span>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
+                      skill.difficulty === 'beginner'
+                        ? 'border-success/20 bg-success/10 text-success'
+                        : 'border-warning/20 bg-warning/10 text-warning'
+                    }`}>
+                      {skill.difficulty}
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{skill.description}</p>
+
+                  {/* Expand body */}
+                  <button
+                    onClick={() => setExpandedSlug(expanded ? null : skill.slug)}
+                    className="text-[11px] text-primary hover:underline mt-1.5"
+                  >
+                    {expanded ? 'Hide instructions ↑' : 'Preview instructions ↓'}
+                  </button>
+                  {expanded && (
+                    <div className="mt-2 space-y-2">
+                      {skill.mcp_tools?.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1">
+                          <span className="text-[10px] text-muted-foreground/50">Actions:</span>
+                          {skill.mcp_tools.map(t => (
+                            <code key={t} className="text-[10px] bg-secondary border border-border rounded px-1.5 py-0.5 text-muted-foreground font-mono">
+                              {t}
+                            </code>
+                          ))}
+                        </div>
+                      )}
+                      <div className="p-2.5 rounded-md bg-background border border-border text-xs text-muted-foreground font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">
+                        {skill.body}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
   )
 }
 
@@ -2118,12 +2456,14 @@ function PersonaCard({ persona, bots = [], onEdit, onDelete }) {
 function PersonaEditor({ persona, bots, onSave, onCancel }) {
   const [name, setName] = useState(persona?.name || '')
   const [role, setRole] = useState(persona?.role || '')
-  const [capabilities, setCapabilities] = useState(persona?.capabilities || '')
+  // Skills stored as JSON array of slugs; parse existing value on load
+  const [skillSlugs, setSkillSlugs] = useState(() => parseSkillSlugs(persona?.capabilities || ''))
   const [prompt, setPrompt] = useState(persona?.prompt || persona?.description || '')
   const [botName, setBotName] = useState(persona?.bot_name || '')
   const [figure, setFigure] = useState(persona?.figure || '')
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState(null)
+  const [activeTab, setActiveTab] = useState('identity') // 'identity' | 'skills' | 'prompt'
 
   async function handleSave() {
     if (!name.trim()) { setFormError('Name is required'); return }
@@ -2133,7 +2473,7 @@ function PersonaEditor({ persona, bots, onSave, onCancel }) {
       await onSave({
         name: name.trim(),
         role: role.trim(),
-        capabilities: capabilities.trim(),
+        capabilities: JSON.stringify(skillSlugs), // stored as JSON slug array
         prompt: prompt.trim(),
         bot_name: botName,
         figure: figure.trim(),
@@ -2143,6 +2483,12 @@ function PersonaEditor({ persona, bots, onSave, onCancel }) {
       setSaving(false)
     }
   }
+
+  const EDITOR_TABS = [
+    { id: 'identity', label: 'Identity' },
+    { id: 'skills',   label: `Skills${skillSlugs.length > 0 ? ` (${skillSlugs.length})` : ''}` },
+    { id: 'prompt',   label: 'Prompt' },
+  ]
 
   return (
     <div className="space-y-4">
@@ -2154,97 +2500,139 @@ function PersonaEditor({ persona, bots, onSave, onCancel }) {
         </div>
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div className="space-y-1">
-          <label className="text-xs font-medium text-foreground">Name</label>
-          <input
-            value={name}
-            onChange={e => setName(e.target.value)}
-            placeholder="Agent name"
-            className="w-full text-sm bg-background border border-border rounded-md px-3 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
-          />
-        </div>
-        <div className="space-y-1">
-          <label className="text-xs font-medium text-foreground">Job Title</label>
-          <input
-            value={role}
-            onChange={e => setRole(e.target.value)}
-            placeholder="e.g. Senior backend developer"
-            className="w-full text-sm bg-background border border-border rounded-md px-3 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
-          />
-        </div>
-      </div>
-
-      <div className="space-y-1">
-        <label className="text-xs font-medium text-foreground">
-          Capabilities
-          <span className="ml-1.5 text-muted-foreground font-normal">— what work this agent can do (used by orchestrator to assign tasks)</span>
-        </label>
-        <textarea
-          value={capabilities}
-          onChange={e => setCapabilities(e.target.value)}
-          placeholder={'- Backend API development (Node.js, TypeScript)\n- Database schema design and SQL queries\n- Code review and architecture decisions\n- Writing and running tests'}
-          rows={5}
-          className="w-full text-sm bg-background border border-border rounded-md px-3 py-2.5 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 font-mono resize-y"
-        />
-        <p className="text-xs text-muted-foreground/60">Use bullet points. The orchestrator reads this to decide who gets which tasks.</p>
-      </div>
-
-      <div className="space-y-1">
-        <label className="text-xs font-medium text-foreground">
-          Personality &amp; Hotel Setup
-          <span className="ml-1.5 text-muted-foreground font-normal">— character, behaviour, bot setup instructions</span>
-        </label>
-        <MarkdownEditor
-          value={prompt}
-          onChange={setPrompt}
-          placeholder="You are [Name], a ... at The Pixel Office. Personality: ...&#10;&#10;Setup:&#10;1. Call list_bots to find your bot&#10;2. Deploy to room {{ROOM_ID}}&#10;3. Use talk_bot to narrate your work"
-          rows={14}
-        />
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div className="space-y-1">
-          <label className="text-xs font-medium text-foreground">Bot</label>
-          <select
-            value={botName}
-            onChange={e => setBotName(e.target.value)}
-            className="w-full text-sm bg-background border border-border rounded-md px-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+      {/* Section tabs */}
+      <div className="flex items-center gap-1 border-b border-border">
+        {EDITOR_TABS.map(t => (
+          <button
+            key={t.id}
+            onClick={() => setActiveTab(t.id)}
+            className={`px-3 py-2 text-xs font-medium border-b-2 -mb-px transition-colors ${
+              activeTab === t.id
+                ? 'border-primary text-foreground'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
           >
-            <option value="">Select bot…</option>
-            {bots.map(b => (
-              <option key={b.id ?? b.name} value={b.name}>{b.name}</option>
-            ))}
-          </select>
-        </div>
-        <div className="space-y-1">
-          <label className="text-xs font-medium text-foreground">Habbo Figure</label>
-          <input
-            value={figure}
-            onChange={e => setFigure(e.target.value)}
-            placeholder="hr-115-42.hd-180-1.ch-…"
-            className="w-full text-sm bg-background border border-border rounded-md px-3 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 font-mono"
-          />
-        </div>
+            {t.label}
+          </button>
+        ))}
       </div>
 
-      {/* Preview figure */}
-      {figure && (
-        <div className="flex items-center gap-3">
-          <HabboFigure figure={figure} size="md" animate={true} />
-          <p className="text-xs text-muted-foreground">Figure preview</p>
+      {/* ── Identity tab ── */}
+      {activeTab === 'identity' && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-foreground">Name</label>
+              <input
+                value={name}
+                onChange={e => setName(e.target.value)}
+                placeholder="Agent name"
+                className="w-full text-sm bg-background border border-border rounded-md px-3 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-foreground">Job Title</label>
+              <input
+                value={role}
+                onChange={e => setRole(e.target.value)}
+                placeholder="e.g. Sprint Coordinator"
+                className="w-full text-sm bg-background border border-border rounded-md px-3 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-foreground">Bot</label>
+              <select
+                value={botName}
+                onChange={e => setBotName(e.target.value)}
+                className="w-full text-sm bg-background border border-border rounded-md px-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+              >
+                <option value="">Select bot…</option>
+                {bots.map(b => (
+                  <option key={b.id ?? b.name} value={b.name}>{b.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-foreground">Habbo Figure</label>
+              <input
+                value={figure}
+                onChange={e => setFigure(e.target.value)}
+                placeholder="hr-115-42.hd-180-1.ch-…"
+                className="w-full text-sm bg-background border border-border rounded-md px-3 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 font-mono"
+              />
+            </div>
+          </div>
+
+          {figure && (
+            <div className="flex items-center gap-3">
+              <HabboFigure figure={figure} size="md" animate={true} />
+              <p className="text-xs text-muted-foreground">Figure preview</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Skills tab ── */}
+      {activeTab === 'skills' && (
+        <div className="space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-xs text-muted-foreground">
+                Select the skills this agent will use to complete tasks. Skill instructions are automatically injected into the agent's prompt when deployed.
+              </p>
+            </div>
+          </div>
+
+          {/* Selected skill chips */}
+          {skillSlugs.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 p-3 bg-secondary/50 rounded-lg border border-border">
+              <span className="text-[10px] text-muted-foreground/60 font-medium uppercase tracking-wider self-center mr-1">Active:</span>
+              {skillSlugs.map(slug => (
+                <span key={slug}
+                  className="inline-flex items-center gap-1 text-xs bg-primary/10 text-primary border border-primary/20 rounded-full px-2.5 py-0.5">
+                  {slug.replace(/-/g, ' ')}
+                  <button onClick={() => setSkillSlugs(prev => prev.filter(s => s !== slug))}
+                    className="hover:text-destructive ml-0.5">
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          <SkillBrowser selectedSlugs={skillSlugs} onChange={setSkillSlugs} />
+        </div>
+      )}
+
+      {/* ── Prompt tab ── */}
+      {activeTab === 'prompt' && (
+        <div className="space-y-2">
+          <div>
+            <p className="text-xs text-muted-foreground">
+              Define the agent's personality, voice, and base behaviour. Skill instructions are appended automatically — you don't need to repeat them here.
+            </p>
+          </div>
+          <MarkdownEditor
+            value={prompt}
+            onChange={setPrompt}
+            placeholder="You are [Name], a ... at The Pixel Office. Personality: ...&#10;&#10;Tone: Direct, professional, max 120 chars per talk_bot message."
+            rows={16}
+          />
         </div>
       )}
 
       {/* Actions */}
-      <div className="flex gap-2 pt-1">
+      <div className="flex gap-2 pt-1 border-t border-border">
         <button
           onClick={handleSave}
           disabled={saving}
           className="flex items-center gap-1.5 text-xs bg-primary text-primary-foreground px-4 py-2 rounded-md hover:bg-primary/90 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
         >
           {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
-          {saving ? 'Saving…' : 'Save'}
+          {saving ? 'Saving…' : 'Save agent'}
         </button>
         <button
           onClick={onCancel}
@@ -2252,6 +2640,11 @@ function PersonaEditor({ persona, bots, onSave, onCancel }) {
         >
           Cancel
         </button>
+        {skillSlugs.length > 0 && (
+          <span className="ml-auto self-center text-xs text-muted-foreground">
+            {skillSlugs.length} skill{skillSlugs.length !== 1 ? 's' : ''} selected
+          </span>
+        )}
       </div>
     </div>
   )
