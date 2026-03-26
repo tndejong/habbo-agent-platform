@@ -12,7 +12,7 @@ import { useSkillsCatalog } from '../utils/useSkillsCatalog'
 import { useEscapeKey } from '../utils/useEscapeKey'
 import {
   Bot, Edit2, Trash2, Plus, X, Check,
-  Loader2, AlertCircle, AlertTriangle, Users, Zap, ChevronDown, ChevronUp, ChevronLeft, Square,
+  Loader2, AlertCircle, AlertTriangle, Users, Zap, ChevronLeft, Square,
   Shield, Wifi, WifiOff, Key, ServerCog, Terminal, RefreshCw, User, Eye, EyeOff,
   Phone, Copy, Sparkles, LinkIcon,
   Bold, Italic, Code, Heading2, List, ListOrdered, Link, Minus,
@@ -1394,7 +1394,7 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0
               : 'No teams have been set up for your account yet. Contact your administrator.'}
           />
         ) : (
-          <div className="space-y-3 stagger-children">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 stagger-children">
             {teams.map(team => (
               <IntegratedTeamCard
                 key={team.id}
@@ -1497,11 +1497,9 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0
 // ── Integrated Team Card ───────────────────────────────────────────────────
 
 function IntegratedTeamCard({ team, canManage = false, bots = [], liveBots = [], rooms = [], deploying, hasApiKey = true, hasMcpToken = true, onDeploy, onRoomChange, onEdit, onDelete }) {
-  const [expanded, setExpanded] = useState(false)
-  const [members, setMembers] = useState(team.members || null) // null = still loading
+  const [members, setMembers] = useState(team.members || null)
   const [selectedRoomId, setSelectedRoomId] = useState(team.default_room_id || rooms[0]?.id || null)
 
-  // Keep in sync if rooms load after mount
   useEffect(() => {
     if (!selectedRoomId && rooms.length > 0) setSelectedRoomId(team.default_room_id || rooms[0].id)
   }, [rooms, team.default_room_id])
@@ -1511,12 +1509,8 @@ function IntegratedTeamCard({ team, canManage = false, bots = [], liveBots = [],
     onRoomChange?.(roomId)
   }
 
-  // Load members: list endpoint usually includes them; otherwise fetch single team (marketplace vs user-scoped)
   useEffect(() => {
-    if (team.members) {
-      setMembers(team.members)
-      return
-    }
+    if (team.members) { setMembers(team.members); return }
     api(`/api/my/teams/${team.id}`)
       .then(d => setMembers(d.team?.members || []))
       .catch(() => setMembers([]))
@@ -1524,164 +1518,144 @@ function IntegratedTeamCard({ team, canManage = false, bots = [], liveBots = [],
 
   const memberBotNames = useMemo(() => (members || []).map(m => m.bot_name).filter(Boolean), [members])
 
-  // Compute room conflict: any bot already assigned to a DIFFERENT room than selected
-  // Uses portal DB bots (reliable) not MCP liveBots (may miss DB-created bots)
   const roomConflict = useMemo(() => {
     if (members === null || !selectedRoomId || memberBotNames.length === 0) return null
     const conflicts = memberBotNames.flatMap(botName => {
       const bot = bots.find(b => b.name?.toLowerCase() === botName.toLowerCase())
-      if (bot && bot.room_id > 0 && bot.room_id !== selectedRoomId) {
-        return [{ name: botName, room_id: bot.room_id }]
-      }
-      return []
+      return (bot && bot.room_id > 0 && bot.room_id !== selectedRoomId)
+        ? [{ name: botName, room_id: bot.room_id }] : []
     })
     if (conflicts.length === 0) return null
-    const conflictRoom = conflicts[0].room_id
-    const names = conflicts.map(c => c.name).join(', ')
-    return `${names} ${conflicts.length === 1 ? 'is' : 'are'} active in room ${conflictRoom} — team can't start in room ${selectedRoomId}`
+    return `${conflicts.map(c => c.name).join(', ')} ${conflicts.length === 1 ? 'is' : 'are'} active in room ${conflicts[0].room_id}`
   }, [members, memberBotNames, bots, selectedRoomId])
 
-  // Unlinked: only block when members have loaded and some have no bot linked
-  const hasUnlinked = useMemo(() => {
-    if (members === null) return false
-    return members.some(m => !m.bot_name?.trim())
-  }, [members])
-
+  const hasUnlinked = useMemo(() => members !== null && members.some(m => !m.bot_name?.trim()), [members])
   const noKey = !hasApiKey
   const noMcpToken = !hasMcpToken
   const blocked = !!roomConflict || hasUnlinked || noKey || noMcpToken
 
+  const memberCount = team.member_count ?? (members || []).length
+
   return (
-    <div className={`rounded-xl border bg-card overflow-hidden card-lift ${roomConflict ? 'border-warning/40' : 'border-border'}`}>
-      {/* Room conflict warning */}
-      {roomConflict && (
+    <div className={`rounded-xl border bg-card overflow-hidden card-lift flex flex-col ${roomConflict ? 'border-warning/40' : 'border-border'}`}>
+
+      {/* Status banner */}
+      {(roomConflict || hasUnlinked || noKey || noMcpToken) && (
         <div className="flex items-center gap-2 px-4 py-2 bg-warning/10 border-b border-warning/20 text-xs text-warning">
           <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
-          {roomConflict}
+          {roomConflict
+            ? `${roomConflict} — can't deploy to room ${selectedRoomId}`
+            : hasUnlinked ? 'Some agents are missing a bot link'
+            : noKey ? 'Add an Anthropic API key in Settings'
+            : 'Generate an MCP token in Settings → MCP Tokens'}
         </div>
       )}
 
-      {/* Header row */}
-      <div className="flex items-center gap-3 p-4">
-        {/* Clickable left area — toggles member list */}
-        <button
-          onClick={() => setExpanded(e => !e)}
-          className="flex items-center gap-3 flex-1 min-w-0 text-left hover:opacity-80 transition-opacity"
-        >
-          <div className="w-8 h-8 rounded-lg bg-secondary flex items-center justify-center flex-shrink-0">
-            <Users className="w-4 h-4 text-foreground" />
+      {/* Card body */}
+      <div className="p-4 flex flex-col gap-4 flex-1">
+
+        {/* Header */}
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center flex-shrink-0">
+            <Users className="w-5 h-5 text-primary" />
           </div>
           <div className="flex-1 min-w-0">
-            <p className="font-semibold text-sm text-foreground">{team.name}</p>
+            <p className="font-semibold text-sm text-foreground leading-tight">{team.name}</p>
             {team.description && (
-              <p className="text-xs text-muted-foreground mt-0.5 truncate">{team.description}</p>
+              <p className="text-xs text-muted-foreground mt-1 line-clamp-2 leading-relaxed">{team.description}</p>
             )}
           </div>
-          <span className="text-xs text-muted-foreground flex-shrink-0">{team.member_count ?? (members || []).length} agent{(team.member_count ?? (members || []).length) !== 1 ? 's' : ''}</span>
-          {expanded ? <ChevronUp className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" /> : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />}
-        </button>
-        {canManage && (
-          <>
-            <button onClick={onEdit} aria-label="Edit team" className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex-shrink-0">
-              <Edit2 className="w-3.5 h-3.5" />
-            </button>
-            <button onClick={onDelete} aria-label="Delete team" className="p-1.5 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors flex-shrink-0">
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
-          </>
-        )}
-        <button
-          onClick={() => onDeploy(selectedRoomId)}
-          disabled={deploying || blocked}
-          title={noKey ? 'Add an Anthropic API key in Settings to deploy' : noMcpToken ? 'Generate an MCP token in Settings → MCP Tokens to deploy' : roomConflict || undefined}
-          className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition-colors flex-shrink-0 ${
-            blocked
-              ? 'bg-warning/20 text-warning border border-warning/30 cursor-not-allowed'
-              : 'bg-primary text-primary-foreground hover:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed'
-          }`}
-        >
-          {deploying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : blocked ? <AlertTriangle className="w-3.5 h-3.5" /> : <Zap className="w-3.5 h-3.5" />}
-          {deploying ? 'Deploying…' : noKey ? 'No API Key' : noMcpToken ? 'No MCP Token' : blocked ? 'Blocked' : 'Deploy'}
-        </button>
-      </div>
-
-      {/* Room selector — always visible, saves default_room_id on change */}
-      <div className="flex items-center gap-2 px-4 pb-3">
-        <span className="text-xs text-muted-foreground flex-shrink-0">Room</span>
-        {rooms.length > 0 ? (
-          <select
-            value={selectedRoomId ?? ''}
-            onChange={e => handleRoomChange(Number(e.target.value))}
-            className="flex-1 bg-background border border-border rounded-md px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
-          >
-            {rooms.map(r => (
-              <option key={r.id} value={r.id}>#{r.id} — {r.name}</option>
-            ))}
-          </select>
-        ) : (
-          <input
-            type="number"
-            min="1"
-            value={selectedRoomId ?? ''}
-            onChange={e => handleRoomChange(Number(e.target.value))}
-            placeholder="Room ID"
-            className="w-28 bg-background border border-border rounded-md px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
-          />
-        )}
-      </div>
-
-      {/* Expanded members */}
-      {expanded && (
-        <IntegratedTeamMembers members={members} bots={bots} liveBots={liveBots} selectedRoomId={selectedRoomId} />
-      )}
-    </div>
-  )
-}
-
-function IntegratedTeamMembers({ members, bots = [], liveBots = [], selectedRoomId }) {
-  if (members === null) {
-    return (
-      <div className="border-t border-border px-4 py-3 flex items-center gap-2 text-xs text-muted-foreground">
-        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading members…
-      </div>
-    )
-  }
-
-  if (!members?.length) {
-    return (
-      <div className="border-t border-border px-4 py-3 text-xs text-muted-foreground">
-        No members assigned yet.
-      </div>
-    )
-  }
-
-  return (
-    <div className="border-t border-border divide-y divide-border">
-      {members.map(m => {
-        const figure = bots.find(b => b.name === m.bot_name)?.figure || null
-        const liveBot = bots.find(b => b.name?.toLowerCase() === m.bot_name?.toLowerCase())
-        const inWrongRoom = liveBot && liveBot.room_id > 0 && selectedRoomId && liveBot.room_id !== selectedRoomId
-        const noBot = !m.bot_name?.trim()
-        return (
-          <div key={m.id ?? `${m.persona_id}-${m.name}`} className="flex items-center gap-3 px-4 py-2.5">
-            <HabboFigure figure={figure} size="sm" animate={true} />
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-foreground">{m.name}</p>
-              {m.role && <p className="text-xs text-muted-foreground">{m.role}</p>}
+          {canManage && (
+            <div className="flex items-center gap-0.5 flex-shrink-0">
+              <button onClick={onEdit} aria-label="Edit team"
+                className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
+                <Edit2 className="w-3.5 h-3.5" />
+              </button>
+              <button onClick={onDelete} aria-label="Delete team"
+                className="p-1.5 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors">
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
             </div>
-            {noBot && (
-              <span className="text-xs bg-destructive/10 text-destructive border border-destructive/20 px-2 py-0.5 rounded-full flex-shrink-0">
-                no bot linked
+          )}
+        </div>
+
+        {/* Members strip */}
+        <div className="flex-1">
+          {members === null ? (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading agents…
+            </div>
+          ) : members.length === 0 ? (
+            <p className="text-xs text-muted-foreground italic">No agents assigned yet</p>
+          ) : (
+            <div className="flex items-end gap-3 flex-wrap">
+              {members.map(m => {
+                const figure = bots.find(b => b.name === m.bot_name)?.figure || null
+                const liveBot = bots.find(b => b.name?.toLowerCase() === m.bot_name?.toLowerCase())
+                const inWrongRoom = liveBot && liveBot.room_id > 0 && selectedRoomId && liveBot.room_id !== selectedRoomId
+                const noBot = !m.bot_name?.trim()
+                return (
+                  <div key={m.id ?? `${m.persona_id}-${m.name}`} className="flex flex-col items-center gap-1 group/member">
+                    <div className={`relative rounded-lg overflow-hidden border ${noBot ? 'border-destructive/40 bg-destructive/5' : inWrongRoom ? 'border-warning/40 bg-warning/5' : 'border-border bg-secondary/30'}`}>
+                      <HabboFigure figure={figure} size="sm" animate={true} />
+                      {(noBot || inWrongRoom) && (
+                        <div className="absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full flex items-center justify-center bg-background border border-border">
+                          <AlertTriangle className="w-2 h-2 text-warning" />
+                        </div>
+                      )}
+                    </div>
+                    <span className="text-[10px] text-muted-foreground text-center leading-tight max-w-[52px] truncate">{m.name}</span>
+                    {m.role && <span className="text-[9px] text-muted-foreground/60 text-center leading-tight max-w-[52px] truncate">{m.role}</span>}
+                  </div>
+                )
+              })}
+              <span className="text-[10px] text-muted-foreground/60 self-center ml-auto">
+                {memberCount} agent{memberCount !== 1 ? 's' : ''}
               </span>
-            )}
-            {m.bot_name && (
-              <span className={`text-xs px-2 py-0.5 rounded-full flex-shrink-0 border ${inWrongRoom ? 'bg-warning/10 text-warning border-warning/20' : 'bg-info/10 text-info border-info/20'}`}>
-                {inWrongRoom ? `⚠ ${m.bot_name} (room ${liveBot.room_id})` : m.bot_name}
-              </span>
+            </div>
+          )}
+        </div>
+
+        {/* Footer: room + deploy */}
+        <div className="flex items-center gap-2 pt-3 border-t border-border">
+          <div className="flex items-center gap-1.5 flex-1 min-w-0">
+            <span className="text-xs text-muted-foreground flex-shrink-0">Room</span>
+            {rooms.length > 0 ? (
+              <select
+                value={selectedRoomId ?? ''}
+                onChange={e => handleRoomChange(Number(e.target.value))}
+                className="flex-1 min-w-0 bg-background border border-border rounded-md px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+              >
+                {rooms.map(r => <option key={r.id} value={r.id}>#{r.id} — {r.name}</option>)}
+              </select>
+            ) : (
+              <input
+                type="number" min="1"
+                value={selectedRoomId ?? ''}
+                onChange={e => handleRoomChange(Number(e.target.value))}
+                placeholder="Room ID"
+                className="w-24 bg-background border border-border rounded-md px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+              />
             )}
           </div>
-        )
-      })}
+          <button
+            onClick={() => onDeploy(selectedRoomId)}
+            disabled={deploying || blocked}
+            title={noKey ? 'Add an Anthropic API key in Settings' : noMcpToken ? 'Generate an MCP token in Settings → MCP Tokens' : roomConflict || undefined}
+            className={`flex items-center gap-1.5 text-xs px-4 py-1.5 rounded-md font-medium transition-colors flex-shrink-0 ${
+              blocked
+                ? 'bg-warning/20 text-warning border border-warning/30 cursor-not-allowed'
+                : 'bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed'
+            }`}
+          >
+            {deploying
+              ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Deploying…</>
+              : blocked
+                ? <><AlertTriangle className="w-3.5 h-3.5" /> Blocked</>
+                : <><Zap className="w-3.5 h-3.5" /> Deploy</>}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
