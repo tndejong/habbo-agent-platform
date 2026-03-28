@@ -193,6 +193,15 @@ jobs:
           tags: ${{ steps.meta_agent_portal.outputs.tags }}
           labels: ${{ steps.meta_agent_portal.outputs.labels }}
 
+      - name: Trigger Portainer redeploy
+        if: success()
+        run: |
+          HTTP=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${{ secrets.PORTAINER_DEPLOY_WEBHOOK_URL }}")
+          echo "Portainer webhook HTTP $HTTP"
+          if [ "$HTTP" != "200" ] && [ "$HTTP" != "204" ]; then
+            echo "::warning::Portainer webhook returned HTTP $HTTP"
+          fi
+
       - name: Notify Discord (success)
         if: success()
         run: |
