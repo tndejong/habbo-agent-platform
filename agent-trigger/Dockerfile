@@ -1,7 +1,7 @@
 FROM oven/bun:1.2-alpine
 
-# Install Node.js + npm for claude CLI
-RUN apk add --no-cache nodejs npm bash
+# Install Node.js + npm for claude CLI, Python 3 for agent scripting
+RUN apk add --no-cache nodejs npm bash python3 py3-pip
 
 # Install claude CLI globally
 RUN npm install -g @anthropic-ai/claude-code

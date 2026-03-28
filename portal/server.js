@@ -670,6 +670,26 @@ When sending emails: address each person by first name, keep the message under 5
       CONSTRAINT fk_puf_user FOREIGN KEY (portal_user_id) REFERENCES portal_users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS team_run_reports (
+      id INT NOT NULL AUTO_INCREMENT,
+      room_id INT NOT NULL,
+      team_name VARCHAR(128) NOT NULL DEFAULT '',
+      triggered_by VARCHAR(64) NOT NULL DEFAULT '',
+      portal_user_id INT NOT NULL DEFAULT 0,
+      report_md MEDIUMTEXT NOT NULL DEFAULT '',
+      cost_usd DECIMAL(10,6) NOT NULL DEFAULT 0,
+      input_tokens INT NOT NULL DEFAULT 0,
+      output_tokens INT NOT NULL DEFAULT 0,
+      started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_trr_room (room_id),
+      KEY idx_trr_user (portal_user_id),
+      KEY idx_trr_created (created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
 }
 
 function sha256(input) {
@@ -934,7 +954,8 @@ async function ensureAgentSeedData() {
 
   const seedTeam = (name, category, description, orchestratorPrompt, executionMode, tasksJson) =>
     db.execute(
-      'INSERT IGNORE INTO agent_teams (name, category, description, orchestrator_prompt, execution_mode, tasks_json) VALUES (?,?,?,?,?,?)',
+      `INSERT INTO agent_teams (name, category, description, orchestrator_prompt, execution_mode, tasks_json) VALUES (?,?,?,?,?,?)
+       ON DUPLICATE KEY UPDATE orchestrator_prompt = VALUES(orchestrator_prompt)`,
       [name, category, description, orchestratorPrompt, executionMode, tasksJson]
     );
 
@@ -949,11 +970,12 @@ async function ensureAgentSeedData() {
   const ORCHESTRATOR = `You are the orchestrator for the {{TEAM_NAME}} in Habbo Hotel room {{ROOM_ID}}.
 Triggered by: {{TRIGGERED_BY}}
 
+{{SESSION_GOAL}}
 {{TASKS}}
 
 {{PERSONAS}}
 
-Work through the tasks above in order. Spawn each team member as a subagent using the Agent tool. Wait for each task to complete before starting the next. Do not use any other coordination or messaging tools.`;
+Work through the goal or tasks above. Spawn each team member as a subagent using the Agent tool. Wait for each to complete before starting the next. Do not use any other coordination or messaging tools.`;
 
   // ── Waitlist Team (original seed, kept idempotent) ────────────────────────
   const SANDER_SKILLS = JSON.stringify(['hotel-setup', 'hotel-narrator', 'notion-reader', 'task-coordinator']);
@@ -1636,7 +1658,7 @@ app.post('/api/mcp/tokens', authRequired, async (req, res) => {
     return res.status(403).json({ error: 'MCP is available on Pro tier only' });
   }
 
-  const label = String(req.body?.label || '').trim().slice(0, 64);
+  const label = String(req.body?.label || '').trim().slice(0, 64) || 'Default token';
   const ttlDays = Number.parseInt(req.body?.ttl_days || PORTAL_MCP_TOKEN_TTL_DAYS, 10);
   const safeTtlDays = Number.isFinite(ttlDays) ? Math.max(1, Math.min(3650, ttlDays)) : PORTAL_MCP_TOKEN_TTL_DAYS;
   const token = createMcpToken();
@@ -2812,23 +2834,15 @@ app.post('/api/agents/packs/:id/trigger', authRequired, async (req, res) => {
       return res.status(400).json({ error: 'Pack has no role assignments. Edit the pack to assign roles.' });
     }
 
-    const r = await fetch(`${AGENT_TRIGGER_URL}/trigger`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Internal-Secret': PORTAL_INTERNAL_SECRET,
-      },
-      body: JSON.stringify({
-        pack_id: Number(req.params.id),
-        pack_source_url: pack.pack_source_url,
-        role_assignments: roleAssignments,
-        room_id: pack.room_id,
-        triggered_by: req.user.username,
-        portal_user_id: (await getPortalUserByHabboUserId(req.user.habbo_user_id))?.id,
-      })
+    const { ok, data } = await forwardToAgentTrigger({
+      pack_id: Number(req.params.id),
+      pack_source_url: pack.pack_source_url,
+      role_assignments: roleAssignments,
+      room_id: pack.room_id,
+      triggered_by: req.user.username,
+      portal_user_id: (await getPortalUserByHabboUserId(req.user.habbo_user_id))?.id,
     });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) return res.status(502).json({ error: data.error || 'Trigger failed' });
+    if (!ok) return res.status(502).json({ error: data.error || 'Trigger failed' });
     res.json({ ok: true, ...data });
   } catch (err) { res.status(502).json({ error: 'Agent trigger unavailable: ' + err.message }); }
 });
@@ -2953,23 +2967,15 @@ app.post('/api/agents/teams/:id/trigger', authRequired, permRequired('marketplac
     // Always look up portal_user_id from DB — don't rely on JWT (old sessions won't have it)
     const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
 
-    const r = await fetch(`${AGENT_TRIGGER_URL}/trigger`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Internal-Secret': PORTAL_INTERNAL_SECRET,
-      },
-      body: JSON.stringify({
-        team_id: Number(req.params.id),
-        flow_id: flow_id ? Number(flow_id) : null,
-        room_id: Number(room_id) || 50,
-        triggered_by: req.user.username,
-        portal_url: process.env.PORTAL_PUBLIC_URL || `http://agent-portal:3000`,
-        portal_user_id: portalUser?.id,
-      })
+    const { ok, data } = await forwardToAgentTrigger({
+      team_id: Number(req.params.id),
+      flow_id: flow_id ? Number(flow_id) : null,
+      room_id: Number(room_id) || 50,
+      triggered_by: req.user.username,
+      portal_url: process.env.PORTAL_PUBLIC_URL || `http://agent-portal:3000`,
+      portal_user_id: portalUser?.id,
     });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) return res.status(502).json({ error: data.error || 'Trigger failed' });
+    if (!ok) return res.status(502).json({ error: data.error || 'Trigger failed' });
     res.json({ ok: true, ...data });
   } catch (err) { res.status(502).json({ error: 'Agent trigger unavailable: ' + err.message }); }
 });
@@ -3348,6 +3354,19 @@ function detectRequiredIntegrations(tasksJson, members, orchestratorPrompt) {
     .map(([name]) => name);
 }
 
+async function forwardToAgentTrigger(payload) {
+  const r = await fetch(`${AGENT_TRIGGER_URL}/trigger`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Internal-Secret': PORTAL_INTERNAL_SECRET,
+    },
+    body: JSON.stringify(payload),
+  });
+  const data = await r.json().catch(() => ({}));
+  return { ok: r.ok, status: r.status, data };
+}
+
 app.post('/api/my/teams/:id/trigger', authRequired, permRequired('teams.deploy'), async (req, res) => {
   try {
     const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
@@ -3411,10 +3430,26 @@ app.post('/api/my/teams/:id/trigger', authRequired, permRequired('teams.deploy')
       return res.status(400).json({ error: 'No active MCP token found. Go to Settings → MCP Tokens and generate one before deploying.' });
     }
 
+    // Validate session_goal fields (portal-side gate; agent-trigger re-validates)
+    const taskMode = req.body.task_mode || 'team_tasks';
+    let sessionGoal = '';
+    if (taskMode === 'session_goal') {
+      sessionGoal = (req.body.session_goal || '').trim();
+      if (sessionGoal.length < 10) {
+        return res.status(400).json({ error: 'session_goal must be at least 10 characters' });
+      }
+      if (sessionGoal.length > 4000) {
+        return res.status(400).json({ error: 'session_goal must be at most 4000 characters' });
+      }
+    }
+
     // Pre-flight: detect which integrations the team tasks/capabilities reference and
     // verify the user has them configured. An integration is "configured" when it has
     // either an encrypted API key (HTTP) or a stdio config (stdio) — not just a name row.
-    const required = detectRequiredIntegrations(team.tasks_json, members, team.orchestrator_prompt);
+    // In session_goal mode skip tasks_json — the goal overrides preset tasks so stale
+    // task content must not trigger false "integration required" errors.
+    const tasksJsonForCheck = taskMode === 'session_goal' ? '' : (team.tasks_json || '');
+    const required = detectRequiredIntegrations(tasksJsonForCheck, members, team.orchestrator_prompt);
     if (required.length > 0) {
       const [userIntegrations] = await db.execute(
         `SELECT name FROM portal_user_integrations
@@ -3432,23 +3467,23 @@ app.post('/api/my/teams/:id/trigger', authRequired, permRequired('teams.deploy')
       }
     }
 
-    // Forward to agent-trigger — build a compatible config
-    const r = await fetch(`${AGENT_TRIGGER_URL}/trigger`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Internal-Secret': PORTAL_INTERNAL_SECRET },
-      body: JSON.stringify({
-        team_id: team.id,
-        user_team: true,
-        room_id: resolvedRoomId,
-        triggered_by: req.user.username,
-        portal_url: process.env.PORTAL_PUBLIC_URL || `http://agent-portal:3000`,
-        portal_user_id: portalUser.id,
-      })
-    });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) return res.status(502).json({ error: data.error || 'Trigger failed' });
+    // Forward to agent-trigger — build a compatible payload
+    const triggerPayload = {
+      team_id: team.id,
+      user_team: true,
+      room_id: resolvedRoomId,
+      triggered_by: req.user.username,
+      portal_url: process.env.PORTAL_PUBLIC_URL || `http://agent-portal:3000`,
+      portal_user_id: portalUser.id,
+      task_mode: taskMode,
+    };
+    if (taskMode === 'session_goal') {
+      triggerPayload.session_goal = sessionGoal;
+    }
+    const { ok, data } = await forwardToAgentTrigger(triggerPayload);
+    if (!ok) return res.status(502).json({ error: data.error || 'Trigger failed' });
     res.json({ ok: true, ...data });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { res.status(502).json({ error: 'Agent trigger unavailable: ' + err.message }); }
 });
 
 // ── Marketplace install ───────────────────────────────────────────────────────
@@ -3723,6 +3758,50 @@ app.get('/api/skills/:slug', authRequired, (req, res) => {
 });
 
 // ── User team config for agent-trigger ────────────────────────────────────────
+
+// ── Run Reports (internal write + user read) ──────────────────────────────────
+
+app.post('/api/internal/rooms/:roomId/report', requireInternalSecret, async (req, res) => {
+  try {
+    const roomId = Number(req.params.roomId);
+    const { team_name = '', triggered_by = '', portal_user_id = 0, report_md = '',
+            cost_usd = 0, input_tokens = 0, output_tokens = 0, started_at } = req.body;
+    if (!report_md.trim()) return res.status(400).json({ error: 'report_md required' });
+    const startedAtVal = started_at ? new Date(started_at) : new Date();
+    await db.execute(
+      `INSERT INTO team_run_reports
+         (room_id, team_name, triggered_by, portal_user_id, report_md, cost_usd, input_tokens, output_tokens, started_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [roomId, String(team_name).slice(0, 128), String(triggered_by).slice(0, 64),
+       Number(portal_user_id) || 0, String(report_md),
+       Number(cost_usd) || 0, Number(input_tokens) || 0, Number(output_tokens) || 0,
+       startedAtVal]
+    );
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/agents/run-reports', authRequired, async (req, res) => {
+  try {
+    const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
+    if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
+    const limit = Math.min(parseInt(req.query.limit ?? '20'), 50);
+    const roomId = req.query.room_id ? Number(req.query.room_id) : null;
+    const whereExtra = roomId ? ' AND room_id = ?' : '';
+    const params = roomId
+      ? [portalUser.id, roomId, limit]
+      : [portalUser.id, limit];
+    const [rows] = await db.execute(
+      `SELECT id, room_id, team_name, triggered_by, report_md, cost_usd,
+              input_tokens, output_tokens, started_at, created_at
+       FROM team_run_reports
+       WHERE portal_user_id = ?${whereExtra}
+       ORDER BY created_at DESC LIMIT ?`,
+      params
+    );
+    res.json({ ok: true, reports: rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
 app.get('/api/internal/user-teams/:id/config', requireInternalSecret, async (req, res) => {
   try {

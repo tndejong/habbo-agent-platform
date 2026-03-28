@@ -170,7 +170,9 @@ export function AccountView({ me, onKeyUpdated, onTokenChange }) {
   const [phoneDeleting, setPhoneDeleting] = useState(false)
   const [phoneMsg, setPhoneMsg] = useState(null) // { type: 'success'|'error', text }
 
-  // MCP tokens + Habbo MCP connection status — dev only
+  const canUseMcpTokens = me && ['pro', 'enterprise'].includes(me.ai_tier)
+
+  // MCP tokens + Habbo MCP connection status — Pro+ (simple UI); full diagnostics for developers
   const [mcpTokens, setMcpTokens] = useState([])
   const [mcpAuthSource, setMcpAuthSource] = useState(null) // 'user_token' | 'env_key' | 'none'
   const [mcpEnvKeyConfigured, setMcpEnvKeyConfigured] = useState(false)
@@ -193,23 +195,25 @@ export function AccountView({ me, onKeyUpdated, onTokenChange }) {
   }, [me?.is_developer])
 
   const loadMcpTokens = useCallback(async () => {
-    if (!me?.is_developer) return
+    if (!canUseMcpTokens) return
     setMcpLoading(true)
     try {
-      const [tokenData, callData] = await Promise.all([
-        api('/api/mcp/tokens'),
-        api('/api/mcp/calls?limit=30'),
-      ])
+      const tokenData = await api('/api/mcp/tokens')
       setMcpTokens(tokenData.tokens || [])
       setMcpAuthSource(tokenData.auth_source || 'none')
       setMcpEnvKeyConfigured(!!tokenData.env_key_configured)
-      setMcpCalls(callData.calls || [])
+      if (me?.is_developer) {
+        const callData = await api('/api/mcp/calls?limit=30')
+        setMcpCalls(callData.calls || [])
+      } else {
+        setMcpCalls([])
+      }
     } catch {
       // non-blocking — tokens section will be empty
     } finally {
       setMcpLoading(false)
     }
-  }, [me?.is_developer])
+  }, [canUseMcpTokens, me?.is_developer])
 
   useEffect(() => { loadMcpTokens() }, [loadMcpTokens])
 
@@ -222,6 +226,24 @@ export function AccountView({ me, onKeyUpdated, onTokenChange }) {
       })
       setNewMcpToken(data.token?.value ?? null)
       setTokenLabel('')
+      setMcpMsg({ type: 'success', text: 'Token generated — copy it now, it is only shown once.' })
+      await loadMcpTokens()
+      onTokenChange?.()
+    } catch (err) {
+      setMcpMsg({ type: 'error', text: err.message })
+    } finally {
+      setMcpBusy(false)
+    }
+  }
+
+  async function handleStartBuilding() {
+    setMcpBusy(true); setMcpMsg(null)
+    try {
+      const data = await api('/api/mcp/tokens', {
+        method: 'POST',
+        body: JSON.stringify({ label: 'Default token' }),
+      })
+      setNewMcpToken(data.token?.value ?? null)
       setMcpMsg({ type: 'success', text: 'Token generated — copy it now, it is only shown once.' })
       await loadMcpTokens()
       onTokenChange?.()
@@ -601,8 +623,86 @@ export function AccountView({ me, onKeyUpdated, onTokenChange }) {
             </section>
           </div>
 
-          {/* MCP Tokens — developer only */}
-          {!!me?.is_developer && (
+          {/* MCP — Pro / Enterprise: one-click token (non-developers) */}
+          {canUseMcpTokens && !me?.is_developer && (
+            <section className="space-y-3">
+              <h2 className="text-sm font-semibold text-foreground flex items-center gap-2.5">
+                <span className="w-6 h-6 rounded-md bg-secondary flex items-center justify-center flex-shrink-0"><Key className="w-3.5 h-3.5" /></span>
+                Habbo MCP
+              </h2>
+              {mcpMsg && (
+                <div className={`text-xs rounded-lg px-3 py-2 flex items-center gap-2 ${mcpMsg.type === 'success' ? 'bg-success/10 text-success border border-success/20' : 'bg-destructive/10 text-destructive border border-destructive/20'}`}>
+                  {mcpMsg.type === 'success' ? <Check className="w-3.5 h-3.5 flex-shrink-0" /> : <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />}
+                  {mcpMsg.text}
+                </div>
+              )}
+              {newMcpToken && (
+                <div className="bg-success/10 border border-success/20 rounded-xl p-4 space-y-2">
+                  <p className="text-xs font-medium text-success">Copy this token now — it is only shown once!</p>
+                  <div className="flex items-center gap-2">
+                    <code className="flex-1 font-mono text-xs bg-background/50 border border-border rounded-lg px-3 py-2 break-all">
+                      {newMcpToken}
+                    </code>
+                    <button type="button" onClick={() => copyMcpToken(newMcpToken)} aria-label="Copy token"
+                      className="h-8 w-8 flex-shrink-0 flex items-center justify-center border border-border rounded-lg hover:bg-secondary transition-colors">
+                      {copiedToken ? <Check className="w-3.5 h-3.5 text-success" /> : <Copy className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                </div>
+              )}
+              <div className="bg-card border border-border rounded-xl p-4 space-y-3">
+                {mcpLoading ? (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…
+                  </div>
+                ) : (() => {
+                  const now = new Date()
+                  const hasActive = (mcpTokens || []).some(t => t.status === 'active' && new Date(t.expires_at) > now)
+                  if (newMcpToken) {
+                    return (
+                      <p className="text-xs text-muted-foreground">
+                        Paste this token into your MCP client if you use one outside the portal. Deploy teams from the Teams tab when you are ready.
+                      </p>
+                    )
+                  }
+                  if (hasActive) {
+                    return (
+                      <>
+                        <p className="text-sm text-foreground">Your MCP token is active. You can deploy teams from the Teams tab.</p>
+                        <ul className="space-y-2">
+                          {mcpTokens.filter(t => t.status === 'active' && new Date(t.expires_at) > now).map(token => (
+                            <li key={token.id} className="flex items-center justify-between gap-2 text-xs border border-border rounded-lg px-3 py-2 bg-background">
+                              <span className="text-muted-foreground truncate">{token.token_label || 'Token'} · expires {new Date(token.expires_at).toLocaleDateString()}</span>
+                              <button type="button" onClick={() => handleRevokeToken(token.id)}
+                                disabled={mcpBusy}
+                                className="h-7 px-2 text-xs border border-destructive/30 text-destructive rounded-md hover:bg-destructive/10 disabled:opacity-50 flex-shrink-0">
+                                Revoke
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    )
+                  }
+                  return (
+                    <>
+                      <p className="text-xs text-muted-foreground">
+                        Generate a token so your agents can talk to the hotel. You only need to do this once.
+                      </p>
+                      <button type="button" onClick={handleStartBuilding} disabled={mcpBusy}
+                        className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+                        {mcpBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                        Start building!
+                      </button>
+                    </>
+                  )
+                })()}
+              </div>
+            </section>
+          )}
+
+          {/* MCP Tokens — developer (full diagnostics) */}
+          {canUseMcpTokens && !!me?.is_developer && (
             <section className="space-y-3">
               <h2 className="text-sm font-semibold text-foreground flex items-center gap-2.5">
                 <span className="w-6 h-6 rounded-md bg-secondary flex items-center justify-center flex-shrink-0"><Key className="w-3.5 h-3.5" /></span>
@@ -880,6 +980,7 @@ export function AgentDashboard({ me, onActiveTeamChange, onStopTeam, mcpTokenVer
   const tabs = [
     { id: 'teams', label: 'Teams', icon: Users },
     { id: 'personas', label: 'Personas', icon: User },
+    { id: 'reports', label: 'Reports', icon: FileText },
   ]
 
   return (
@@ -1267,6 +1368,161 @@ export function OnlineView() {
   )
 }
 
+// ── Deploy Goal Modal ─────────────────────────────────────────────────────
+
+const CURATED_GOALS = [
+  'Welcome visitors and tell them about this room',
+  'Run a fun poll or game with guests in the room',
+  'Decorate or tidy the stage area for an event',
+  'Greet new guests and help them find their way around',
+  'Host a Q&A session and answer visitor questions',
+]
+
+const GOAL_MIN_LENGTH = 10
+const GOAL_MAX_LENGTH = 4000
+
+function getSessionGoalPlaceholder(team) {
+  if (team?.description?.trim()) return team.description.trim()
+  const tasks = parseTeamTasksJson(team)
+  if (tasks.length > 0 && tasks[0].title?.trim()) return `Try: ${tasks[0].title.trim()}`
+  return `What should your team do in room ${team?.default_room_id || 'the room'} this session?`
+}
+
+function DeployGoalModal({ team, roomId, deploying, onClose, onConfirm }) {
+  const [mode, setMode] = useState('team_tasks')
+  const [goal, setGoal] = useState('')
+  const [error, setError] = useState(null)
+
+  const goalTrimmed = goal.trim()
+  const goalValid = goalTrimmed.length >= GOAL_MIN_LENGTH && goalTrimmed.length <= GOAL_MAX_LENGTH
+  const canDeploy = mode === 'team_tasks' || goalValid
+
+  const taskChips = useMemo(() => {
+    const fromTasks = parseTeamTasksJson(team)
+      .map(t => t.title?.trim())
+      .filter(t => t && t.length >= GOAL_MIN_LENGTH)
+      .slice(0, 3)
+    const curated = CURATED_GOALS
+    const seen = new Set(fromTasks.map(s => s.toLowerCase()))
+    return [...fromTasks, ...curated.filter(s => !seen.has(s.toLowerCase()))]
+  }, [team])
+
+  async function handleDeploy() {
+    setError(null)
+    const options = mode === 'session_goal'
+      ? { task_mode: 'session_goal', session_goal: goalTrimmed }
+      : { task_mode: 'team_tasks' }
+    const err = await onConfirm(options)
+    if (err) {
+      setError(err)
+    } else {
+      onClose()
+    }
+  }
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm"
+      onClick={onClose}>
+      <div className="bg-card border border-border rounded-2xl w-full max-w-lg shadow-2xl"
+        onClick={e => e.stopPropagation()}>
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-border">
+          <div>
+            <p className="font-semibold text-foreground text-sm">Deploy team</p>
+            <p className="text-xs text-muted-foreground mt-0.5">{team.name}</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Mode toggle */}
+        <div className="px-6 pt-4 pb-2">
+          <div className="grid grid-cols-2 gap-2 bg-muted/40 rounded-xl p-1">
+            <button
+              onClick={() => setMode('team_tasks')}
+              className={`rounded-lg py-2.5 px-3 text-xs font-medium transition-all text-center ${mode === 'team_tasks' ? 'bg-card shadow-sm border border-border text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+            >
+              <span className="block font-semibold">Team tasks</span>
+              <span className="block text-muted-foreground font-normal mt-0.5">Run designed tasks</span>
+            </button>
+            <button
+              onClick={() => setMode('session_goal')}
+              className={`rounded-lg py-2.5 px-3 text-xs font-medium transition-all text-center ${mode === 'session_goal' ? 'bg-card shadow-sm border border-border text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+            >
+              <span className="block font-semibold">My task</span>
+              <span className="block text-muted-foreground font-normal mt-0.5">Give a custom goal</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Session goal input */}
+        {mode === 'session_goal' && (
+          <div className="px-6 pt-2 pb-4 space-y-3">
+            <textarea
+              className="w-full rounded-xl border border-border bg-background text-sm px-3 py-2.5 resize-none focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/50 placeholder:text-muted-foreground/60 transition-all"
+              rows={4}
+              maxLength={GOAL_MAX_LENGTH}
+              placeholder={getSessionGoalPlaceholder(team)}
+              value={goal}
+              onChange={e => { setGoal(e.target.value); setError(null) }}
+              autoFocus
+            />
+            {goal.length > 0 && goalTrimmed.length < GOAL_MIN_LENGTH && (
+              <p className="text-xs text-warning">At least {GOAL_MIN_LENGTH} characters required ({GOAL_MIN_LENGTH - goalTrimmed.length} more needed)</p>
+            )}
+            {goal.length > 0 && <p className="text-xs text-muted-foreground/60 text-right">{goalTrimmed.length}/{GOAL_MAX_LENGTH}</p>}
+
+            {/* Quick-pick chips */}
+            <div className="flex flex-wrap gap-1.5">
+              {taskChips.map(chip => (
+                <button
+                  key={chip}
+                  onClick={() => { setGoal(chip); setError(null) }}
+                  className="inline-flex items-center px-2.5 py-1 rounded-full bg-muted/60 border border-border text-xs text-muted-foreground hover:border-primary/40 hover:text-foreground hover:bg-muted transition-colors"
+                >
+                  {chip}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Team tasks hint */}
+        {mode === 'team_tasks' && (
+          <div className="px-6 py-4">
+            <p className="text-xs text-muted-foreground">The team will run its designed tasks as usual.</p>
+          </div>
+        )}
+
+        {/* Inline error */}
+        {error && (
+          <div className="mx-6 mb-3 flex items-start gap-2 rounded-lg bg-destructive/10 border border-destructive/20 px-3 py-2">
+            <AlertTriangle className="w-3.5 h-3.5 text-destructive flex-shrink-0 mt-0.5" />
+            <p className="text-xs text-destructive">{error}</p>
+          </div>
+        )}
+
+        {/* Footer */}
+        <div className="flex gap-2 px-6 pb-5">
+          <button onClick={onClose} className="flex-1 h-9 rounded-lg border border-border text-sm hover:bg-secondary transition-colors">
+            Cancel
+          </button>
+          <button
+            onClick={handleDeploy}
+            disabled={!canDeploy || deploying}
+            className="flex-1 h-9 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+          >
+            {deploying ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Deploying…</> : 'Deploy'}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
 // ── Integrated View ───────────────────────────────────────────────────────
 
 function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0, activeSection = 'teams', onSubpageChange }) {
@@ -1292,11 +1548,14 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0
   const [hasApiKey, setHasApiKey] = useState(true)
   const [hasMcpToken, setHasMcpToken] = useState(true)
   const [integrations, setIntegrations] = useState([])
+  // deployModal: null | { team, roomId }
+  const [deployModal, setDeployModal] = useState(null)
 
   useEscapeKey(() => {
+    if (deployModal) { setDeployModal(null); return }
     if (personaPage) { setPersonaPage(null); return }
     if (confirmModal) setConfirmModal(null)
-  }, !!(personaPage || confirmModal))
+  }, !!(deployModal || personaPage || confirmModal))
 
   // Permission shortcuts — derived from the canonical PERMISSIONS registry
   const canViewTeams      = can(me, 'teams.view')
@@ -1337,17 +1596,22 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0
   useEffect(() => { load() }, [load, mcpTokenVersion])
 
 
-  async function deployTeam(team, roomId) {
+  async function deployTeam(team, roomId, options = {}) {
     setDeployingIds(prev => new Set([...prev, team.id]))
     try {
-      await api(`/api/my/teams/${team.id}/trigger`, { method: 'POST', body: JSON.stringify({ room_id: roomId }) })
+      const body = { room_id: roomId }
+      if (options.task_mode) body.task_mode = options.task_mode
+      if (options.session_goal) body.session_goal = options.session_goal
+      await api(`/api/my/teams/${team.id}/trigger`, { method: 'POST', body: JSON.stringify(body) })
       showToast(`Team "${team.name}" deployed!`)
       onAfterTrigger?.()
       setTimeout(() => onAfterTrigger?.(), 2000)
       setTimeout(() => onAfterTrigger?.(), 4000)
+      return null // success — no error
     } catch (e) {
       showToast(`Deploy failed: ${e.message}`, 'error')
       onAfterTrigger?.()
+      return e.message // return error so modal can display it inline
     } finally {
       setDeployingIds(prev => { const n = new Set(prev); n.delete(team.id); return n })
     }
@@ -1551,7 +1815,7 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0
                 hasApiKey={hasApiKey}
                 hasMcpToken={hasMcpToken}
                 integrations={integrations}
-                onDeploy={(roomId) => deployTeam(team, roomId)}
+                onDeploy={(roomId) => setDeployModal({ team, roomId })}
                 onRoomChange={(roomId) => saveTeamRoomId(team.id, roomId)}
                 onEdit={canManageTeams ? () => setTeamPage({ team }) : undefined}
                 onDelete={canManageTeams ? () => deleteTeam(team) : undefined}
@@ -1603,6 +1867,19 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0
         )}
       </section>}
 
+      {activeSection === 'reports' && <RunReportsSection me={me} />}
+
+      {/* Deploy goal modal */}
+      {deployModal && (
+        <DeployGoalModal
+          team={deployModal.team}
+          roomId={deployModal.roomId}
+          deploying={deployingIds.has(deployModal.team.id)}
+          onClose={() => setDeployModal(null)}
+          onConfirm={(options) => deployTeam(deployModal.team, deployModal.roomId, options)}
+        />
+      )}
+
       {/* Confirm modal */}
       {confirmModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm"
@@ -1639,6 +1916,134 @@ function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0
   )
 }
 
+// ── Run Reports Section ────────────────────────────────────────────────────
+
+function RunReportsSection({ me }) {
+  const [reports, setReports] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [selected, setSelected] = useState(null)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    setLoading(true)
+    api('/api/agents/run-reports?limit=30')
+      .then(d => { setReports(d.reports || []); setLoading(false) })
+      .catch(e => { setError(e.message); setLoading(false) })
+  }, [])
+
+  if (loading) return (
+    <section className="space-y-4">
+      <div className="flex items-center justify-center py-16">
+        <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+      </div>
+    </section>
+  )
+
+  if (error) return (
+    <section className="space-y-4">
+      <p className="text-sm text-destructive py-8 text-center">{error}</p>
+    </section>
+  )
+
+  return (
+    <section className="space-y-4">
+      <div>
+        <h2 className="font-semibold text-foreground">Run Reports</h2>
+        <p className="text-xs text-muted-foreground mt-0.5">Full results from every agent team run</p>
+      </div>
+
+      {reports.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16 text-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center">
+            <FileText className="w-5 h-5 text-muted-foreground" />
+          </div>
+          <div>
+            <p className="text-sm font-medium text-foreground">No reports yet</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Reports are saved automatically at the end of each team run</p>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {reports.map(report => (
+            <RunReportRow
+              key={report.id}
+              report={report}
+              isOpen={selected === report.id}
+              onToggle={() => setSelected(selected === report.id ? null : report.id)}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function RunReportRow({ report, isOpen, onToggle }) {
+  const startedAt = new Date(report.started_at)
+  const createdAt = new Date(report.created_at)
+  const durationMs = createdAt - startedAt
+  const durationStr = durationMs > 0
+    ? durationMs > 60000
+      ? `${Math.round(durationMs / 60000)}m`
+      : `${Math.round(durationMs / 1000)}s`
+    : null
+
+  const costStr = report.cost_usd > 0
+    ? `$${Number(report.cost_usd).toFixed(3)}`
+    : null
+
+  const dateStr = startedAt.toLocaleDateString('nl-NL', { day: '2-digit', month: 'short' })
+  const timeStr = startedAt.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
+
+  return (
+    <div className="border border-border rounded-xl overflow-hidden bg-card">
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-secondary/40 transition-colors"
+      >
+        <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
+          <FileText className="w-4 h-4 text-primary" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-foreground truncate">{report.team_name || 'Team run'}</p>
+          <p className="text-xs text-muted-foreground truncate">
+            Room {report.room_id} · {dateStr} {timeStr}
+            {report.triggered_by ? ` · by ${report.triggered_by}` : ''}
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {costStr && <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">{costStr}</span>}
+          {durationStr && <span className="text-xs text-muted-foreground">{durationStr}</span>}
+          <ChevronLeft className={`w-3.5 h-3.5 text-muted-foreground transition-transform ${isOpen ? '-rotate-90' : 'rotate-180'}`} />
+        </div>
+      </button>
+
+      {isOpen && (
+        <div className="border-t border-border px-4 py-4">
+          <div className="prose prose-sm prose-invert max-w-none text-sm leading-relaxed
+            [&_h1]:text-base [&_h1]:font-semibold [&_h1]:mt-4 [&_h1]:mb-2
+            [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:mt-4 [&_h2]:mb-2
+            [&_h3]:text-sm [&_h3]:font-medium [&_h3]:mt-3 [&_h3]:mb-1
+            [&_p]:text-muted-foreground [&_p]:mb-2
+            [&_ul]:list-disc [&_ul]:pl-4 [&_ul]:text-muted-foreground
+            [&_ol]:list-decimal [&_ol]:pl-4 [&_ol]:text-muted-foreground
+            [&_li]:mb-1
+            [&_strong]:text-foreground [&_strong]:font-semibold
+            [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-xs [&_code]:font-mono
+            [&_pre]:bg-muted [&_pre]:p-3 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_pre]:text-xs [&_pre]:font-mono
+            [&_pre_code]:bg-transparent [&_pre_code]:p-0
+            [&_table]:w-full [&_table]:border-collapse [&_table]:text-xs
+            [&_th]:text-left [&_th]:border [&_th]:border-border [&_th]:px-2 [&_th]:py-1 [&_th]:bg-muted [&_th]:font-medium
+            [&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_td]:text-muted-foreground
+            [&_hr]:border-border">
+            <ReactMarkdown>{report.report_md}</ReactMarkdown>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Integrated Team Card ───────────────────────────────────────────────────
 
 // Must match the server-side INTEGRATION_KEYWORDS map in portal/server.js
@@ -1654,10 +2059,20 @@ const INTEGRATION_KEYWORDS = {
   slack:     ['slack mcp', 'slack integration'],
 }
 
+function parseTeamTasksJson(team) {
+  try {
+    let v = JSON.parse(team?.tasks_json || '[]')
+    // Unwrap any number of extra stringify layers (e.g. from saveTeamRoomId corruption)
+    let guard = 0
+    while (typeof v === 'string' && guard++ < 5) { try { v = JSON.parse(v) } catch { break } }
+    return Array.isArray(v) ? v : []
+  } catch { return [] }
+}
+
 function detectRequiredIntegrations(team, members) {
   const texts = []
   try {
-    const tasks = JSON.parse(team.tasks_json || '[]')
+    const tasks = parseTeamTasksJson(team)
     texts.push(...tasks.map(t => `${t.title || ''} ${t.description || ''}`))
   } catch { /* skip */ }
   if (members) texts.push(...members.map(m => `${m.capabilities || ''} ${m.prompt || ''}`))
@@ -1737,7 +2152,7 @@ function IntegratedTeamCard({ team, canManage = false, bots = [], liveBots = [],
             : hasUnlinked ? 'Some agents are missing a bot link'
             : missingBots.length > 0 ? `Bot${missingBots.length > 1 ? 's' : ''} deleted from hotel: ${missingBots.join(', ')} — reassign or recreate them`
             : noKey ? 'Add an Anthropic API key in Settings'
-            : noMcpToken ? 'Generate an MCP token in Settings → MCP Tokens'
+            : noMcpToken ? 'Open Account and use Start building! to create your MCP token'
             : `Missing integrations: ${missingIntegrations.map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(', ')} — connect them in Settings → Integrations`}
         </div>
       )}
@@ -1842,7 +2257,7 @@ function IntegratedTeamCard({ team, canManage = false, bots = [], liveBots = [],
             disabled={deploying || blocked}
             title={
               noKey ? 'Add an Anthropic API key in Settings'
-              : noMcpToken ? 'Generate an MCP token in Settings → MCP Tokens'
+              : noMcpToken ? 'Open Account and use Start building! to create your MCP token'
               : missingBots.length > 0 ? `Bots deleted from hotel: ${missingBots.join(', ')}`
               : missingIntegrations.length > 0 ? `Connect integrations first: ${missingIntegrations.join(', ')}`
               : roomConflict || undefined
@@ -1896,15 +2311,7 @@ function IntegratedTeamForm({ team, personas, rooms = [], isDev, onSave, onCance
     typeof team?.narrator_verbosity === 'number' ? Math.max(3, team.narrator_verbosity) : 3
   )
   const [defaultRoomId, setDefaultRoomId] = useState(team?.default_room_id || '')
-  const parsedTasks = (() => {
-    try {
-      let v = JSON.parse(team?.tasks_json || '[]')
-      // Unwrap any number of extra stringify layers (e.g. from saveTeamRoomId corruption)
-      let guard = 0
-      while (typeof v === 'string' && guard++ < 5) { try { v = JSON.parse(v) } catch { break } }
-      return Array.isArray(v) ? v : []
-    } catch { return [] }
-  })()
+  const parsedTasks = parseTeamTasksJson(team)
   const [tasks, setTasks] = useState(parsedTasks.length ? parsedTasks : [])
   const [members, setMembers] = useState([]) // { id (atm.id), persona_id, name, role }
   const [addPersonaId, setAddPersonaId] = useState('')
@@ -2175,10 +2582,11 @@ function IntegratedTeamForm({ team, personas, rooms = [], isDev, onSave, onCance
               <label className="text-xs font-medium text-foreground">Orchestrator Prompt <span className="text-muted-foreground font-normal">(optional — auto-generated if empty)</span></label>
               <div className="flex flex-wrap gap-2 mb-1.5">
                 {[
-                  { tag: '{{ROOM_ID}}',      desc: 'Hotel room number (e.g. 201)' },
+                  { tag: '{{ROOM_ID}}',       desc: 'Hotel room number (e.g. 201)' },
                   { tag: '{{TRIGGERED_BY}}', desc: 'Who triggered the run (Habbo username)' },
                   { tag: '{{TASKS}}',        desc: 'Rendered task instructions (sequential steps or shared task list JSON)' },
                   { tag: '{{PERSONAS}}',     desc: 'All team members — names, roles, bots & instructions' },
+                  { tag: '{{SESSION_GOAL}}', desc: "User's custom goal for this session (portal user-team runs only)" },
                 ].map(({ tag, desc }) => (
                   <button
                     key={tag}

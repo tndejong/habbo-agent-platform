@@ -59,86 +59,90 @@ function isHotelMcpTool(name) {
 }
 
 // Fallback templates when Haiku times out — keyed by language code
+function viaPersona(p, n, rest) {
+  return p ? `${p.persona_name} (${p.persona_role}) via ${n} ${rest}` : `${n} ${rest}`;
+}
+
 const FALLBACK_TEMPLATES = {
   nl: {
-    Write:       (n, i) => `${n} schrijft naar ${tail(i?.file_path ?? 'een bestand')}.`,
-    Edit:        (n, i) => `${n} past ${tail(i?.file_path ?? 'een bestand')} aan.`,
-    Bash:        (n, i) => `${n} voert uit: ${String(i?.command ?? '').slice(0, 50)}.`,
-    WebFetch:    (n)    => `${n} zoekt informatie op het internet.`,
-    WebSearch:   (n)    => `${n} doorzoekt het web.`,
-    NotebookEdit:(n)    => `${n} werkt een notebook bij.`,
+    Write:       (n, i, p) => viaPersona(p, n, `schrijft naar ${tail(i?.file_path ?? 'een bestand')}.`),
+    Edit:        (n, i, p) => viaPersona(p, n, `past ${tail(i?.file_path ?? 'een bestand')} aan.`),
+    Bash:        (n, i, p) => viaPersona(p, n, `voert uit: ${String(i?.command ?? '').slice(0, 50)}.`),
+    WebFetch:    (n, i, p) => viaPersona(p, n, 'zoekt informatie op het internet.'),
+    WebSearch:   (n, i, p) => viaPersona(p, n, 'doorzoekt het web.'),
+    NotebookEdit:(n, i, p) => viaPersona(p, n, 'werkt een notebook bij.'),
   },
   en: {
-    Write:       (n, i) => `${n} is writing to ${tail(i?.file_path ?? 'a file')}.`,
-    Edit:        (n, i) => `${n} is editing ${tail(i?.file_path ?? 'a file')}.`,
-    Bash:        (n, i) => `${n} runs: ${String(i?.command ?? '').slice(0, 50)}.`,
-    WebFetch:    (n)    => `${n} is looking up information online.`,
-    WebSearch:   (n)    => `${n} is searching the web.`,
-    NotebookEdit:(n)    => `${n} is updating a notebook.`,
+    Write:       (n, i, p) => viaPersona(p, n, `is writing to ${tail(i?.file_path ?? 'a file')}.`),
+    Edit:        (n, i, p) => viaPersona(p, n, `is editing ${tail(i?.file_path ?? 'a file')}.`),
+    Bash:        (n, i, p) => viaPersona(p, n, `runs: ${String(i?.command ?? '').slice(0, 50)}.`),
+    WebFetch:    (n, i, p) => viaPersona(p, n, 'is looking up information online.'),
+    WebSearch:   (n, i, p) => viaPersona(p, n, 'is searching the web.'),
+    NotebookEdit:(n, i, p) => viaPersona(p, n, 'is updating a notebook.'),
   },
   de: {
-    Write:       (n, i) => `${n} schreibt nach ${tail(i?.file_path ?? 'einer Datei')}.`,
-    Edit:        (n, i) => `${n} bearbeitet ${tail(i?.file_path ?? 'eine Datei')}.`,
-    Bash:        (n, i) => `${n} führt aus: ${String(i?.command ?? '').slice(0, 50)}.`,
-    WebFetch:    (n)    => `${n} sucht Informationen im Internet.`,
-    WebSearch:   (n)    => `${n} durchsucht das Web.`,
-    NotebookEdit:(n)    => `${n} aktualisiert ein Notizbuch.`,
+    Write:       (n, i, p) => viaPersona(p, n, `schreibt nach ${tail(i?.file_path ?? 'einer Datei')}.`),
+    Edit:        (n, i, p) => viaPersona(p, n, `bearbeitet ${tail(i?.file_path ?? 'eine Datei')}.`),
+    Bash:        (n, i, p) => viaPersona(p, n, `führt aus: ${String(i?.command ?? '').slice(0, 50)}.`),
+    WebFetch:    (n, i, p) => viaPersona(p, n, 'sucht Informationen im Internet.'),
+    WebSearch:   (n, i, p) => viaPersona(p, n, 'durchsucht das Web.'),
+    NotebookEdit:(n, i, p) => viaPersona(p, n, 'aktualisiert ein Notizbuch.'),
   },
   fr: {
-    Write:       (n, i) => `${n} écrit dans ${tail(i?.file_path ?? 'un fichier')}.`,
-    Edit:        (n, i) => `${n} modifie ${tail(i?.file_path ?? 'un fichier')}.`,
-    Bash:        (n, i) => `${n} exécute : ${String(i?.command ?? '').slice(0, 50)}.`,
-    WebFetch:    (n)    => `${n} recherche des informations en ligne.`,
-    WebSearch:   (n)    => `${n} parcourt le web.`,
-    NotebookEdit:(n)    => `${n} met à jour un notebook.`,
+    Write:       (n, i, p) => viaPersona(p, n, `écrit dans ${tail(i?.file_path ?? 'un fichier')}.`),
+    Edit:        (n, i, p) => viaPersona(p, n, `modifie ${tail(i?.file_path ?? 'un fichier')}.`),
+    Bash:        (n, i, p) => viaPersona(p, n, `exécute : ${String(i?.command ?? '').slice(0, 50)}.`),
+    WebFetch:    (n, i, p) => viaPersona(p, n, 'recherche des informations en ligne.'),
+    WebSearch:   (n, i, p) => viaPersona(p, n, 'parcourt le web.'),
+    NotebookEdit:(n, i, p) => viaPersona(p, n, 'met à jour un notebook.'),
   },
   es: {
-    Write:       (n, i) => `${n} escribe en ${tail(i?.file_path ?? 'un archivo')}.`,
-    Edit:        (n, i) => `${n} edita ${tail(i?.file_path ?? 'un archivo')}.`,
-    Bash:        (n, i) => `${n} ejecuta: ${String(i?.command ?? '').slice(0, 50)}.`,
-    WebFetch:    (n)    => `${n} busca información en línea.`,
-    WebSearch:   (n)    => `${n} busca en la web.`,
-    NotebookEdit:(n)    => `${n} actualiza un cuaderno.`,
+    Write:       (n, i, p) => viaPersona(p, n, `escribe en ${tail(i?.file_path ?? 'un archivo')}.`),
+    Edit:        (n, i, p) => viaPersona(p, n, `edita ${tail(i?.file_path ?? 'un archivo')}.`),
+    Bash:        (n, i, p) => viaPersona(p, n, `ejecuta: ${String(i?.command ?? '').slice(0, 50)}.`),
+    WebFetch:    (n, i, p) => viaPersona(p, n, 'busca información en línea.'),
+    WebSearch:   (n, i, p) => viaPersona(p, n, 'busca en la web.'),
+    NotebookEdit:(n, i, p) => viaPersona(p, n, 'actualiza un cuaderno.'),
   },
   it: {
-    Write:       (n, i) => `${n} scrive su ${tail(i?.file_path ?? 'un file')}.`,
-    Edit:        (n, i) => `${n} modifica ${tail(i?.file_path ?? 'un file')}.`,
-    Bash:        (n, i) => `${n} esegue: ${String(i?.command ?? '').slice(0, 50)}.`,
-    WebFetch:    (n)    => `${n} cerca informazioni online.`,
-    WebSearch:   (n)    => `${n} effettua una ricerca sul web.`,
-    NotebookEdit:(n)    => `${n} aggiorna un notebook.`,
+    Write:       (n, i, p) => viaPersona(p, n, `scrive su ${tail(i?.file_path ?? 'un file')}.`),
+    Edit:        (n, i, p) => viaPersona(p, n, `modifica ${tail(i?.file_path ?? 'un file')}.`),
+    Bash:        (n, i, p) => viaPersona(p, n, `esegue: ${String(i?.command ?? '').slice(0, 50)}.`),
+    WebFetch:    (n, i, p) => viaPersona(p, n, 'cerca informazioni online.'),
+    WebSearch:   (n, i, p) => viaPersona(p, n, 'effettua una ricerca sul web.'),
+    NotebookEdit:(n, i, p) => viaPersona(p, n, 'aggiorna un notebook.'),
   },
   pt: {
-    Write:       (n, i) => `${n} escreve em ${tail(i?.file_path ?? 'um arquivo')}.`,
-    Edit:        (n, i) => `${n} edita ${tail(i?.file_path ?? 'um arquivo')}.`,
-    Bash:        (n, i) => `${n} executa: ${String(i?.command ?? '').slice(0, 50)}.`,
-    WebFetch:    (n)    => `${n} procura informações online.`,
-    WebSearch:   (n)    => `${n} pesquisa na web.`,
-    NotebookEdit:(n)    => `${n} atualiza um notebook.`,
+    Write:       (n, i, p) => viaPersona(p, n, `escreve em ${tail(i?.file_path ?? 'um arquivo')}.`),
+    Edit:        (n, i, p) => viaPersona(p, n, `edita ${tail(i?.file_path ?? 'um arquivo')}.`),
+    Bash:        (n, i, p) => viaPersona(p, n, `executa: ${String(i?.command ?? '').slice(0, 50)}.`),
+    WebFetch:    (n, i, p) => viaPersona(p, n, 'procura informações online.'),
+    WebSearch:   (n, i, p) => viaPersona(p, n, 'pesquisa na web.'),
+    NotebookEdit:(n, i, p) => viaPersona(p, n, 'atualiza um notebook.'),
   },
   pl: {
-    Write:       (n, i) => `${n} zapisuje do ${tail(i?.file_path ?? 'pliku')}.`,
-    Edit:        (n, i) => `${n} edytuje ${tail(i?.file_path ?? 'plik')}.`,
-    Bash:        (n, i) => `${n} uruchamia: ${String(i?.command ?? '').slice(0, 50)}.`,
-    WebFetch:    (n)    => `${n} wyszukuje informacje w internecie.`,
-    WebSearch:   (n)    => `${n} przeszukuje sieć.`,
-    NotebookEdit:(n)    => `${n} aktualizuje notatnik.`,
+    Write:       (n, i, p) => viaPersona(p, n, `zapisuje do ${tail(i?.file_path ?? 'pliku')}.`),
+    Edit:        (n, i, p) => viaPersona(p, n, `edytuje ${tail(i?.file_path ?? 'plik')}.`),
+    Bash:        (n, i, p) => viaPersona(p, n, `uruchamia: ${String(i?.command ?? '').slice(0, 50)}.`),
+    WebFetch:    (n, i, p) => viaPersona(p, n, 'wyszukuje informacje w internecie.'),
+    WebSearch:   (n, i, p) => viaPersona(p, n, 'przeszukuje sieć.'),
+    NotebookEdit:(n, i, p) => viaPersona(p, n, 'aktualizuje notatnik.'),
   },
   tr: {
-    Write:       (n, i) => `${n} şuraya yazıyor: ${tail(i?.file_path ?? 'dosya')}.`,
-    Edit:        (n, i) => `${n} şunu düzenliyor: ${tail(i?.file_path ?? 'dosya')}.`,
-    Bash:        (n, i) => `${n} çalıştırıyor: ${String(i?.command ?? '').slice(0, 50)}.`,
-    WebFetch:    (n)    => `${n} internette bilgi arıyor.`,
-    WebSearch:   (n)    => `${n} web'de arama yapıyor.`,
-    NotebookEdit:(n)    => `${n} not defterini güncelliyor.`,
+    Write:       (n, i, p) => viaPersona(p, n, `şuraya yazıyor: ${tail(i?.file_path ?? 'dosya')}.`),
+    Edit:        (n, i, p) => viaPersona(p, n, `şunu düzenliyor: ${tail(i?.file_path ?? 'dosya')}.`),
+    Bash:        (n, i, p) => viaPersona(p, n, `çalıştırıyor: ${String(i?.command ?? '').slice(0, 50)}.`),
+    WebFetch:    (n, i, p) => viaPersona(p, n, 'internette bilgi arıyor.'),
+    WebSearch:   (n, i, p) => viaPersona(p, n, "web'de arama yapıyor."),
+    NotebookEdit:(n, i, p) => viaPersona(p, n, 'not defterini güncelliyor.'),
   },
   sv: {
-    Write:       (n, i) => `${n} skriver till ${tail(i?.file_path ?? 'en fil')}.`,
-    Edit:        (n, i) => `${n} redigerar ${tail(i?.file_path ?? 'en fil')}.`,
-    Bash:        (n, i) => `${n} kör: ${String(i?.command ?? '').slice(0, 50)}.`,
-    WebFetch:    (n)    => `${n} söker information online.`,
-    WebSearch:   (n)    => `${n} söker på webben.`,
-    NotebookEdit:(n)    => `${n} uppdaterar ett anteckningsblock.`,
+    Write:       (n, i, p) => viaPersona(p, n, `skriver till ${tail(i?.file_path ?? 'en fil')}.`),
+    Edit:        (n, i, p) => viaPersona(p, n, `redigerar ${tail(i?.file_path ?? 'en fil')}.`),
+    Bash:        (n, i, p) => viaPersona(p, n, `kör: ${String(i?.command ?? '').slice(0, 50)}.`),
+    WebFetch:    (n, i, p) => viaPersona(p, n, 'söker information online.'),
+    WebSearch:   (n, i, p) => viaPersona(p, n, 'söker på webben.'),
+    NotebookEdit:(n, i, p) => viaPersona(p, n, 'uppdaterar ett anteckningsblock.'),
   },
 };
 
@@ -158,15 +162,16 @@ function tail(p) { return String(p).split('/').slice(-2).join('/'); }
 
 function readMap() {
   try {
-    if (!existsSync(BOTS_MAP)) return { known_bots: [], language: 'en', max_session_messages: 3, pending: [], sessions: {}, message_counts: {} };
+    if (!existsSync(BOTS_MAP)) return { known_bots: [], language: 'en', max_session_messages: 3, pending: [], sessions: {}, message_counts: {}, bot_personas: {} };
     const m = JSON.parse(readFileSync(BOTS_MAP, 'utf-8'));
-    m.language            = m.language            ?? 'en';
-    m.max_session_messages = Math.max(3, Number(m.max_session_messages) || 3);
-    m.pending             = m.pending             ?? [];
-    m.sessions            = m.sessions            ?? {};
-    m.message_counts      = m.message_counts      ?? {};
+    m.language             = m.language             ?? 'en';
+    m.max_session_messages = Math.max(0, Number(m.max_session_messages ?? 3));
+    m.pending              = m.pending              ?? [];
+    m.sessions             = m.sessions             ?? {};
+    m.message_counts       = m.message_counts       ?? {};
+    m.bot_personas         = m.bot_personas && typeof m.bot_personas === 'object' ? m.bot_personas : {};
     return m;
-  } catch { return { known_bots: [], language: 'en', max_session_messages: 3, pending: [], sessions: {}, message_counts: {} }; }
+  } catch { return { known_bots: [], language: 'en', max_session_messages: 3, pending: [], sessions: {}, message_counts: {}, bot_personas: {} }; }
 }
 
 function writeMap(m) {
@@ -189,28 +194,34 @@ async function main() {
   );
 
   if (EVENT_TYPE === 'pre_agent_spawn') {
-    // Orchestrator is about to spawn a subagent — detect bot name from prompt
-    const prompt = String(
-      payload.tool_input?.prompt ?? payload.tool_input?.description ?? ''
-    );
+    // Orchestrator is about to spawn a subagent — detect bot name and task title from prompt
+    const prompt = String(payload.tool_input?.prompt ?? '');
+    // The Agent tool's description field is a short task title (e.g. "Task 1: Pull and clean raw data")
+    const taskTitle = String(payload.tool_input?.description ?? '').trim().slice(0, 80);
     const map = readMap();
-    const botName = findBotInText(prompt, map.known_bots);
+    if (map.max_session_messages === 0) { clearTimeout(watchdog); process.exit(0); }
+    const botName = findBotInText(prompt || taskTitle, map.known_bots);
     if (botName) {
-      map.pending.push(botName);
+      map.pending.push({ botName, taskTitle });
       writeMap(map);
     }
 
   } else if (EVENT_TYPE === 'subagent_start') {
     // New subagent started — pop from pending queue, assign to this session
     const map = readMap();
-    // First try pending queue (most reliable), fall back to scanning raw payload
-    const botName = map.pending.shift() ?? findBotInText(raw, map.known_bots);
+    if (map.max_session_messages === 0) { clearTimeout(watchdog); process.exit(0); }
+    // pending entries are { botName, taskTitle } objects (or legacy plain strings)
+    const pending = map.pending.shift();
+    const botName = (typeof pending === 'object' ? pending?.botName : pending)
+      ?? findBotInText(raw, map.known_bots);
+    const taskTitle = (typeof pending === 'object' ? pending?.taskTitle : '') ?? '';
     if (!botName) { clearTimeout(watchdog); process.exit(0); }
 
-    map.sessions[sessionId] = botName;
+    map.sessions[sessionId] = { botName, taskTitle };
     writeMap(map);
 
-    const startMessage = await narrateStatus('subagent_start', botName, map.language);
+    const persona = map.bot_personas?.[botName];
+    const startMessage = await narrateStatus('subagent_start', botName, map.language, taskTitle, persona);
     await postNarrator({
       event: 'subagent_start',
       bot_name: botName,
@@ -220,9 +231,22 @@ async function main() {
 
   } else if (EVENT_TYPE === 'subagent_stop') {
     const map = readMap();
-    const botName = map.sessions[sessionId];
+    if (map.max_session_messages === 0) {
+      const session = map.sessions[sessionId];
+      if (session) {
+        delete map.sessions[sessionId];
+        delete map.message_counts[sessionId];
+        writeMap(map);
+      }
+      clearTimeout(watchdog); process.exit(0);
+    }
+    const session = map.sessions[sessionId];
+    // session entries are { botName, taskTitle } objects (or legacy plain strings)
+    const botName = typeof session === 'object' ? session?.botName : session;
+    const taskTitle = typeof session === 'object' ? (session?.taskTitle ?? '') : '';
     if (botName) {
-      const stopMessage = await narrateStatus('subagent_stop', botName, map.language);
+      const persona = map.bot_personas?.[botName];
+      const stopMessage = await narrateStatus('subagent_stop', botName, map.language, taskTitle, persona);
       await postNarrator({
         event: 'subagent_stop',
         bot_name: botName,
@@ -236,7 +260,9 @@ async function main() {
 
   } else if (EVENT_TYPE === 'post_tool_use') {
     const map = readMap();
-    const botName = map.sessions[sessionId];
+    if (map.max_session_messages === 0) { clearTimeout(watchdog); process.exit(0); }
+    const session = map.sessions[sessionId];
+    const botName = typeof session === 'object' ? session?.botName : session;
     if (!botName) { clearTimeout(watchdog); process.exit(0); }
 
     const toolName = String(payload.tool_name ?? payload.toolName ?? '');
@@ -250,7 +276,8 @@ async function main() {
       clearTimeout(watchdog); process.exit(0);
     }
 
-    const message = await narrate(botName, toolName, payload.tool_input ?? {}, map.language);
+    const persona = map.bot_personas?.[botName];
+    const message = await narrate(botName, toolName, payload.tool_input ?? {}, map.language, persona);
     if (!message) { clearTimeout(watchdog); process.exit(0); }
 
     map.message_counts[sessionId] = count + 1;
@@ -273,60 +300,281 @@ async function main() {
 
 const STATUS_MESSAGES = {
   subagent_start: {
-    nl: (n) => `${n} is aangemeld en klaar voor de taak.`,
-    en: (n) => `${n} has signed in and is ready for the task.`,
-    de: (n) => `${n} hat sich angemeldet und ist bereit für die Aufgabe.`,
-    fr: (n) => `${n} s'est connecté et est prêt pour la tâche.`,
-    es: (n) => `${n} se ha registrado y está listo para la tarea.`,
-    it: (n) => `${n} ha effettuato l'accesso ed è pronto per il compito.`,
-    pt: (n) => `${n} entrou e está pronto para a tarefa.`,
-    pl: (n) => `${n} zalogował się i jest gotowy do zadania.`,
-    tr: (n) => `${n} giriş yaptı ve göreve hazır.`,
-    sv: (n) => `${n} har loggat in och är redo för uppgiften.`,
+    nl: (n, p) => p
+      ? `${p.persona_name} (${p.persona_role}) via ${n} is klaar voor de taak.`
+      : `${n} is aangemeld en klaar voor de taak.`,
+    en: (n, p) => p
+      ? `${p.persona_name} (${p.persona_role}) via ${n} is signed in and ready.`
+      : `${n} has signed in and is ready for the task.`,
+    de: (n, p) => p
+      ? `${p.persona_name} (${p.persona_role}) via ${n} ist angemeldet und bereit.`
+      : `${n} hat sich angemeldet und ist bereit für die Aufgabe.`,
+    fr: (n, p) => p
+      ? `${p.persona_name} (${p.persona_role}) via ${n} est connecté et prêt.`
+      : `${n} s'est connecté et est prêt pour la tâche.`,
+    es: (n, p) => p
+      ? `${p.persona_name} (${p.persona_role}) vía ${n} está listo para la tarea.`
+      : `${n} se ha registrado y está listo para la tarea.`,
+    it: (n, p) => p
+      ? `${p.persona_name} (${p.persona_role}) via ${n} è pronto per il compito.`
+      : `${n} ha effettuato l'accesso ed è pronto per il compito.`,
+    pt: (n, p) => p
+      ? `${p.persona_name} (${p.persona_role}) via ${n} está pronto para a tarefa.`
+      : `${n} entrou e está pronto para a tarefa.`,
+    pl: (n, p) => p
+      ? `${p.persona_name} (${p.persona_role}) przez ${n} jest gotowy do zadania.`
+      : `${n} zalogował się i jest gotowy do zadania.`,
+    tr: (n, p) => p
+      ? `${p.persona_name} (${p.persona_role}) — ${n} göreve hazır.`
+      : `${n} giriş yaptı ve göreve hazır.`,
+    sv: (n, p) => p
+      ? `${p.persona_name} (${p.persona_role}) via ${n} är redo för uppgiften.`
+      : `${n} har loggat in och är redo för uppgiften.`,
   },
   subagent_stop: {
-    nl: (n) => `${n} heeft de taak afgerond.`,
-    en: (n) => `${n} has completed the task.`,
-    de: (n) => `${n} hat die Aufgabe abgeschlossen.`,
-    fr: (n) => `${n} a terminé la tâche.`,
-    es: (n) => `${n} ha completado la tarea.`,
-    it: (n) => `${n} ha completato il compito.`,
-    pt: (n) => `${n} concluiu a tarefa.`,
-    pl: (n) => `${n} ukończył zadanie.`,
-    tr: (n) => `${n} görevi tamamladı.`,
-    sv: (n) => `${n} har slutfört uppgiften.`,
+    nl: (n, p) => p
+      ? `${p.persona_name} (${p.persona_role}) via ${n} heeft de taak afgerond.`
+      : `${n} heeft de taak afgerond.`,
+    en: (n, p) => p
+      ? `${p.persona_name} (${p.persona_role}) via ${n} has completed the task.`
+      : `${n} has completed the task.`,
+    de: (n, p) => p
+      ? `${p.persona_name} (${p.persona_role}) via ${n} hat die Aufgabe abgeschlossen.`
+      : `${n} hat die Aufgabe abgeschlossen.`,
+    fr: (n, p) => p
+      ? `${p.persona_name} (${p.persona_role}) via ${n} a terminé la tâche.`
+      : `${n} a terminé la tâche.`,
+    es: (n, p) => p
+      ? `${p.persona_name} (${p.persona_role}) vía ${n} ha completado la tarea.`
+      : `${n} ha completado la tarea.`,
+    it: (n, p) => p
+      ? `${p.persona_name} (${p.persona_role}) via ${n} ha completato il compito.`
+      : `${n} ha completato il compito.`,
+    pt: (n, p) => p
+      ? `${p.persona_name} (${p.persona_role}) via ${n} concluiu a tarefa.`
+      : `${n} concluiu a tarefa.`,
+    pl: (n, p) => p
+      ? `${p.persona_name} (${p.persona_role}) przez ${n} ukończył zadanie.`
+      : `${n} ukończył zadanie.`,
+    tr: (n, p) => p
+      ? `${p.persona_name} (${p.persona_role}) — ${n} görevi tamamladı.`
+      : `${n} görevi tamamladı.`,
+    sv: (n, p) => p
+      ? `${p.persona_name} (${p.persona_role}) via ${n} har slutfört uppgiften.`
+      : `${n} har slutfört uppgiften.`,
   },
 };
 
 // Haiku prompts for start/stop events — key: "<event>.<lang>"
+// (n) = bot name, (t) = task title (may be empty string)
 const STATUS_HAIKU_PROMPTS = {
   subagent_start: {
-    nl: (n) => `Jij bent ${n}, een Habbo Hotel bot die net online is gekomen. Schrijf in MAXIMAAL 10 woorden wat je nu gaat doen. Eerste persoon, geen aanhalingstekens.`,
-    en: (n) => `You are ${n}, a Habbo Hotel bot who just came online. Write in MAX 10 words what you are about to do. First person, no quotes.`,
-    de: (n) => `Du bist ${n}, ein Habbo Hotel Bot, der gerade online gekommen ist. Schreibe in MAX 10 Wörtern, was du jetzt tun wirst. Erste Person, keine Anführungszeichen.`,
-    fr: (n) => `Tu es ${n}, un bot Habbo Hotel qui vient de se connecter. Écris en MAX 10 mots ce que tu vas faire. Première personne, sans guillemets.`,
-    es: (n) => `Eres ${n}, un bot de Habbo Hotel que acaba de conectarse. Escribe en MÁX 10 palabras lo que vas a hacer. Primera persona, sin comillas.`,
-    it: (n) => `Sei ${n}, un bot di Habbo Hotel appena connesso. Scrivi in MAX 10 parole cosa farai. Prima persona, senza virgolette.`,
-    pt: (n) => `Você é ${n}, um bot do Habbo Hotel que acabou de se conectar. Escreva em MÁX 10 palavras o que vai fazer. Primeira pessoa, sem aspas.`,
-    pl: (n) => `Jesteś ${n}, botem Habbo Hotel, który właśnie się połączył. Napisz w MAX 10 słowach, co zamierzasz zrobić. Pierwsza osoba, bez cudzysłowów.`,
-    tr: (n) => `Sen ${n}, Habbo Hotel botu olarak yeni bağlandın. MAX 10 kelimeyle ne yapacağını yaz. Birinci şahıs, tırnak işareti yok.`,
-    sv: (n) => `Du är ${n}, en Habbo Hotel-bot som precis kom online. Skriv med MAX 10 ord vad du ska göra. Första person, inga citattecken.`,
+    nl: (n, t, persona) => {
+      if (persona) {
+        return t
+          ? `Jij bent ${n}, Habbo bot. Je speelt ${persona.persona_name} (${persona.persona_role}). Je begint met: "${t}". Schrijf in max 10 woorden wat je gaat doen. Eerste persoon, in rol, geen aanhalingstekens.`
+          : `Jij bent ${n}, Habbo bot. Je speelt ${persona.persona_name} (${persona.persona_role}). Schrijf in max 10 woorden wat je nu gaat doen. Eerste persoon, in rol, geen aanhalingstekens.`;
+      }
+      return t
+        ? `Jij bent ${n}, een Habbo Hotel bot. Je begint nu met: "${t}". Schrijf in MAXIMAAL 10 woorden wat je gaat doen. Eerste persoon, geen aanhalingstekens.`
+        : `Jij bent ${n}, een Habbo Hotel bot die net online is gekomen. Schrijf in MAXIMAAL 10 woorden wat je nu gaat doen. Eerste persoon, geen aanhalingstekens.`;
+    },
+    en: (n, t, persona) => {
+      if (persona) {
+        return t
+          ? `You are ${n}, a Habbo bot. You play ${persona.persona_name} (${persona.persona_role}). Starting: "${t}". Write in MAX 10 words what you will do. First person, in role, no quotes.`
+          : `You are ${n}, a Habbo bot. You play ${persona.persona_name} (${persona.persona_role}). Write in MAX 10 words what you are about to do. First person, in role, no quotes.`;
+      }
+      return t
+        ? `You are ${n}, a Habbo Hotel bot. Your task: "${t}". Write in MAX 10 words what you are about to do. First person, no quotes.`
+        : `You are ${n}, a Habbo Hotel bot who just came online. Write in MAX 10 words what you are about to do. First person, no quotes.`;
+    },
+    de: (n, t, persona) => {
+      if (persona) {
+        return t
+          ? `Du bist ${n}, Habbo-Bot. Du spielst ${persona.persona_name} (${persona.persona_role}). Start: "${t}". Schreibe in MAX 10 Wörtern, was du tun wirst. Erste Person, in Rolle, keine Anführungszeichen.`
+          : `Du bist ${n}, Habbo-Bot. Du spielst ${persona.persona_name} (${persona.persona_role}). Schreibe in MAX 10 Wörtern, was du tun wirst. Erste Person, in Rolle, keine Anführungszeichen.`;
+      }
+      return t
+        ? `Du bist ${n}, ein Habbo Hotel Bot. Deine Aufgabe: "${t}". Schreibe in MAX 10 Wörtern, was du jetzt tun wirst. Erste Person, keine Anführungszeichen.`
+        : `Du bist ${n}, ein Habbo Hotel Bot, der gerade online gekommen ist. Schreibe in MAX 10 Wörtern, was du jetzt tun wirst. Erste Person, keine Anführungszeichen.`;
+    },
+    fr: (n, t, persona) => {
+      if (persona) {
+        return t
+          ? `Tu es ${n}, bot Habbo. Tu joues ${persona.persona_name} (${persona.persona_role}). Début : "${t}". Écris en MAX 10 mots ce que tu vas faire. Première personne, dans le rôle, sans guillemets.`
+          : `Tu es ${n}, bot Habbo. Tu joues ${persona.persona_name} (${persona.persona_role}). Écris en MAX 10 mots ce que tu vas faire. Première personne, dans le rôle, sans guillemets.`;
+      }
+      return t
+        ? `Tu es ${n}, un bot Habbo Hotel. Ta tâche : "${t}". Écris en MAX 10 mots ce que tu vas faire. Première personne, sans guillemets.`
+        : `Tu es ${n}, un bot Habbo Hotel qui vient de se connecter. Écris en MAX 10 mots ce que tu vas faire. Première personne, sans guillemets.`;
+    },
+    es: (n, t, persona) => {
+      if (persona) {
+        return t
+          ? `Eres ${n}, bot Habbo. Representas a ${persona.persona_name} (${persona.persona_role}). Empiezas con: "${t}". Escribe en MÁX 10 palabras qué harás. Primera persona, en rol, sin comillas.`
+          : `Eres ${n}, bot Habbo. Representas a ${persona.persona_name} (${persona.persona_role}). Escribe en MÁX 10 palabras qué harás. Primera persona, en rol, sin comillas.`;
+      }
+      return t
+        ? `Eres ${n}, un bot de Habbo Hotel. Tu tarea: "${t}". Escribe en MÁX 10 palabras lo que vas a hacer. Primera persona, sin comillas.`
+        : `Eres ${n}, un bot de Habbo Hotel que acaba de conectarse. Escribe en MÁX 10 palabras lo que vas a hacer. Primera persona, sin comillas.`;
+    },
+    it: (n, t, persona) => {
+      if (persona) {
+        return t
+          ? `Sei ${n}, bot Habbo. Interpreti ${persona.persona_name} (${persona.persona_role}). Inizio: "${t}". Scrivi in MAX 10 parole cosa farai. Prima persona, nel ruolo, senza virgolette.`
+          : `Sei ${n}, bot Habbo. Interpreti ${persona.persona_name} (${persona.persona_role}). Scrivi in MAX 10 parole cosa farai. Prima persona, nel ruolo, senza virgolette.`;
+      }
+      return t
+        ? `Sei ${n}, un bot di Habbo Hotel. Il tuo compito: "${t}". Scrivi in MAX 10 parole cosa farai. Prima persona, senza virgolette.`
+        : `Sei ${n}, un bot di Habbo Hotel appena connesso. Scrivi in MAX 10 parole cosa farai. Prima persona, senza virgolette.`;
+    },
+    pt: (n, t, persona) => {
+      if (persona) {
+        return t
+          ? `Você é ${n}, bot Habbo. Você interpreta ${persona.persona_name} (${persona.persona_role}). Começo: "${t}". Escreva em MÁX 10 palavras o que fará. Primeira pessoa, no papel, sem aspas.`
+          : `Você é ${n}, bot Habbo. Você interpreta ${persona.persona_name} (${persona.persona_role}). Escreva em MÁX 10 palavras o que fará. Primeira pessoa, no papel, sem aspas.`;
+      }
+      return t
+        ? `Você é ${n}, um bot do Habbo Hotel. Sua tarefa: "${t}". Escreva em MÁX 10 palavras o que vai fazer. Primeira pessoa, sem aspas.`
+        : `Você é ${n}, um bot do Habbo Hotel que acabou de se conectar. Escreva em MÁX 10 palavras o que vai fazer. Primeira pessoa, sem aspas.`;
+    },
+    pl: (n, t, persona) => {
+      if (persona) {
+        return t
+          ? `Jesteś ${n}, botem Habbo. Grasz ${persona.persona_name} (${persona.persona_role}). Start: "${t}". Napisz w MAX 10 słowach, co zrobisz. Pierwsza osoba, w roli, bez cudzysłowów.`
+          : `Jesteś ${n}, botem Habbo. Grasz ${persona.persona_name} (${persona.persona_role}). Napisz w MAX 10 słowach, co zrobisz. Pierwsza osoba, w roli, bez cudzysłowów.`;
+      }
+      return t
+        ? `Jesteś ${n}, botem Habbo Hotel. Twoje zadanie: "${t}". Napisz w MAX 10 słowach, co zamierzasz zrobić. Pierwsza osoba, bez cudzysłowów.`
+        : `Jesteś ${n}, botem Habbo Hotel, który właśnie się połączył. Napisz w MAX 10 słowach, co zamierzasz zrobić. Pierwsza osoba, bez cudzysłowów.`;
+    },
+    tr: (n, t, persona) => {
+      if (persona) {
+        return t
+          ? `Sen ${n}, Habbo botusun. Rol: ${persona.persona_name} (${persona.persona_role}). Başlangıç: "${t}". MAX 10 kelimeyle ne yapacağını yaz. Birinci şahıs, rolde, tırnak yok.`
+          : `Sen ${n}, Habbo botusun. Rol: ${persona.persona_name} (${persona.persona_role}). MAX 10 kelimeyle ne yapacağını yaz. Birinci şahıs, rolde, tırnak yok.`;
+      }
+      return t
+        ? `Sen ${n}, Habbo Hotel botusun. Görevin: "${t}". MAX 10 kelimeyle ne yapacağını yaz. Birinci şahıs, tırnak işareti yok.`
+        : `Sen ${n}, Habbo Hotel botu olarak yeni bağlandın. MAX 10 kelimeyle ne yapacağını yaz. Birinci şahıs, tırnak işareti yok.`;
+    },
+    sv: (n, t, persona) => {
+      if (persona) {
+        return t
+          ? `Du är ${n}, Habbo-bot. Du spelar ${persona.persona_name} (${persona.persona_role}). Start: "${t}". Skriv med MAX 10 ord vad du ska göra. Första person, i rollen, inga citattecken.`
+          : `Du är ${n}, Habbo-bot. Du spelar ${persona.persona_name} (${persona.persona_role}). Skriv med MAX 10 ord vad du ska göra. Första person, i rollen, inga citattecken.`;
+      }
+      return t
+        ? `Du är ${n}, en Habbo Hotel-bot. Din uppgift: "${t}". Skriv med MAX 10 ord vad du ska göra. Första person, inga citattecken.`
+        : `Du är ${n}, en Habbo Hotel-bot som precis kom online. Skriv med MAX 10 ord vad du ska göra. Första person, inga citattecken.`;
+    },
   },
   subagent_stop: {
-    nl: (n) => `Jij bent ${n}, een Habbo Hotel bot die de taak heeft afgerond. Schrijf in MAXIMAAL 10 woorden een afsluitende opmerking. Eerste persoon, geen aanhalingstekens.`,
-    en: (n) => `You are ${n}, a Habbo Hotel bot who just finished the task. Write in MAX 10 words a closing remark. First person, no quotes.`,
-    de: (n) => `Du bist ${n}, ein Habbo Hotel Bot, der die Aufgabe beendet hat. Schreibe in MAX 10 Wörtern eine abschließende Bemerkung. Erste Person, keine Anführungszeichen.`,
-    fr: (n) => `Tu es ${n}, un bot Habbo Hotel qui vient de terminer la tâche. Écris en MAX 10 mots une remarque de clôture. Première personne, sans guillemets.`,
-    es: (n) => `Eres ${n}, un bot de Habbo Hotel que acaba de terminar la tarea. Escribe en MÁX 10 palabras una observación final. Primera persona, sin comillas.`,
-    it: (n) => `Sei ${n}, un bot di Habbo Hotel che ha appena terminato il compito. Scrivi in MAX 10 parole un commento finale. Prima persona, senza virgolette.`,
-    pt: (n) => `Você é ${n}, um bot do Habbo Hotel que acabou de terminar a tarefa. Escreva em MÁX 10 palavras um comentário final. Primeira pessoa, sem aspas.`,
-    pl: (n) => `Jesteś ${n}, botem Habbo Hotel, który właśnie zakończył zadanie. Napisz w MAX 10 słowach końcową uwagę. Pierwsza osoba, bez cudzysłowów.`,
-    tr: (n) => `Sen ${n}, Habbo Hotel botu olarak görevi tamamladın. MAX 10 kelimeyle kapanış yorumu yaz. Birinci şahıs, tırnak işareti yok.`,
-    sv: (n) => `Du är ${n}, en Habbo Hotel-bot som precis slutfört uppgiften. Skriv med MAX 10 ord en avslutande kommentar. Första person, inga citattecken.`,
+    nl: (n, t, persona) => {
+      if (persona) {
+        return t
+          ? `Jij bent ${n}, Habbo bot. Je speelt ${persona.persona_name} (${persona.persona_role}). Je hebt afgerond: "${t}". Schrijf in max 10 woorden een afsluitende opmerking. Eerste persoon, in rol, geen aanhalingstekens.`
+          : `Jij bent ${n}, Habbo bot. Je speelt ${persona.persona_name} (${persona.persona_role}). Schrijf in max 10 woorden een afsluitende opmerking. Eerste persoon, in rol, geen aanhalingstekens.`;
+      }
+      return t
+        ? `Jij bent ${n}, een Habbo Hotel bot. Je hebt zojuist afgerond: "${t}". Schrijf in MAXIMAAL 10 woorden een afsluitende opmerking. Eerste persoon, geen aanhalingstekens.`
+        : `Jij bent ${n}, een Habbo Hotel bot die de taak heeft afgerond. Schrijf in MAXIMAAL 10 woorden een afsluitende opmerking. Eerste persoon, geen aanhalingstekens.`;
+    },
+    en: (n, t, persona) => {
+      if (persona) {
+        return t
+          ? `You are ${n}, a Habbo bot. You play ${persona.persona_name} (${persona.persona_role}). You just finished: "${t}". Write in MAX 10 words a closing remark. First person, in role, no quotes.`
+          : `You are ${n}, a Habbo bot. You play ${persona.persona_name} (${persona.persona_role}). Write in MAX 10 words a closing remark. First person, in role, no quotes.`;
+      }
+      return t
+        ? `You are ${n}, a Habbo Hotel bot. You just finished: "${t}". Write in MAX 10 words a closing remark. First person, no quotes.`
+        : `You are ${n}, a Habbo Hotel bot who just finished the task. Write in MAX 10 words a closing remark. First person, no quotes.`;
+    },
+    de: (n, t, persona) => {
+      if (persona) {
+        return t
+          ? `Du bist ${n}, Habbo-Bot. Du spielst ${persona.persona_name} (${persona.persona_role}). Gerade abgeschlossen: "${t}". Schreibe in MAX 10 Wörtern einen Abschluss. Erste Person, in Rolle, keine Anführungszeichen.`
+          : `Du bist ${n}, Habbo-Bot. Du spielst ${persona.persona_name} (${persona.persona_role}). Schreibe in MAX 10 Wörtern einen Abschluss. Erste Person, in Rolle, keine Anführungszeichen.`;
+      }
+      return t
+        ? `Du bist ${n}, ein Habbo Hotel Bot. Du hast gerade abgeschlossen: "${t}". Schreibe in MAX 10 Wörtern eine abschließende Bemerkung. Erste Person, keine Anführungszeichen.`
+        : `Du bist ${n}, ein Habbo Hotel Bot, der die Aufgabe beendet hat. Schreibe in MAX 10 Wörtern eine abschließende Bemerkung. Erste Person, keine Anführungszeichen.`;
+    },
+    fr: (n, t, persona) => {
+      if (persona) {
+        return t
+          ? `Tu es ${n}, bot Habbo. Tu joues ${persona.persona_name} (${persona.persona_role}). Tu viens de terminer : "${t}". Écris en MAX 10 mots une conclusion. Première personne, dans le rôle, sans guillemets.`
+          : `Tu es ${n}, bot Habbo. Tu joues ${persona.persona_name} (${persona.persona_role}). Écris en MAX 10 mots une conclusion. Première personne, dans le rôle, sans guillemets.`;
+      }
+      return t
+        ? `Tu es ${n}, un bot Habbo Hotel. Tu viens de terminer : "${t}". Écris en MAX 10 mots une remarque de clôture. Première personne, sans guillemets.`
+        : `Tu es ${n}, un bot Habbo Hotel qui vient de terminer la tâche. Écris en MAX 10 mots une remarque de clôture. Première personne, sans guillemets.`;
+    },
+    es: (n, t, persona) => {
+      if (persona) {
+        return t
+          ? `Eres ${n}, bot Habbo. Representas a ${persona.persona_name} (${persona.persona_role}). Acabas de terminar: "${t}". Escribe en MÁX 10 palabras un cierre. Primera persona, en rol, sin comillas.`
+          : `Eres ${n}, bot Habbo. Representas a ${persona.persona_name} (${persona.persona_role}). Escribe en MÁX 10 palabras un cierre. Primera persona, en rol, sin comillas.`;
+      }
+      return t
+        ? `Eres ${n}, un bot de Habbo Hotel. Acabas de terminar: "${t}". Escribe en MÁX 10 palabras una observación final. Primera persona, sin comillas.`
+        : `Eres ${n}, un bot de Habbo Hotel que acaba de terminar la tarea. Escribe en MÁX 10 palabras una observación final. Primera persona, sin comillas.`;
+    },
+    it: (n, t, persona) => {
+      if (persona) {
+        return t
+          ? `Sei ${n}, bot Habbo. Interpreti ${persona.persona_name} (${persona.persona_role}). Hai appena completato: "${t}". Scrivi in MAX 10 parole un commento finale. Prima persona, nel ruolo, senza virgolette.`
+          : `Sei ${n}, bot Habbo. Interpreti ${persona.persona_name} (${persona.persona_role}). Scrivi in MAX 10 parole un commento finale. Prima persona, nel ruolo, senza virgolette.`;
+      }
+      return t
+        ? `Sei ${n}, un bot di Habbo Hotel. Hai appena completato: "${t}". Scrivi in MAX 10 parole un commento finale. Prima persona, senza virgolette.`
+        : `Sei ${n}, un bot di Habbo Hotel che ha appena terminato il compito. Scrivi in MAX 10 parole un commento finale. Prima persona, senza virgolette.`;
+    },
+    pt: (n, t, persona) => {
+      if (persona) {
+        return t
+          ? `Você é ${n}, bot Habbo. Você interpreta ${persona.persona_name} (${persona.persona_role}). Acabou de concluir: "${t}". Escreva em MÁX 10 palavras um fechamento. Primeira pessoa, no papel, sem aspas.`
+          : `Você é ${n}, bot Habbo. Você interpreta ${persona.persona_name} (${persona.persona_role}). Escreva em MÁX 10 palavras um fechamento. Primeira pessoa, no papel, sem aspas.`;
+      }
+      return t
+        ? `Você é ${n}, um bot do Habbo Hotel. Você acabou de concluir: "${t}". Escreva em MÁX 10 palavras um comentário final. Primeira pessoa, sem aspas.`
+        : `Você é ${n}, um bot do Habbo Hotel que acabou de terminar a tarefa. Escreva em MÁX 10 palavras um comentário final. Primeira pessoa, sem aspas.`;
+    },
+    pl: (n, t, persona) => {
+      if (persona) {
+        return t
+          ? `Jesteś ${n}, botem Habbo. Grasz ${persona.persona_name} (${persona.persona_role}). Właśnie ukończyłeś: "${t}". Napisz w MAX 10 słowach podsumowanie. Pierwsza osoba, w roli, bez cudzysłowów.`
+          : `Jesteś ${n}, botem Habbo. Grasz ${persona.persona_name} (${persona.persona_role}). Napisz w MAX 10 słowach podsumowanie. Pierwsza osoba, w roli, bez cudzysłowów.`;
+      }
+      return t
+        ? `Jesteś ${n}, botem Habbo Hotel. Właśnie ukończyłeś: "${t}". Napisz w MAX 10 słowach końcową uwagę. Pierwsza osoba, bez cudzysłowów.`
+        : `Jesteś ${n}, botem Habbo Hotel, który właśnie zakończył zadanie. Napisz w MAX 10 słowach końcową uwagę. Pierwsza osoba, bez cudzysłowów.`;
+    },
+    tr: (n, t, persona) => {
+      if (persona) {
+        return t
+          ? `Sen ${n}, Habbo botusun. Rol: ${persona.persona_name} (${persona.persona_role}). Tamamladın: "${t}". MAX 10 kelimeyle kapanış yaz. Birinci şahıs, rolde, tırnak yok.`
+          : `Sen ${n}, Habbo botusun. Rol: ${persona.persona_name} (${persona.persona_role}). MAX 10 kelimeyle kapanış yaz. Birinci şahıs, rolde, tırnak yok.`;
+      }
+      return t
+        ? `Sen ${n}, Habbo Hotel botusun. Şunu tamamladın: "${t}". MAX 10 kelimeyle kapanış yorumu yaz. Birinci şahıs, tırnak işareti yok.`
+        : `Sen ${n}, Habbo Hotel botu olarak görevi tamamladın. MAX 10 kelimeyle kapanış yorumu yaz. Birinci şahıs, tırnak işareti yok.`;
+    },
+    sv: (n, t, persona) => {
+      if (persona) {
+        return t
+          ? `Du är ${n}, Habbo-bot. Du spelar ${persona.persona_name} (${persona.persona_role}). Du har avslutat: "${t}". Skriv med MAX 10 ord en avslutande kommentar. Första person, i rollen, inga citattecken.`
+          : `Du är ${n}, Habbo-bot. Du spelar ${persona.persona_name} (${persona.persona_role}). Skriv med MAX 10 ord en avslutande kommentar. Första person, i rollen, inga citattecken.`;
+      }
+      return t
+        ? `Du är ${n}, en Habbo Hotel-bot. Du har just avslutat: "${t}". Skriv med MAX 10 ord en avslutande kommentar. Första person, inga citattecken.`
+        : `Du är ${n}, en Habbo Hotel-bot som precis slutfört uppgiften. Skriv med MAX 10 ord en avslutande kommentar. Första person, inga citattecken.`;
+    },
   },
 };
 
-async function narrateStatus(event, botName, lang = 'en') {
+async function narrateStatus(event, botName, lang = 'en', taskTitle = '', persona) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (apiKey) {
     const promptFn = STATUS_HAIKU_PROMPTS[event]?.[lang] ?? STATUS_HAIKU_PROMPTS[event]?.['en'];
@@ -342,7 +590,7 @@ async function narrateStatus(event, botName, lang = 'en') {
           body: JSON.stringify({
             model: 'claude-haiku-4-5',
             max_tokens: 50,
-            messages: [{ role: 'user', content: promptFn(botName) }],
+            messages: [{ role: 'user', content: promptFn(botName, taskTitle, persona) }],
           }),
           signal: AbortSignal.timeout(2000),
         });
@@ -355,7 +603,7 @@ async function narrateStatus(event, botName, lang = 'en') {
     }
   }
   const fallbackFn = STATUS_MESSAGES[event]?.[lang] ?? STATUS_MESSAGES[event]?.['en'];
-  return fallbackFn ? fallbackFn(botName) : `${botName} ${event.replace('_', ' ')}.`;
+  return fallbackFn ? fallbackFn(botName, persona) : `${botName} ${event.replace('_', ' ')}.`;
 }
 
 // ── Bot name detection ────────────────────────────────────────────────────────
@@ -378,31 +626,51 @@ function findBotInText(text, knownBots = []) {
 
 // ── Narration ─────────────────────────────────────────────────────────────────
 
-async function narrate(botName, toolName, toolInput, lang = 'en') {
+async function narrate(botName, toolName, toolInput, lang = 'en', persona) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (apiKey) {
-    const result = await callHaiku(apiKey, botName, toolName, toolInput, lang);
+    const result = await callHaiku(apiKey, botName, toolName, toolInput, lang, persona);
     if (result) return result;
   }
   const fallback = getFallback(lang);
   const tpl = fallback[toolName];
-  return tpl ? tpl(botName, toolInput) : null;
+  return tpl ? tpl(botName, toolInput, persona) : null;
 }
 
 const HAIKU_LANG_INSTRUCTIONS = {
-  nl: (n) => `Jij bent ${n}, een Habbo Hotel bot. Spreek in eerste persoon.\nVertel in MAXIMAAL 12 woorden wat je nu doet. Geen aanhalingstekens.`,
-  en: (n) => `You are ${n}, a Habbo Hotel bot. Speak in first person.\nDescribe in MAX 12 words what you are doing right now. No quotes.`,
-  de: (n) => `Du bist ${n}, ein Habbo Hotel Bot. Sprich in der ersten Person.\nBeschreibe in MAX 12 Wörtern, was du gerade tust. Keine Anführungszeichen.`,
-  fr: (n) => `Tu es ${n}, un bot Habbo Hotel. Parle à la première personne.\nDécris en MAX 12 mots ce que tu fais maintenant. Pas de guillemets.`,
-  es: (n) => `Eres ${n}, un bot de Habbo Hotel. Habla en primera persona.\nDescribe en MÁX 12 palabras lo que estás haciendo ahora. Sin comillas.`,
-  it: (n) => `Sei ${n}, un bot di Habbo Hotel. Parla in prima persona.\nDescrivi in MAX 12 parole cosa stai facendo adesso. Senza virgolette.`,
-  pt: (n) => `Você é ${n}, um bot do Habbo Hotel. Fale na primeira pessoa.\nDescreva em MÁX 12 palavras o que está fazendo agora. Sem aspas.`,
-  pl: (n) => `Jesteś ${n}, botem Habbo Hotel. Mów w pierwszej osobie.\nOpisz w MAX 12 słowach, co teraz robisz. Bez cudzysłowów.`,
-  tr: (n) => `Sen ${n}, Habbo Hotel botusun. Birinci şahıs olarak konuş.\nŞu anda ne yaptığını MAX 12 kelimeyle anlat. Tırnak işareti yok.`,
-  sv: (n) => `Du är ${n}, en Habbo Hotel-bot. Tala i första person.\nBeskriv med MAX 12 ord vad du gör just nu. Inga citattecken.`,
+  nl: (n, persona) => persona
+    ? `Jij bent ${n}. Je rol: ${persona.persona_name}, ${persona.persona_role}. Vertel in max 12 woorden wat je doet. Geen aanhalingstekens.`
+    : `Jij bent ${n}, een Habbo Hotel bot. Spreek in eerste persoon.\nVertel in MAXIMAAL 12 woorden wat je nu doet. Geen aanhalingstekens.`,
+  en: (n, persona) => persona
+    ? `You are ${n}. Your role: ${persona.persona_name}, ${persona.persona_role}. Describe in MAX 12 words what you are doing. No quotes.`
+    : `You are ${n}, a Habbo Hotel bot. Speak in first person.\nDescribe in MAX 12 words what you are doing right now. No quotes.`,
+  de: (n, persona) => persona
+    ? `Du bist ${n}. Deine Rolle: ${persona.persona_name}, ${persona.persona_role}. Beschreibe in MAX 12 Wörtern, was du tust. Keine Anführungszeichen.`
+    : `Du bist ${n}, ein Habbo Hotel Bot. Sprich in der ersten Person.\nBeschreibe in MAX 12 Wörtern, was du gerade tust. Keine Anführungszeichen.`,
+  fr: (n, persona) => persona
+    ? `Tu es ${n}. Ton rôle : ${persona.persona_name}, ${persona.persona_role}. Décris en MAX 12 mots ce que tu fais. Pas de guillemets.`
+    : `Tu es ${n}, un bot Habbo Hotel. Parle à la première personne.\nDécris en MAX 12 mots ce que tu fais maintenant. Pas de guillemets.`,
+  es: (n, persona) => persona
+    ? `Eres ${n}. Tu rol: ${persona.persona_name}, ${persona.persona_role}. Describe en MÁX 12 palabras lo que haces. Sin comillas.`
+    : `Eres ${n}, un bot de Habbo Hotel. Habla en primera persona.\nDescribe en MÁX 12 palabras lo que estás haciendo ahora. Sin comillas.`,
+  it: (n, persona) => persona
+    ? `Sei ${n}. Il tuo ruolo: ${persona.persona_name}, ${persona.persona_role}. Descrivi in MAX 12 parole cosa stai facendo. Senza virgolette.`
+    : `Sei ${n}, un bot di Habbo Hotel. Parla in prima persona.\nDescrivi in MAX 12 parole cosa stai facendo adesso. Senza virgolette.`,
+  pt: (n, persona) => persona
+    ? `Você é ${n}. Seu papel: ${persona.persona_name}, ${persona.persona_role}. Descreva em MÁX 12 palavras o que está fazendo. Sem aspas.`
+    : `Você é ${n}, um bot do Habbo Hotel. Fale na primeira pessoa.\nDescreva em MÁX 12 palavras o que está fazendo agora. Sem aspas.`,
+  pl: (n, persona) => persona
+    ? `Jesteś ${n}. Twoja rola: ${persona.persona_name}, ${persona.persona_role}. Opisz w MAX 12 słowach, co robisz. Bez cudzysłowów.`
+    : `Jesteś ${n}, botem Habbo Hotel. Mów w pierwszej osobie.\nOpisz w MAX 12 słowach, co teraz robisz. Bez cudzysłowów.`,
+  tr: (n, persona) => persona
+    ? `Sen ${n}. Rolün: ${persona.persona_name}, ${persona.persona_role}. Şu anda ne yaptığını MAX 12 kelimeyle anlat. Tırnak yok.`
+    : `Sen ${n}, Habbo Hotel botusun. Birinci şahıs olarak konuş.\nŞu anda ne yaptığını MAX 12 kelimeyle anlat. Tırnak işareti yok.`,
+  sv: (n, persona) => persona
+    ? `Du är ${n}. Din roll: ${persona.persona_name}, ${persona.persona_role}. Beskriv med MAX 12 ord vad du gör. Inga citattecken.`
+    : `Du är ${n}, en Habbo Hotel-bot. Tala i första person.\nBeskriv med MAX 12 ord vad du gör just nu. Inga citattecken.`,
 };
 
-async function callHaiku(apiKey, botName, toolName, toolInput, lang = 'en') {
+async function callHaiku(apiKey, botName, toolName, toolInput, lang = 'en', persona) {
   let detail = '';
   try {
     const i = typeof toolInput === 'object' && toolInput !== null ? toolInput : {};
@@ -410,7 +678,7 @@ async function callHaiku(apiKey, botName, toolName, toolInput, lang = 'en') {
   } catch {}
 
   const instrFn = HAIKU_LANG_INSTRUCTIONS[lang] ?? HAIKU_LANG_INSTRUCTIONS['en'];
-  const prompt = instrFn(botName) + `\nTool: ${toolName}${detail ? `\nDetail: ${detail}` : ''}`;
+  const prompt = instrFn(botName, persona) + `\nTool: ${toolName}${detail ? `\nDetail: ${detail}` : ''}`;
 
   try {
     const res = await fetch('https://api.anthropic.com/v1/messages', {

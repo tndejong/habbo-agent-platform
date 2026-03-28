@@ -64,7 +64,7 @@ const TalkAsPlayerSchema = z.object({
 const MovePlayerToRoomSchema = z.object({
   api_key: z.string().optional(),
   username: z.string().min(1),
-  room_id: z.number().int().positive(),
+  room_id: z.coerce.number().int().positive(),
 });
 
 const GiveCreditsSchema = z.object({
@@ -97,8 +97,8 @@ const GetOnlinePlayersSchema = z.object({
 
 const GetRoomChatLogSchema = z.object({
   api_key: z.string().optional(),
-  room_id: z.number().int().positive(),
-  limit: z.number().int().min(1).max(500).optional(),
+  room_id: z.coerce.number().int().positive(),
+  limit: z.coerce.number().int().min(1).max(500).optional(),
 });
 
 const HotelAlertSchema = z.object({
@@ -144,20 +144,20 @@ const SetRankSchema = z.object({
 
 const DeployBotSchema = z.object({
   api_key: z.string().optional(),
-  room_id: z.number().int().positive(),
+  room_id: z.coerce.number().int().positive(),
   name: z.string().min(1).max(25),
   figure: z.string().optional(),
   figure_type: z.string().min(2).max(40).optional(),
   gender: z.enum(['M', 'F']).optional(),
   motto: z.string().max(100).optional(),
-  x: z.number().int().min(0).optional(),
-  y: z.number().int().min(0).optional(),
+  x: z.coerce.number().int().min(0).optional(),
+  y: z.coerce.number().int().min(0).optional(),
   freeroam: z.boolean().optional(),
 });
 
 const TalkBotSchema = z.object({
   api_key: z.string().optional(),
-  bot_id: z.number().int().positive(),
+  bot_id: z.coerce.number().int().positive(),
   message: z.string().min(1).max(512),
   type: z.enum(['talk', 'shout']).optional(),
 });
@@ -168,7 +168,7 @@ const ListBotsSchema = z.object({
 
 const DeleteBotSchema = z.object({
   api_key: z.string().optional(),
-  bot_id: z.number().int().positive(),
+  bot_id: z.coerce.number().int().positive(),
 });
 
 const ValidateFigureSchema = z.object({

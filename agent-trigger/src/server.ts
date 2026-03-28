@@ -35,6 +35,7 @@ interface RunContext {
   roomId: number;
   startTime: Date;
   from: string;
+  portalUserId: number;
   child: ReturnType<typeof spawn> | null;
   timeoutHandle: ReturnType<typeof setTimeout> | null;
 }
@@ -43,16 +44,45 @@ const activeRuns = new Map<number, RunContext>();
 // Guards against concurrent POST /trigger for the same room
 const triggeringRooms = new Set<number>();
 
-function writeNarratorBotsFile(roomId: number, knownBots: string[], language = 'en', verbosity = 3): void {
+type NarratorBotPersona = { persona_name: string; persona_role: string };
+
+/** Minimal (3) → 0 (off); Normal (6) → 3; Verbose (10) → 7 */
+function narratorMaxSessionMessages(verbosity: number): number {
+  const v = Number(verbosity);
+  if (!Number.isFinite(v)) return 0;
+  return v <= 3 ? 0 : v - 3;
+}
+
+function narratorPersonasFromMembers(
+  members: Array<{ name: string; persona_role: string; bot_name: string }>
+): Record<string, NarratorBotPersona> {
+  return Object.fromEntries(
+    members
+      .filter(m => m.bot_name)
+      .map(m => [m.bot_name, { persona_name: m.name, persona_role: m.persona_role }])
+  );
+}
+
+function writeNarratorBotsFile(
+  roomId: number,
+  knownBots: string[],
+  language = 'en',
+  verbosity = 3,
+  personas?: Record<string, NarratorBotPersona>
+): void {
   try {
-    writeFileSync(narratorBotsFile(roomId), JSON.stringify({
+    const payload: Record<string, unknown> = {
       known_bots: knownBots,
       language,
-      max_session_messages: Math.max(3, Math.min(10, verbosity)),
+      max_session_messages: narratorMaxSessionMessages(verbosity),
       sessions: {},
       pending: [],
       message_counts: {},
-    }, null, 2));
+    };
+    if (personas && Object.keys(personas).length > 0) {
+      payload.bot_personas = personas;
+    }
+    writeFileSync(narratorBotsFile(roomId), JSON.stringify(payload, null, 2));
   } catch { /* non-fatal */ }
 }
 
@@ -320,11 +350,36 @@ interface RoomTemplate {
   rot: number;
 }
 
+type ExecutionMode = 'concurrent' | 'sequential' | 'shared';
+
 interface TeamConfig {
-  team: { id: number; name: string; description: string; orchestrator_prompt: string; execution_mode: string; tasks_json: string; language: string; narrator_verbosity?: number; required_integrations?: string[] };
+  team: { id: number; name: string; description: string; orchestrator_prompt: string; execution_mode: ExecutionMode | string; tasks_json: string; language: string; narrator_verbosity?: number; required_integrations?: string[] };
   members: TeamMember[];
   flow: { name: string; description: string; tasks_json: string } | null;
   templates: RoomTemplate[];
+}
+
+interface TriggerPostBody {
+  team_id?: number;
+  flow_id?: number | null;
+  room_id?: number;
+  triggered_by?: string;
+  portal_url?: string;
+  pack_source_url?: string;
+  role_assignments?: Record<string, string>;
+  pack_id?: number;
+  portal_user_id?: number;
+  user_team?: boolean;
+  language?: string;
+  narrator_verbosity?: number;
+  task_mode?: 'session_goal' | 'team_tasks';
+  session_goal?: string;
+}
+
+interface OrchestratorBuildOptions {
+  botIdMap?: Map<string, number>;
+  taskMode?: 'session_goal' | 'team_tasks';
+  sessionGoal?: string;
 }
 
 interface RoleAssignments {
@@ -426,24 +481,92 @@ const LANGUAGE_NAMES: Record<string, string> = {
   it: 'Italian', pt: 'Portuguese', pl: 'Polish', tr: 'Turkish', sv: 'Swedish',
 }
 
-function buildPromptFromConfig(config: TeamConfig, roomId: number, triggeredBy: string): string {
-  const mode = config.team.execution_mode || 'concurrent'
-  const tf = taskFile(roomId)
-  const tasksBlock = renderTasksBlock(config, roomId, tf)
+// Placeholder the orchestrator fills when spawning each subagent's prompt
+const TASK_PLACEHOLDER = '[INSERT SPECIFIC TASK HERE]'
+
+// ── Prompt builder helpers ───────────────────────────────────────────────────
+
+function buildOrchestratorHeader(teamName: string, roomId: number, triggeredBy: string, langName: string): string {
+  return `You are the orchestrator for team "${teamName}".
+Room: ${roomId}. Triggered by: ${triggeredBy}.
+All hotel room communication must be in ${langName}.`
+}
+
+interface SubagentTemplateCtx {
+  config: TeamConfig;
+  roomId: number;
+  langName: string;
+}
+
+function buildSubagentTemplates(
+  ctx: SubagentTemplateCtx,
+  options?: { botIdMap?: Map<string, number>; taskPlaceholder?: string }
+): string {
+  const { config, roomId, langName } = ctx
+  const botIdMap = options?.botIdMap
+  const taskSlot = options?.taskPlaceholder ?? TASK_PLACEHOLDER
+
+  return config.members.map(m => {
+    const tpl = config.templates.find(t => t.bot_name === m.bot_name && t.room_id === roomId)
+    const placement = tpl ? `x=${tpl.x}, y=${tpl.y}, rot=${tpl.rot}` : `anywhere`
+    // m.prompt already has skill bodies injected by resolvePersonaSkills on the portal side
+    const personaContext = m.prompt?.trim() ? `${m.prompt.trim()}\n\n---\n\n` : ''
+    const botId = botIdMap?.get(m.bot_name)
+    const botIdentityLine = botId != null
+      ? `Your hotel bot name is "${m.bot_name}" (bot_id: ${botId} — always pass this as a NUMBER, never a string).`
+      : `Your hotel bot name is "${m.bot_name}". Call list_bots to find its numeric bot_id before using talk_bot.`
+    const deployLine = botId != null
+      ? `- Use talk_bot with bot_id: ${botId} directly. Do NOT call list_bots to look up the id — it is already provided above.\n- Only call deploy_bot if "${m.bot_name}" is NOT already visible in room ${roomId} (placement: ${placement}).`
+      : `- Call list_bots to find the numeric bot_id for "${m.bot_name}". Only call deploy_bot if it is NOT already in room ${roomId} (placement: ${placement}).`
+    return `### Subagent prompt for ${m.name}
+\`\`\`
+IMPORTANT: MCP tools are already registered. Call them DIRECTLY by their full prefixed name (e.g. \`mcp__hotel-mcp__talk_bot\`). DO NOT call ToolSearch — it is unreliable and wastes turns.
+Runtime: Node.js (node) and Python 3 (python3) are both available for scripting.
+MCP parameter types: bot_id is always an integer, room_id is always an integer. Never pass as strings.
+
+${personaContext}You are ${m.name}, a ${m.persona_role || m.team_role || 'team member'} working as part of team "${config.team.name}" in Habbo Hotel room ${roomId}.
+
+${botIdentityLine}
+${deployLine}
+- Always speak in ${langName} when using talk_bot.
+
+${taskSlot}
+
+Context from previous tasks (if any) will be included above — read it before starting so you do not re-fetch data that was already pulled.
+
+When done: announce your completion in ${langName} via talk_bot (e.g. "✅ Task finished: [brief summary]"), then return your findings as text.
+\`\`\``
+  }).join('\n\n')
+}
+
+function buildFinalStep(firstResolvedBotId: number | null, roomId: number, langName: string): string {
+  if (firstResolvedBotId != null) {
+    return `
+## Final step: Announce completion
+After ALL subagents have finished, call talk_bot with bot_id: ${firstResolvedBotId} (number) to announce in ${langName} that the entire team has completed all tasks. Keep it short and clear (1-2 sentences).`
+  }
+  return `
+## Final step: Announce completion
+After ALL subagents have finished, use talk_bot (pick a bot_id from list_bots that is currently deployed in room ${roomId}) to announce in ${langName} that the entire team has completed all tasks. Keep it short and clear (1-2 sentences).`
+}
+
+// ── Main prompt builder ──────────────────────────────────────────────────────
+
+function buildPromptFromConfig(config: TeamConfig, roomId: number, triggeredBy: string, options?: OrchestratorBuildOptions): string {
+  const { botIdMap, taskMode, sessionGoal } = options ?? {}
+  const mode = (config.team.execution_mode || 'concurrent') as ExecutionMode
   const lang = config.team.language || 'en'
   const langName = LANGUAGE_NAMES[lang] || lang
   const langInstruction = `\n\nIMPORTANT: Always communicate in ${langName} when using talk_bot to speak in the hotel room.`
 
   const flowSection = config.flow
     ? `\n## Flow: ${config.flow.name}\n${config.flow.description}\n`
-    : "";
+    : ''
 
   // Build a clean team roster for the orchestrator — capabilities only, no reactive-chat persona
   const rosterLines = config.members.map(m => {
     const tpl = config.templates.find(t => t.bot_name === m.bot_name && t.room_id === roomId)
-    const placement = tpl
-      ? `x=${tpl.x}, y=${tpl.y}, rot=${tpl.rot}`
-      : `anywhere in room ${roomId}`
+    const placement = tpl ? `x=${tpl.x}, y=${tpl.y}, rot=${tpl.rot}` : `anywhere in room ${roomId}`
     const titleParts = [m.team_role, m.persona_role].filter(Boolean)
     const title = titleParts.length ? ` (${titleParts.join(' · ')})` : ''
     const caps = m.capabilities?.trim()
@@ -452,73 +575,85 @@ function buildPromptFromConfig(config: TeamConfig, roomId: number, triggeredBy: 
     return `- **${m.name}**${title} — hotel bot: "${m.bot_name}", deploy at: ${placement}${caps}`
   }).join('\n\n')
 
-  // Subagent prompt template block — tells orchestrator how to write each subagent's prompt
-  const subagentTemplate = config.members.map(m => {
-    const tpl = config.templates.find(t => t.bot_name === m.bot_name && t.room_id === roomId)
-    const placement = tpl
-      ? `x=${tpl.x}, y=${tpl.y}, rot=${tpl.rot}`
-      : `anywhere`
-    // m.prompt already has skill bodies injected by resolvePersonaSkills on the portal side
-    const personaContext = m.prompt?.trim()
-      ? `${m.prompt.trim()}\n\n---\n\n`
-      : ''
-    return `### Subagent prompt for ${m.name}
-\`\`\`
-${personaContext}You are ${m.name}, a ${m.persona_role || m.team_role || 'team member'} working as part of team "${config.team.name}" in Habbo Hotel room ${roomId}.
+  // ── session_goal path — bypasses all preset-task logic ───────────────────
+  // Must come before doneStep computation; uses its own final-step text.
+  if (taskMode === 'session_goal' && sessionGoal) {
+    const goalTaskSlot = `Apply your skills toward this session goal:\n> ${sessionGoal}\n\nUse your capabilities and persona to contribute as effectively as possible.\nIf you receive context from a previous agent, build on it rather than starting fresh.\nAnnounce your contribution in ${langName} via talk_bot when done.`
+    const subagentTemplate = buildSubagentTemplates(
+      { config, roomId, langName },
+      { botIdMap, taskPlaceholder: goalTaskSlot }
+    )
+    const firstResolvedBotId = botIdMap && botIdMap.size > 0 ? [...botIdMap.values()][0] : null
+    const finalStep = buildFinalStep(firstResolvedBotId, roomId, langName)
 
-Your hotel bot name is "${m.bot_name}".
-- First call list_bots and check if a bot named "${m.bot_name}" already appears in room ${roomId}. Only call deploy_bot if it is NOT already listed there (placement: ${placement}).
-- Use talk_bot with your bot_id to communicate progress and results in the hotel room.
-- Always speak in ${langName} when using talk_bot.
-- MCP tools are pre-registered — call them DIRECTLY by their full prefixed name (e.g. \`mcp__atlassian__searchJiraIssuesUsingJql\`). Do NOT use ToolSearch to discover MCP tools first; ToolSearch does not reliably surface them and wastes turns.
+    return `${buildOrchestratorHeader(config.team.name, roomId, triggeredBy, langName)}
 
-[INSERT SPECIFIC TASK HERE]
+## Session goal
+The user has a specific goal for this session:
+> ${sessionGoal}
 
-When done: announce your completion in ${langName} via talk_bot (e.g. "✅ Task finished: [brief summary]"), then return your findings as text.
-\`\`\``
-  }).join('\n\n')
+## Your job
+Analyse the goal and your team's capabilities. Decide the best coordination:
+- Independent tasks → spawn all agents concurrently in ONE message.
+- Dependent tasks (one agent's output feeds the next) → spawn sequentially, passing the previous result to the next agent.
 
-  const doneStep = `
-## Final step: Announce completion
-After ALL subagents have finished, use talk_bot (as any available bot) to announce in ${langName} that the entire team has completed all tasks. Keep it short and clear (1-2 sentences).`
+Use ONLY the built-in Agent tool to spawn subagents.
+DO NOT use ToolSearch, TeamCreate, TeamDelete, SendMessage, or any other coordination tool — they do not exist.
+DO NOT call check_stop_signal in a loop; call it at most once before you begin.
 
-  // If team has a custom orchestrator prompt, use it with variable substitution
+## Team
+${rosterLines}
+${flowSection}
+${subagentTemplate}
+${finalStep}`
+  }
+
+  // ── Preset-task paths (team_tasks mode or no task_mode) ──────────────────
+
+  const tf = taskFile(roomId)
+  const tasksBlock = renderTasksBlock(config, roomId, tf)
+  const subagentTemplate = buildSubagentTemplates({ config, roomId, langName }, { botIdMap })
+  const firstResolvedBotId = botIdMap && botIdMap.size > 0 ? [...botIdMap.values()][0] : null
+  const finalStep = buildFinalStep(firstResolvedBotId, roomId, langName)
+
+  // If team has a custom orchestrator prompt, use it with variable substitution.
   // Always append the subagent-spawning guide so Claude knows exactly how to launch agents
   // and does not hallucinate tools like TeamCreate / TeamDelete / SendMessage.
   if (config.team.orchestrator_prompt?.trim()) {
+    const sessionGoalBlock = '' // empty in team_tasks mode
     const customBody = config.team.orchestrator_prompt
-      .replaceAll("{{TEAM_NAME}}", config.team.name)
-      .replaceAll("{{ROOM_ID}}", String(roomId))
-      .replaceAll("{{TRIGGERED_BY}}", triggeredBy)
-      .replaceAll("{{TASKS}}", tasksBlock)
-      .replaceAll("{{PERSONAS}}", rosterLines + flowSection)
+      .replaceAll('{{TEAM_NAME}}', config.team.name)
+      .replaceAll('{{ROOM_ID}}', String(roomId))
+      .replaceAll('{{TRIGGERED_BY}}', triggeredBy)
+      .replaceAll('{{TASKS}}', tasksBlock)
+      .replaceAll('{{PERSONAS}}', rosterLines + flowSection)
+      .replaceAll('{{SESSION_GOAL}}', sessionGoalBlock)
+
+    const spawnInstruction = mode === 'sequential'
+      ? 'Spawn ONE subagent at a time. Wait for each to finish before spawning the next.'
+      : 'Spawn each subagent in a SINGLE message (parallel calls).'
 
     const spawnGuide = `
 
 ## Team roster (room ${roomId})
 ${rosterLines}
 ${flowSection}
-
 ## How to spawn subagents — READ THIS CAREFULLY
 Use ONLY the built-in **Agent** tool to spawn each team member as a subagent.
 DO NOT use ToolSearch, TeamCreate, TeamDelete, SendMessage, or any other coordination tool — they do not exist.
 DO NOT call check_stop_signal in a loop; call it at most once before you begin.
 
-Spawn each subagent in a SINGLE message (parallel calls).
+${spawnInstruction}
 
 ${subagentTemplate}
-
-## Final step
-After all subagents complete, use talk_bot (as any available bot) to announce in ${langName} that the team has finished. Keep it short (1-2 sentences).`
+${finalStep}`
 
     return customBody + spawnGuide + langInstruction
   }
 
   // Auto-generate orchestrator prompt based on execution mode
   if (mode === 'shared') {
-    return `You are the orchestrator for team "${config.team.name}".
-Room: ${roomId}. Triggered by: ${triggeredBy}.
-All hotel room communication must be in ${langName}.
+    return `${buildOrchestratorHeader(config.team.name, roomId, triggeredBy, langName)}
 
 ## Team
 ${rosterLines}
@@ -531,16 +666,14 @@ Each subagent is a Claude agent that uses MCP tools to work in the hotel.
 
 ${subagentTemplate}
 
-Replace [INSERT SPECIFIC TASK HERE] with the task(s) claimed from the shared task list that are assigned to that agent (or best match their capabilities).
+Replace ${TASK_PLACEHOLDER} with the task(s) claimed from the shared task list that are assigned to that agent (or best match their capabilities).
 
 ## Step 4: Report
 When all agents complete, read \`${tf}\` and summarise results.
-${doneStep}`
+${finalStep}`
 
   } else if (mode === 'sequential') {
-    return `You are the orchestrator for team "${config.team.name}".
-Room: ${roomId}. Triggered by: ${triggeredBy}.
-All hotel room communication must be in ${langName}.
+    return `${buildOrchestratorHeader(config.team.name, roomId, triggeredBy, langName)}
 
 ## Team
 ${rosterLines}
@@ -554,13 +687,12 @@ Each subagent is a Claude agent that uses MCP tools to work in the hotel.
 ${subagentTemplate}
 
 Assign tasks to the agent whose capabilities best match. Work through all tasks in order.
-${doneStep}`
+When spawning each task agent, include the full returned output of ALL previous task agents at the top of ${TASK_PLACEHOLDER} so each agent has complete context and does not re-fetch data already gathered.
+${finalStep}`
 
   } else {
     // concurrent (default)
-    return `You are the orchestrator for team "${config.team.name}".
-Room: ${roomId}. Triggered by: ${triggeredBy}.
-All hotel room communication must be in ${langName}.
+    return `${buildOrchestratorHeader(config.team.name, roomId, triggeredBy, langName)}
 
 ## Team
 ${rosterLines}
@@ -573,7 +705,7 @@ Each subagent uses MCP tools to deploy their hotel bot and work in the room.
 ${subagentTemplate}
 
 Spawn all agents in ONE message (parallel). Wait for all to complete, then summarise.
-${doneStep}`
+${finalStep}`
   }
 }
 
@@ -602,6 +734,36 @@ ${botLines}
 This ensures each agent is visually represented by their hotel bot in the room.`;
 
   return basePrompt + injectionBlock;
+}
+
+async function postRunReport(params: {
+  roomId: number;
+  teamName: string;
+  triggeredBy: string;
+  portalUserId: number;
+  reportMd: string;
+  costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  startedAt: Date;
+}): Promise<void> {
+  try {
+    await fetch(`${PORTAL_URL}/api/internal/rooms/${params.roomId}/report`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Secret': PORTAL_INTERNAL_SECRET },
+      body: JSON.stringify({
+        team_name: params.teamName,
+        triggered_by: params.triggeredBy,
+        portal_user_id: params.portalUserId,
+        report_md: params.reportMd,
+        cost_usd: params.costUsd,
+        input_tokens: params.inputTokens,
+        output_tokens: params.outputTokens,
+        started_at: params.startedAt.toISOString(),
+      }),
+      signal: AbortSignal.timeout(8000),
+    });
+  } catch { /* non-fatal — report storage should never block a run */ }
 }
 
 function runOrchestratorWithPrompt(prompt: string, roomId: number, from: string, userApiKey?: string | null, onChild?: (child: ReturnType<typeof spawn>) => void, userMcpToken?: string | null, integrations: IntegrationRow[] = []): Promise<string> {
@@ -708,6 +870,10 @@ function runOrchestratorWithPrompt(prompt: string, roomId: number, from: string,
 
     let stdout = "";
     let stderr = "";
+    let finalResult = "";
+    let costUsd = 0;
+    let inputTokens = 0;
+    let outputTokens = 0;
     child.stdout.on("data", (d: Buffer) => {
       const text = d.toString();
       stdout += text;
@@ -739,7 +905,12 @@ function runOrchestratorWithPrompt(prompt: string, roomId: number, from: string,
               }
             }
           } else if (event.type === "result") {
-            logRoom(roomId, `[done] ${event.result?.slice(0, 200) ?? "complete"}`);
+            finalResult = event.result ?? "";
+            // Capture usage stats from the result event
+            costUsd = Number(event.costUSD ?? event.cost_usd ?? 0);
+            inputTokens = Number(event.usage?.input_tokens ?? event.inputTokens ?? 0);
+            outputTokens = Number(event.usage?.output_tokens ?? event.outputTokens ?? 0);
+            logRoom(roomId, `[done] ${finalResult.slice(0, 200) || "complete"}`);
           }
         } catch { logRoom(roomId, `[claude] ${line.slice(0, 200)}`); }
       }
@@ -763,8 +934,22 @@ function runOrchestratorWithPrompt(prompt: string, roomId: number, from: string,
     child.on("close", (code: number | null) => {
       clearTimeout(timeoutHandle);
       cleanupRunDir();
+      const run = activeRuns.get(roomId);
+      if (finalResult.trim()) {
+        postRunReport({
+          roomId,
+          teamName: run?.from ?? from,
+          triggeredBy: from,
+          portalUserId: run?.portalUserId ?? 0,
+          reportMd: finalResult,
+          costUsd,
+          inputTokens,
+          outputTokens,
+          startedAt: run?.startTime ?? new Date(),
+        });
+      }
       if (code === 0) {
-        resolve(stdout.trim().slice(-200) || "Team session complete.");
+        resolve(finalResult.trim().slice(-200) || "Team session complete.");
       } else {
         reject(new Error(`claude exited ${code}: ${stderr.slice(0, 300)}`));
       }
@@ -951,11 +1136,7 @@ const server = Bun.serve({
         return new Response("Forbidden", { status: 403 });
       }
 
-      let body: {
-        team_id?: number; flow_id?: number | null; room_id?: number; triggered_by?: string; portal_url?: string;
-        pack_source_url?: string; role_assignments?: Record<string, string>; pack_id?: number;
-        portal_user_id?: number; user_team?: boolean; language?: string; narrator_verbosity?: number;
-      };
+      let body: TriggerPostBody;
       try {
         body = await req.json();
       } catch {
@@ -1003,7 +1184,7 @@ const server = Bun.serve({
         if (packUserApiKey) logRoom(packRoomId, `[trigger] Pack using API key from portal user ${body.portal_user_id}`);
         if (packUserMcpToken) logRoom(packRoomId, `[trigger] Pack using MCP token from portal user ${body.portal_user_id}`);
 
-        const packRun: RunContext = { roomId: packRoomId, startTime: new Date(), from: packConfig.triggered_by, child: null, timeoutHandle: null };
+        const packRun: RunContext = { roomId: packRoomId, startTime: new Date(), from: packConfig.triggered_by, portalUserId: packPortalUserId, child: null, timeoutHandle: null };
         activeRuns.set(packRoomId, packRun);
         triggeringRooms.delete(packRoomId);
         logRoom(packRoomId, `[trigger] Pack ${packConfig.pack_id} started by ${packConfig.triggered_by}`);
@@ -1044,8 +1225,21 @@ const server = Bun.serve({
       }
       triggeringRooms.add(roomId);
 
-      // Fetch team config + user credentials + user integrations in parallel
+      // Dual-gate validation for session_goal fields (user_team only)
       const isUserTeam = body.user_team === true;
+      if (isUserTeam && body.task_mode === 'session_goal') {
+        const goalTrimmed = (body.session_goal ?? '').trim();
+        if (goalTrimmed.length < 10) {
+          triggeringRooms.delete(roomId);
+          return Response.json({ ok: false, error: 'session_goal must be at least 10 characters' }, { status: 400 });
+        }
+        if (goalTrimmed.length > 4000) {
+          triggeringRooms.delete(roomId);
+          return Response.json({ ok: false, error: 'session_goal must be at most 4000 characters' }, { status: 400 });
+        }
+      }
+
+      // Fetch team config + user credentials + user integrations in parallel
       let config: TeamConfig;
       let userApiKey: string | null = null;
       let userMcpToken: string | null = null;
@@ -1079,14 +1273,36 @@ const server = Bun.serve({
         logRoom(roomId, `[trigger] Loaded ${filteredIntegrations.length} integration(s) for user ${portalUserId}: ${filteredIntegrations.map(i => i.name).join(', ')}`);
       }
 
-      const prompt = buildPromptFromConfig(config, roomId, triggeredBy);
-      const run: RunContext = { roomId, startTime: new Date(), from: triggeredBy, child: null, timeoutHandle: null };
+      // Pre-resolve bot IDs so subagents receive numeric ids directly and never mistype them
+      const botIdEntries = await Promise.all(
+        config.members.map(async m => {
+          const id = await findBotIdByName(m.bot_name, userMcpToken ?? undefined);
+          return [m.bot_name, id] as const;
+        })
+      );
+      const botIdMap = new Map(
+        botIdEntries.filter((e): e is [string, number] => e[1] != null)
+      );
+
+      const buildOptions: OrchestratorBuildOptions = { botIdMap };
+      if (isUserTeam && body.task_mode === 'session_goal') {
+        buildOptions.taskMode = 'session_goal';
+        buildOptions.sessionGoal = body.session_goal ?? '';
+      }
+      const prompt = buildPromptFromConfig(config, roomId, triggeredBy, buildOptions);
+      const run: RunContext = { roomId, startTime: new Date(), from: config.team.name, portalUserId, child: null, timeoutHandle: null };
       activeRuns.set(roomId, run);
       triggeringRooms.delete(roomId);
       logRoom(roomId, `[trigger] Team "${config.team.name}" started by ${triggeredBy}`);
 
       // Write known bot names + team language so hotel_narrator.mjs can map subagent prompts → personas
-      writeNarratorBotsFile(roomId, config.members.map(m => m.bot_name).filter(Boolean), config.team.language || 'en', config.team.narrator_verbosity ?? 3);
+      writeNarratorBotsFile(
+        roomId,
+        config.members.map(m => m.bot_name).filter(Boolean),
+        config.team.language || 'en',
+        config.team.narrator_verbosity ?? 3,
+        narratorPersonasFromMembers(config.members)
+      );
 
       // Run in background
       runOrchestratorWithPrompt(prompt, roomId, triggeredBy, userApiKey, (child) => {
@@ -1120,7 +1336,7 @@ const server = Bun.serve({
         return voiceSay(`Team is al actief in kamer ${roomId}. Stuur een SMS met stop team om te stoppen.`);
       }
 
-      const voiceRun: RunContext = { roomId, startTime: new Date(), from: phoneUser.username, child: null, timeoutHandle: null };
+      const voiceRun: RunContext = { roomId, startTime: new Date(), from: phoneUser.username, portalUserId: phoneUser.portal_user_id, child: null, timeoutHandle: null };
       activeRuns.set(roomId, voiceRun);
       logRoom(roomId, `[voice] Team gestart door ${phoneUser.username}`);
 
@@ -1129,9 +1345,24 @@ const server = Bun.serve({
         fetchUserMcpToken(phoneUser.portal_user_id),
       ]);
       const config = await fetchUserTeamConfig(phoneUser.team.id);
-      const prompt = buildPromptFromConfig(config, roomId, phoneUser.username);
+      const voiceBotIdEntries = await Promise.all(
+        config.members.map(async m => {
+          const id = await findBotIdByName(m.bot_name, userMcpToken ?? undefined);
+          return [m.bot_name, id] as const;
+        })
+      );
+      const voiceBotIdMap = new Map(
+        voiceBotIdEntries.filter((e): e is [string, number] => e[1] != null)
+      );
+      const prompt = buildPromptFromConfig(config, roomId, phoneUser.username, { botIdMap: voiceBotIdMap });
 
-      writeNarratorBotsFile(roomId, config.members.map(m => m.bot_name).filter(Boolean), config.team.language || 'en', config.team.narrator_verbosity ?? 3);
+      writeNarratorBotsFile(
+        roomId,
+        config.members.map(m => m.bot_name).filter(Boolean),
+        config.team.language || 'en',
+        config.team.narrator_verbosity ?? 3,
+        narratorPersonasFromMembers(config.members)
+      );
       runOrchestratorWithPrompt(prompt, roomId, phoneUser.username, userApiKey, (child) => {
         const r = activeRuns.get(roomId); if (r) r.child = child;
       }, userMcpToken)
@@ -1180,7 +1411,7 @@ const server = Bun.serve({
           return twiml(`Team already active in room ${smsRoomId}. Send "stop" to stop it.`);
         }
 
-        const smsRun: RunContext = { roomId: smsRoomId, startTime: new Date(), from: smsUser.username, child: null, timeoutHandle: null };
+        const smsRun: RunContext = { roomId: smsRoomId, startTime: new Date(), from: smsUser.username, portalUserId: smsUser.portal_user_id, child: null, timeoutHandle: null };
         activeRuns.set(smsRoomId, smsRun);
         logRoom(smsRoomId, `[sms] Team started by ${smsUser.username}`);
 
@@ -1191,8 +1422,23 @@ const server = Bun.serve({
               fetchUserMcpToken(smsUser.portal_user_id),
               fetchUserTeamConfig(smsUser.team!.id),
             ]);
-            const prompt = buildPromptFromConfig(config, smsRoomId, smsUser.username);
-            writeNarratorBotsFile(smsRoomId, config.members.map(m => m.bot_name).filter(Boolean), config.team.language || 'en', config.team.narrator_verbosity ?? 3);
+            const smsBotIdEntries = await Promise.all(
+              config.members.map(async m => {
+                const id = await findBotIdByName(m.bot_name, userMcpToken ?? undefined);
+                return [m.bot_name, id] as const;
+              })
+            );
+            const smsBotIdMap = new Map(
+              smsBotIdEntries.filter((e): e is [string, number] => e[1] != null)
+            );
+            const prompt = buildPromptFromConfig(config, smsRoomId, smsUser.username, { botIdMap: smsBotIdMap });
+            writeNarratorBotsFile(
+              smsRoomId,
+              config.members.map(m => m.bot_name).filter(Boolean),
+              config.team.language || 'en',
+              config.team.narrator_verbosity ?? 3,
+              narratorPersonasFromMembers(config.members)
+            );
             await runOrchestratorWithPrompt(prompt, smsRoomId, smsUser.username, userApiKey, (child) => {
               const r = activeRuns.get(smsRoomId); if (r) r.child = child;
             }, userMcpToken);
