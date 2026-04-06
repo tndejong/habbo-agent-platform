@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { Routes, Route, Navigate, Outlet, useNavigate, useParams, useOutletContext } from 'react-router-dom'
 import { useEscapeKey } from './utils/useEscapeKey'
 import { createPortal } from 'react-dom'
 import { Provider as TooltipProvider } from '@radix-ui/react-tooltip'
 import { HabboFigure } from './components/HabboFigure'
-import { AgentDashboard, AccountView, LogPanel, OnlineView } from './components/AgentDashboard'
+import { AgentDashboard, SettingsView, LogPanel, OnlineView } from './components/AgentDashboard'
 import { ReportsView } from './components/ReportsView'
 import { FeedbackWidget, FeedbackView } from './components/FeedbackWidget'
 import { MarketplaceView } from './components/MarketplaceView'
@@ -83,8 +84,22 @@ function UiBuildFooter() {
 
 // ── Root App ──────────────────────────────────────────────────────────────
 
+const DASHBOARD_TAB_IDS = new Set([
+  'home', 'agents', 'marketplace', 'integrations', 'reports', 'requests',
+  'settings', 'tiers', 'online', 'devtools', 'feedback',
+])
+
+function resolveDashboardTab(tab, me) {
+  if (!tab || !DASHBOARD_TAB_IDS.has(tab)) return 'home'
+  
+  if (tab === 'requests' && !can(me, 'admin.requests')) return 'home'
+  if (tab === 'devtools' && !can(me, 'devtools.access')) return 'home'
+  if (tab === 'feedback' && !can(me, 'admin.feedback')) return 'home'
+  
+  return tab
+}
+
 export default function App() {
-  const path = window.location.pathname
   const [me, setMe] = useState(null)
   const [loading, setLoading] = useState(true)
 
@@ -93,13 +108,6 @@ export default function App() {
       .then(d => { setMe(d.user || null); setLoading(false) })
       .catch(() => { setMe(null); setLoading(false) })
   }, [])
-
-  useEffect(() => {
-    if (!loading) {
-      if ((path === '/login' || path === '/') && me) window.location.replace('/app')
-      if (path === '/app' && !me) window.location.replace('/login')
-    }
-  }, [loading, me, path])
 
   if (loading) return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -110,14 +118,37 @@ export default function App() {
     </div>
   )
 
-  if (path === '/login' || path === '/') return <AuthPage onLogin={setMe} />
-  if (path === '/app' && me) return <Dashboard me={me} setMe={setMe} />
-  return null
+  return (
+    <Routes>
+      <Route
+        path="/login"
+        element={me ? <Navigate to="/app/home" replace /> : <AuthPage onLogin={setMe} />}
+      />
+      <Route path="/" element={<Navigate to={me ? '/app/home' : '/login'} replace />} />
+      <Route
+        path="/app"
+        element={
+          me ? (
+            <HotelProvider me={me}>
+              <Outlet context={{ me, setMe }} />
+            </HotelProvider>
+          ) : (
+            <Navigate to="/login" replace />
+          )
+        }
+      >
+        <Route index element={<Navigate to="home" replace />} />
+        <Route path=":tab" element={<DashboardInner />} />
+      </Route>
+      <Route path="*" element={<Navigate to={me ? '/app/home' : '/login'} replace />} />
+    </Routes>
+  )
 }
 
 // ── Auth Page ─────────────────────────────────────────────────────────────
 
 function AuthPage({ onLogin }) {
+  const navigate = useNavigate()
   const params = new URLSearchParams(window.location.search)
   const hasResetParams = params.get('reset') === '1'
 
@@ -153,7 +184,7 @@ function AuthPage({ onLogin }) {
     try {
       const data = await api('/api/auth/register', { method: 'POST', body: JSON.stringify(registerForm) })
       onLogin(data.user)
-      window.location.replace('/app')
+      navigate('/app/home', { replace: true })
     } catch (err) { setError(err.message) }
     finally { setBusy(false) }
   }
@@ -164,7 +195,7 @@ function AuthPage({ onLogin }) {
     try {
       const data = await api('/api/auth/login', { method: 'POST', body: JSON.stringify(loginForm) })
       onLogin(data.user)
-      window.location.replace('/app')
+      navigate('/app/home', { replace: true })
     } catch (err) { setError(err.message) }
     finally { setBusy(false) }
   }
@@ -436,18 +467,22 @@ function AuthButton({ busy, label, busyLabel }) {
 
 // ── Dashboard ─────────────────────────────────────────────────────────────
 
-function Dashboard({ me, setMe }) {
-  return (
-    <HotelProvider me={me}>
-      <DashboardInner me={me} setMe={setMe} />
-    </HotelProvider>
-  )
-}
-
-function DashboardInner({ me, setMe }) {
+function DashboardInner() {
+  const { me, setMe } = useOutletContext()
+  const { tab: tabParam } = useParams()
+  const navigate = useNavigate()
   const { theme, toggleTheme, cycleTheme, setThemeByName } = useTheme()
   const { habboConnected, hotelStatus } = useHotel()
-  const [activeTab, setActiveTab] = useState('home')
+  const activeTab = resolveDashboardTab(tabParam, me)
+  const setActiveTab = useCallback((id) => {
+    navigate(`/app/${id}`)
+  }, [navigate])
+
+  useEffect(() => {
+    if (tabParam && resolveDashboardTab(tabParam, me) !== tabParam) {
+      navigate(`/app/${resolveDashboardTab(tabParam, me)}`, { replace: true })
+    }
+  }, [tabParam, me, navigate])
   const [activeTeam, setActiveTeam] = useState(null)
   const [stopping, setStopping] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -459,7 +494,7 @@ function DashboardInner({ me, setMe }) {
       .catch(() => {})
   }, [setMe])
 
-  // Bumped when a MCP token is created/revoked in AccountView, so IntegratedView re-fetches hasMcpToken
+  // Bumped when a MCP token is created/revoked in SettingsView, so IntegratedView re-fetches hasMcpToken
   const [mcpTokenVersion, setMcpTokenVersion] = useState(0)
   const handleTokenChange = useCallback(() => { setMcpTokenVersion(v => v + 1); refreshMe() }, [refreshMe])
 
@@ -526,7 +561,7 @@ function DashboardInner({ me, setMe }) {
     try {
       await api('/api/auth/logout', { method: 'POST' })
       setMe(null)
-      window.location.replace('/login')
+      navigate('/login', { replace: true })
     } catch { setBusy(false) }
   }
 
@@ -542,7 +577,7 @@ function DashboardInner({ me, setMe }) {
 
   const tabs = [
     { id: 'home', label: 'Home', icon: Home },
-    { id: 'agents', label: 'Teams', icon: Bot },
+    { id: 'agents', label: 'Agents', icon: Bot },
     { id: 'marketplace', label: 'Marketplace', icon: ShoppingBag },
     { id: 'integrations', label: 'Integrations', icon: Network },
     { id: 'reports', label: 'Reports', icon: FileText },
@@ -686,9 +721,9 @@ function DashboardInner({ me, setMe }) {
 
               {showUserMenu && (
                 <div className="absolute right-0 top-full mt-2 w-48 bg-card border border-border rounded-xl shadow-xl overflow-hidden z-50">
-                  {/* Account */}
+                  {/* Settings */}
                   <button
-                    onClick={() => { setActiveTab('account'); setShowUserMenu(false) }}
+                    onClick={() => { setActiveTab('settings'); setShowUserMenu(false) }}
                     className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-foreground hover:bg-secondary transition-colors"
                   >
                     <Settings className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
@@ -799,8 +834,8 @@ function DashboardInner({ me, setMe }) {
           </div>
         )}
 
-          {activeTab === 'account' && (
-            <AccountView me={me} onTokenChange={handleTokenChange} onKeyUpdated={refreshMe} />
+          {activeTab === 'settings' && (
+            <SettingsView me={me} onTokenChange={handleTokenChange} onKeyUpdated={refreshMe} />
           )}
           {activeTab === 'integrations' && (
             <IntegrationsTab me={me} hotelStatus={hotelStatus} onHotelToggle={() => { refreshMe(); }} figureTypes={figureTypes} />
@@ -908,12 +943,12 @@ function DevToolsView({ me }) {
 // ── Home Tab ──────────────────────────────────────────────────────────────
 
 const QUICK_LINKS = [
-  { label: 'My Agents',    description: 'Manage your agent teams',      icon: Bot,         tab: 'agents'       },
-  { label: 'My Teams',     description: 'View and configure teams',      icon: Users,       tab: 'agents'       },
-  { label: 'Marketplace',  description: 'Browse and install teams',      icon: ShoppingBag, tab: 'marketplace'  },
-  { label: 'Virtual office', description: 'Habbo bots & hotel connection', icon: Hotel,     tab: 'integrations' },
-  { label: 'Integrations', description: 'Connect external services',     icon: Network,     tab: 'integrations' },
-  { label: 'Settings',     description: 'Account and API key settings',  icon: Settings,    tab: 'account'      },
+  { label: 'My Agents',    description: 'Manage your agent teams',         icon: Bot,           tab: 'agents'       },
+  { label: 'Marketplace',  description: 'Browse and install teams',        icon: ShoppingBag,   tab: 'marketplace'  },
+  { label: 'Integrations', description: 'Connect external services',       icon: Network,       tab: 'integrations' },
+  { label: 'Reports',     description: 'View and evaluate reports',        icon: FileText,      tab: 'reports'      },
+  { label: 'Requests', description: 'View and manage requests',            icon: ClipboardList, tab: 'requests'     },
+  { label: 'Settings',     description: 'Account and API key settings',    icon: Settings,      tab: 'settings'     },
 ]
 
 function HomeTab({ me, onNavigate }) {
@@ -998,8 +1033,8 @@ function HomeTab({ me, onNavigate }) {
         const setupSteps = activeTier === 'basic'
           ? [{ done: false, label: 'Upgrade to Pro to deploy agents', sub: 'Basic is read-only', tab: 'tiers' }]
           : [
-              !me.has_anthropic_key && { done: false, label: 'Add your Anthropic API key', sub: 'Required for AI processing', tab: 'account' },
-              !me.has_mcp_token    && { done: false, label: 'Connect your Habbo MCP key',  sub: 'Required to deploy teams',    tab: 'account' },
+              !me.has_anthropic_key && { done: false, label: 'Add your Anthropic API key', sub: 'Required for AI processing', tab: 'settings' },
+              !me.has_mcp_token    && { done: false, label: 'Connect your Habbo MCP key',  sub: 'Required to deploy teams',    tab: 'settings' },
             ].filter(Boolean)
 
         const allDone = setupSteps.length === 0
@@ -1007,7 +1042,7 @@ function HomeTab({ me, onNavigate }) {
         return (
           <button
             type="button"
-            onClick={() => onNavigate('account')}
+            onClick={() => onNavigate('settings')}
             className="w-full text-left bg-card border border-border rounded-2xl p-6 card-lift cursor-pointer hover:border-primary/40 transition-colors"
           >
             <div className="flex items-center gap-5">

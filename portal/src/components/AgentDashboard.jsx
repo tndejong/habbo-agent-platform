@@ -144,9 +144,9 @@ function MarkdownEditor({ value, onChange, placeholder, rows = 16 }) {
   )
 }
 
-// ── Account View ──────────────────────────────────────────────────────────
+// ── Settings (account, API keys, auth) ─────────────────────────────────────
 
-export function AccountView({ me, onKeyUpdated, onTokenChange }) {
+export function SettingsView({ me, onKeyUpdated, onTokenChange }) {
   const [settingsTab, setSettingsTab] = useState('account') // 'account' | 'auth'
 
   const [keys, setKeys] = useState([])

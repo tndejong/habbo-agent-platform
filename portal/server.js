@@ -849,7 +849,7 @@ async function sendWelcomeEmail({ toEmail, username }) {
 
 async function sendUpgradeRequestNotification({ request, user }) {
   if (!mailTransport || !PORTAL_ADMIN_EMAIL) return;
-  const reviewUrl = `${PORTAL_PUBLIC_URL}/app`;
+  const reviewUrl = `${PORTAL_PUBLIC_URL}/app/home`;
   await mailTransport.sendMail({
     from: PORTAL_SMTP_FROM,
     to: PORTAL_ADMIN_EMAIL,
@@ -4448,26 +4448,28 @@ const indexPath = path.join(__dirname, 'dist/index.html');
 app.get('/', (req, res) => {
   const sessionUser = getSessionUser(req);
   const suffix = req.originalUrl.includes('?') ? req.originalUrl.slice(req.originalUrl.indexOf('?')) : '';
-  return res.redirect(`${sessionUser ? '/app' : '/login'}${suffix}`);
+  return res.redirect(`${sessionUser ? '/app/home' : '/login'}${suffix}`);
 });
 
 app.get('/login', (req, res) => {
   const sessionUser = getSessionUser(req);
   if (sessionUser) {
-    return res.redirect('/app');
+    return res.redirect('/app/home');
   }
   res.setHeader('Cache-Control', 'no-store');
   return res.sendFile(indexPath);
 });
 
-app.get('/app', (req, res) => {
+// SPA shell for /app and deep links (/app/home, /app/marketplace, …) so refresh and shareable URLs work.
+function sendAppSpa(req, res) {
   const sessionUser = getSessionUser(req);
   if (!sessionUser) {
     return res.redirect('/login');
   }
   res.setHeader('Cache-Control', 'no-store');
   return res.sendFile(indexPath);
-});
+}
+app.get(/^\/app(\/.*)?$/, sendAppSpa);
 
 app.use(express.static(path.join(__dirname, 'dist'), {
   setHeaders(res, filePath) {

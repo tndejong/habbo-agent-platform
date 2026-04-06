@@ -17,11 +17,11 @@ const TYPE_OPTIONS = [
 
 const PAGE_OPTIONS = [
   { label: 'Home', value: 'home' },
-  { label: 'Teams', value: 'agents' },
+  { label: 'Agents', value: 'agents' },
   { label: 'Marketplace', value: 'marketplace' },
   { label: 'Reports', value: 'reports' },
   { label: 'Integrations', value: 'integrations' },
-  { label: 'Settings', value: 'account' },
+  { label: 'Settings', value: 'settings' },
   { label: 'Other', value: 'other' },
 ]
 
