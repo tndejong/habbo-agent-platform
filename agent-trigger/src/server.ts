@@ -26,10 +26,9 @@ const RUN_TIMEOUT_MS = parseInt(process.env.HABBO_RUN_TIMEOUT_MS ?? String(20 * 
 // Per-room tmp file paths — all state is namespaced by roomId so runs never interfere
 function taskFile(roomId: number)        { return `/tmp/hotel-team-tasks-${roomId}.json`; }
 function stopFile(roomId: number)        { return `/tmp/hotel-team-stop-${roomId}`; }
-function narratorBotsFile(roomId: number){ return `/tmp/hotel-narrator-bots-${roomId}.json`; }
 
 function cleanupRoomFiles(roomId: number): void {
-  for (const f of [taskFile(roomId), stopFile(roomId), narratorBotsFile(roomId)]) {
+  for (const f of [taskFile(roomId), stopFile(roomId)]) {
     try { if (existsSync(f)) unlinkSync(f); } catch { /* ignore */ }
   }
 }
@@ -49,49 +48,7 @@ const activeRuns = new Map<number, RunContext>();
 // Guards against concurrent POST /trigger for the same room
 const triggeringRooms = new Set<number>();
 
-type NarratorBotPersona = { persona_name: string; persona_role: string };
-
-/** Minimal (3) → 0 (off); Normal (6) → 3; Verbose (10) → 7 */
-function narratorMaxSessionMessages(verbosity: number): number {
-  const v = Number(verbosity);
-  if (!Number.isFinite(v)) return 0;
-  return v <= 3 ? 0 : v - 3;
-}
-
-function narratorPersonasFromMembers(
-  members: Array<{ name: string; persona_role: string; bot_name: string }>
-): Record<string, NarratorBotPersona> {
-  return Object.fromEntries(
-    members
-      .filter(m => m.bot_name)
-      .map(m => [m.bot_name, { persona_name: m.name, persona_role: m.persona_role }])
-  );
-}
-
-function writeNarratorBotsFile(
-  roomId: number,
-  knownBots: string[],
-  language = 'en',
-  verbosity = 3,
-  personas?: Record<string, NarratorBotPersona>
-): void {
-  try {
-    const payload: Record<string, unknown> = {
-      known_bots: knownBots,
-      language,
-      max_session_messages: narratorMaxSessionMessages(verbosity),
-      sessions: {},
-      pending: [],
-      message_counts: {},
-    };
-    if (personas && Object.keys(personas).length > 0) {
-      payload.bot_personas = personas;
-    }
-    writeFileSync(narratorBotsFile(roomId), JSON.stringify(payload, null, 2));
-  } catch { /* non-fatal */ }
-}
-
-// ── MCP helper (used by narrator) ────────────────────────────────────────────
+// ── MCP helper (list_bots / talk_bot for orchestrator bot-id resolution) ─────
 
 const MCP_ENDPOINT = (() => {
   const raw = (process.env.HOTEL_MCP_URL ?? "http://habbo-mcp:3003/mcp").trim();
@@ -108,7 +65,7 @@ async function mcpCall<T>(toolName: string, args: Record<string, unknown>, token
     headers,
     body: JSON.stringify({
       jsonrpc: "2.0",
-      id: `narrator-${Date.now()}`,
+      id: `mcp-${Date.now()}`,
       method: "tools/call",
       params: { name: toolName, arguments: args },
     }),
@@ -139,7 +96,7 @@ async function findBotIdByName(name: string, token?: string): Promise<number | n
     }
     return botIdCache.get(cacheKey) ?? null;
   } catch (err: any) {
-    log(`[narrator] list_bots failed: ${err.message}`);
+    log(`[mcp] list_bots failed: ${err.message}`);
     return null;
   }
 }
@@ -358,7 +315,7 @@ interface RoomTemplate {
 type ExecutionMode = 'concurrent' | 'sequential' | 'shared';
 
 interface TeamConfig {
-  team: { id: number; name: string; description: string; orchestrator_prompt: string; execution_mode: ExecutionMode | string; tasks_json: string; language: string; narrator_verbosity?: number; required_integrations?: string[] };
+  team: { id: number; name: string; description: string; orchestrator_prompt: string; execution_mode: ExecutionMode | string; tasks_json: string; language: string; required_integrations?: string[] };
   members: TeamMember[];
   flow: { name: string; description: string; tasks_json: string } | null;
   templates: RoomTemplate[];
@@ -378,7 +335,6 @@ interface TriggerPostBody {
   /** false = team workspace / no Habbo hotel — use HEADLESS_ROOM_ID for state isolation */
   hotel_integrated?: boolean;
   language?: string;
-  narrator_verbosity?: number;
   task_mode?: 'session_goal' | 'team_tasks';
   session_goal?: string;
 }
@@ -400,7 +356,6 @@ interface PackConfig {
   room_id: number;
   triggered_by: string;
   language?: string;
-  narrator_verbosity?: number;
 }
 
 async function fetchTeamConfig(teamId: number, flowId: number | null): Promise<TeamConfig> {
@@ -847,7 +802,7 @@ function runOrchestratorWithPrompt(
       "TZ", "TERM", "NODE_ENV",
       // Claude CLI runtime
       "CLAUDE_BIN", "CLAUDE_CONFIG_DIR",
-      // Hook infrastructure (read by hotel_narrator.mjs)
+      // Optional habbo-mcp hook relay (see habbo-mcp habboAgentHook)
       "HABBO_HOOK_TRANSPORT", "HABBO_HOOK_REMOTE_BASE_URL",
     ];
     const safeEnv: Record<string, string> = {};
@@ -1124,38 +1079,6 @@ const server = Bun.serve({
       return Response.json({ ok: true, message: `Stopped ${stopped.length} run(s).`, rooms: stopped });
     }
 
-    // ── Hotel narrator endpoint (called by hotel_narrator.mjs hook) ─────────
-    if (url.pathname === "/narrator" && req.method === "POST") {
-      let body: { bot_name?: string; message?: string; event?: string; session_id?: string; tool_name?: string; mcp_token?: string; room_id?: number };
-      try { body = await req.json(); } catch { return Response.json({ ok: false }, { status: 400 }); }
-
-      const { bot_name, message, mcp_token, room_id } = body;
-      if (!bot_name || !message) return Response.json({ ok: false, error: "bot_name and message required" }, { status: 400 });
-
-      // Coerce to string — the agent may write objects to the bots file, causing
-      // the hook to POST an object as bot_name instead of a plain string.
-      const safeBotName = typeof bot_name === 'string' ? bot_name : String(bot_name ?? '');
-      if (!safeBotName) return Response.json({ ok: false, error: "bot_name resolved to empty string" }, { status: 400 });
-
-      // Prefer the user's own MCP token, fall back to static system key
-      const effectiveMcpToken = mcp_token || MCP_API_KEY;
-      const logFn = room_id ? (s: string) => logRoom(room_id, s) : log;
-
-      // Fire-and-forget: resolve bot_id then talk
-      (async () => {
-        try {
-          const botId = await findBotIdByName(safeBotName, effectiveMcpToken);
-          if (botId == null) { logFn(`[narrator] Bot "${bot_name}" not found in hotel`); return; }
-          await mcpCall("talk_bot", { bot_id: botId, message: message.slice(0, 240), type: "talk" }, effectiveMcpToken);
-          logFn(`[narrator] ${bot_name}: ${message.slice(0, 80)}`);
-        } catch (err: any) {
-          logFn(`[narrator] error for ${bot_name}: ${err.message}`);
-        }
-      })();
-
-      return Response.json({ ok: true });
-    }
-
     // ── Portal trigger endpoint ──────────────────────────────────────────────
     if (url.pathname === "/trigger" && req.method === "POST") {
       const secret = req.headers.get("X-Internal-Secret") ?? "";
@@ -1181,7 +1104,6 @@ const server = Bun.serve({
           room_id: packRoomId,
           triggered_by: body.triggered_by ?? 'portal',
           language: body.language || 'en',
-          narrator_verbosity: Number(body.narrator_verbosity) || 3,
         };
 
         const packPortalUserId = Number(body.portal_user_id) || 0;
@@ -1210,9 +1132,6 @@ const server = Bun.serve({
           logRoom(packRoomId, `[trigger] Failed to build pack prompt: ${err.message}`);
           return Response.json({ ok: false, error: err.message }, { status: 502 });
         }
-
-        const knownBots = Object.values(packConfig.role_assignments).filter(Boolean);
-        writeNarratorBotsFile(packRoomId, knownBots, packConfig.language || 'en', packConfig.narrator_verbosity ?? 3);
 
         if (packUserApiKey) logRoom(packRoomId, `[trigger] Pack using API key from portal user ${body.portal_user_id}`);
         if (packUserMcpToken) logRoom(packRoomId, `[trigger] Pack using MCP token from portal user ${body.portal_user_id}`);
@@ -1334,15 +1253,6 @@ const server = Bun.serve({
       triggeringRooms.delete(roomId);
       logRoom(roomId, `[trigger] Team "${config.team.name}" started by ${triggeredBy}`);
 
-      // Write known bot names + team language so hotel_narrator.mjs can map subagent prompts → personas
-      writeNarratorBotsFile(
-        roomId,
-        config.members.map(m => m.bot_name).filter(Boolean),
-        config.team.language || 'en',
-        config.team.narrator_verbosity ?? 3,
-        narratorPersonasFromMembers(config.members)
-      );
-
       // Run in background
       runOrchestratorWithPrompt(prompt, roomId, triggeredBy, userApiKey, (child) => {
         const r = activeRuns.get(roomId); if (r) r.child = child;
@@ -1398,13 +1308,6 @@ const server = Bun.serve({
       );
       const prompt = buildPromptFromConfig(config, roomId, phoneUser.username, { botIdMap: voiceBotIdMap });
 
-      writeNarratorBotsFile(
-        roomId,
-        config.members.map(m => m.bot_name).filter(Boolean),
-        config.team.language || 'en',
-        config.team.narrator_verbosity ?? 3,
-        narratorPersonasFromMembers(config.members)
-      );
       runOrchestratorWithPrompt(prompt, roomId, phoneUser.username, userApiKey, (child) => {
         const r = activeRuns.get(roomId); if (r) r.child = child;
       }, userMcpToken)
@@ -1481,13 +1384,6 @@ const server = Bun.serve({
               smsBotIdEntries.filter((e): e is [string, number] => e[1] != null)
             );
             const prompt = buildPromptFromConfig(config, smsRoomId, smsUser.username, { botIdMap: smsBotIdMap });
-            writeNarratorBotsFile(
-              smsRoomId,
-              config.members.map(m => m.bot_name).filter(Boolean),
-              config.team.language || 'en',
-              config.team.narrator_verbosity ?? 3,
-              narratorPersonasFromMembers(config.members)
-            );
             await runOrchestratorWithPrompt(prompt, smsRoomId, smsUser.username, userApiKey, (child) => {
               const r = activeRuns.get(smsRoomId); if (r) r.child = child;
             }, userMcpToken);

@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom'
 import { Provider as TooltipProvider } from '@radix-ui/react-tooltip'
 import { HabboFigure } from './components/HabboFigure'
 import { AgentDashboard, SettingsView, LogPanel, OnlineView } from './components/AgentDashboard'
+import VoiceChat from './components/VoiceChat'
 import { ReportsView } from './components/ReportsView'
 import { FeedbackWidget, FeedbackView } from './components/FeedbackWidget'
 import { MarketplaceView } from './components/MarketplaceView'
@@ -20,7 +21,7 @@ import {
   Edit, Settings, Square, ArrowUpCircle, Bell,
   ClipboardList, X, Sun, Moon, Network, Plus,
   Terminal, ChevronDown, ChevronLeft, ChevronRight, Wrench, PanelLeft, MessageSquarePlus, Minus, Waves,
-  Search, Sparkles, LayoutGrid, ExternalLink, Lock, Download, FileText,
+  Search, Sparkles, LayoutGrid, ExternalLink, Lock, Download, FileText, Mic,
 } from 'lucide-react'
 
 // ── Fallback figure types (if API is unavailable) ─────────────────────────
@@ -86,7 +87,7 @@ function UiBuildFooter() {
 
 const DASHBOARD_TAB_IDS = new Set([
   'home', 'agents', 'marketplace', 'integrations', 'reports', 'requests',
-  'settings', 'tiers', 'online', 'devtools', 'feedback',
+  'settings', 'tiers', 'online', 'devtools', 'feedback', 'chat',
 ])
 
 function resolveDashboardTab(tab, me) {
@@ -578,6 +579,7 @@ function DashboardInner() {
   const tabs = [
     { id: 'home', label: 'Home', icon: Home },
     { id: 'agents', label: 'Agents', icon: Bot },
+    { id: 'chat', label: 'Voice Chat', icon: Mic },
     { id: 'marketplace', label: 'Marketplace', icon: ShoppingBag },
     { id: 'integrations', label: 'Integrations', icon: Network },
     { id: 'reports', label: 'Reports', icon: FileText },
@@ -855,6 +857,9 @@ function DashboardInner() {
           )}
           {activeTab === 'feedback' && can(me, 'admin.feedback') && (
             <FeedbackView />
+          )}
+          {activeTab === 'chat' && (
+            <VoiceChat me={me} />
           )}
           </div>
         </main>

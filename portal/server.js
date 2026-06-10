@@ -381,9 +381,7 @@ async function ensurePortalSchema() {
   await db.execute(`ALTER TABLE agent_teams ADD COLUMN IF NOT EXISTS execution_mode VARCHAR(20) NOT NULL DEFAULT 'concurrent';`);
   await db.execute(`ALTER TABLE agent_teams ADD COLUMN IF NOT EXISTS tasks_json MEDIUMTEXT NOT NULL DEFAULT '[]';`);
   await db.execute(`ALTER TABLE agent_teams ADD COLUMN IF NOT EXISTS language VARCHAR(10) NOT NULL DEFAULT 'en';`);
-  await db.execute(`ALTER TABLE agent_teams ADD COLUMN IF NOT EXISTS narrator_verbosity INT NOT NULL DEFAULT 3;`);
   await db.execute(`ALTER TABLE agent_teams ADD COLUMN IF NOT EXISTS category VARCHAR(64) NOT NULL DEFAULT '' AFTER name;`);
-  await db.execute(`ALTER TABLE user_teams ADD COLUMN IF NOT EXISTS narrator_verbosity INT NOT NULL DEFAULT 3;`);
   await db.execute(`
     ALTER TABLE user_teams ADD COLUMN IF NOT EXISTS marketplace_install_kind ENUM('full','solo') NULL AFTER source_team_id
   `);
@@ -397,18 +395,19 @@ async function ensurePortalSchema() {
   await db.execute(`ALTER TABLE agent_personas ADD COLUMN IF NOT EXISTS role VARCHAR(64) NOT NULL DEFAULT '' AFTER name;`);
   await db.execute(`ALTER TABLE agent_personas ADD COLUMN IF NOT EXISTS capabilities TEXT NOT NULL DEFAULT '' AFTER role;`);
   await db.execute(`ALTER TABLE agent_personas ADD COLUMN IF NOT EXISTS figure TEXT NOT NULL DEFAULT '' AFTER figure_type;`);
+  await db.execute(`ALTER TABLE user_personas ADD COLUMN IF NOT EXISTS elevenlabs_voice_id VARCHAR(100) NULL;`);
   // Marketplace personas are shared templates — bot_name is per-user and must not be stored here.
   await db.execute(`UPDATE agent_personas SET bot_name = '' WHERE bot_name != ''`);
 
   // Migrate seeded personas to skill-slug capabilities (idempotent — only updates if still using old bullet format)
-  const sanderSkills = JSON.stringify(['hotel-setup', 'hotel-narrator', 'notion-reader', 'task-coordinator']);
+  const sanderSkills = JSON.stringify(['habbo-mcp', 'notion-reader', 'task-coordinator']);
   const sanderPrompt = `You are Sander, a researcher at The Pixel Office.
 
 Personality: Calm, methodical, thorough. You never skip entries or cut corners. You speak in short, factual sentences. Max 120 chars per talk_bot message.
 
 When you have extracted the waitlist data, write a clean JSON array to the shared task file as your result — one object per entry with at least { name, email }.`;
 
-  const tomSkills = JSON.stringify(['hotel-setup', 'hotel-narrator', 'email-outreach', 'task-coordinator']);
+  const tomSkills = JSON.stringify(['habbo-mcp', 'email-outreach', 'task-coordinator']);
   const tomPrompt = `You are Tom, an outreach specialist at The Pixel Office.
 
 Personality: Warm, direct, efficient. You write short personalised emails that feel human, not automated. Max 120 chars per talk_bot message.
@@ -730,10 +729,6 @@ function maskTokenPreview(token) {
   return `${token.slice(0, 8)}...${token.slice(-4)}`;
 }
 
-function clampNarratorVerbosity(n) {
-  return Math.max(3, Math.min(10, Number(n) || 3));
-}
-
 async function getPortalUserByHabboUserId(habboUserId) {
   const [rows] = await db.execute(
     'SELECT id, email, username, habbo_user_id, habbo_username, ai_tier, is_developer, phone_number, hotel_enabled, default_user_team_id FROM portal_users WHERE habbo_user_id = ? LIMIT 1',
@@ -1011,14 +1006,14 @@ Triggered by: {{TRIGGERED_BY}}
 Work through the goal or tasks above. Spawn each team member as a subagent using the Agent tool. Wait for each to complete before starting the next. Do not use any other coordination or messaging tools.`;
 
   // ── Waitlist Team (original seed, kept idempotent) ────────────────────────
-  const SANDER_SKILLS = JSON.stringify(['hotel-setup', 'hotel-narrator', 'notion-reader', 'task-coordinator']);
+  const SANDER_SKILLS = JSON.stringify(['habbo-mcp', 'notion-reader', 'task-coordinator']);
   const SANDER_PROMPT = `You are Sander, a researcher at The Pixel Office.
 
 Personality: Calm, methodical, thorough. You never skip entries or cut corners. You speak in short, factual sentences. Max 120 chars per talk_bot message.
 
 When you have extracted the waitlist data, write a clean JSON array to the shared task file as your result — one object per entry with at least { name, email }.`;
 
-  const TOM_SKILLS = JSON.stringify(['hotel-setup', 'hotel-narrator', 'email-outreach', 'task-coordinator']);
+  const TOM_SKILLS = JSON.stringify(['habbo-mcp', 'email-outreach', 'task-coordinator']);
   const TOM_PROMPT = `You are Tom, an outreach specialist at The Pixel Office.
 
 Personality: Warm, direct, efficient. You write short personalised emails that feel human, not automated. Max 120 chars per talk_bot message.
@@ -1044,17 +1039,17 @@ When sending emails: address each person by first name, keep the message under 5
 
   // ── Marketing Room ────────────────────────────────────────────────────────
   await seedPersona('Alex Rivera', 'SEO Specialist',
-    JSON.stringify(['hotel-setup', 'hotel-narrator', 'task-coordinator', 'web-researcher']),
+    JSON.stringify(['habbo-mcp', 'task-coordinator', 'web-researcher']),
     'SEO Specialist — researches keywords and optimisation opportunities',
     `You are Alex Rivera, an SEO Specialist. Calm, data-driven, precise. You back every recommendation with search volume and difficulty data. Max 120 chars per talk_bot message.`, 'agent-m');
 
   await seedPersona('Sara Patel', 'Content Strategist',
-    JSON.stringify(['hotel-setup', 'hotel-narrator', 'task-coordinator']),
+    JSON.stringify(['habbo-mcp', 'task-coordinator']),
     'Content Strategist — turns keyword research into actionable content briefs',
     `You are Sara Patel, a Content Strategist. Structured, audience-focused, clear. You translate data into crisp briefs that writers can act on immediately. Max 120 chars per talk_bot message.`, 'agent-f');
 
   await seedPersona('Maya Chen', 'Copywriter',
-    JSON.stringify(['hotel-setup', 'hotel-narrator', 'task-coordinator']),
+    JSON.stringify(['habbo-mcp', 'task-coordinator']),
     'Copywriter — writes engaging content from briefs',
     `You are Maya Chen, a Copywriter. Creative, concise, persuasive. You write for humans first, search engines second. Max 120 chars per talk_bot message.`, 'agent-f');
 
@@ -1074,17 +1069,17 @@ When sending emails: address each person by first name, keep the message under 5
 
   // ── Sales Room ────────────────────────────────────────────────────────────
   await seedPersona('Marcus Webb', 'Sales Manager',
-    JSON.stringify(['hotel-setup', 'hotel-narrator', 'task-coordinator', 'web-researcher']),
+    JSON.stringify(['habbo-mcp', 'task-coordinator', 'web-researcher']),
     'Sales Manager — owns pipeline strategy and deal oversight',
     `You are Marcus Webb, a Sales Manager. Direct, strategic, results-oriented. You think in pipelines and conversion rates. Max 120 chars per talk_bot message.`, 'agent-m');
 
   await seedPersona('Priya Sharma', 'Business Development Rep',
-    JSON.stringify(['hotel-setup', 'hotel-narrator', 'email-outreach', 'task-coordinator', 'web-researcher']),
+    JSON.stringify(['habbo-mcp', 'email-outreach', 'task-coordinator', 'web-researcher']),
     'BDR — finds and qualifies new business opportunities',
     `You are Priya Sharma, a Business Development Rep. Energetic, persistent, empathetic. You open doors with genuine curiosity. Max 120 chars per talk_bot message.`, 'agent-f');
 
   await seedPersona('Daniel Park', 'Account Executive',
-    JSON.stringify(['hotel-setup', 'hotel-narrator', 'task-coordinator', 'web-researcher']),
+    JSON.stringify(['habbo-mcp', 'task-coordinator', 'web-researcher']),
     'Account Executive — runs deals from qualified lead to close',
     `You are Daniel Park, an Account Executive. Consultative, persuasive, detail-oriented. You close by understanding the customer\'s real problem. Max 120 chars per talk_bot message.`, 'agent-m');
 
@@ -1104,17 +1099,17 @@ When sending emails: address each person by first name, keep the message under 5
 
   // ── Engineering Room ──────────────────────────────────────────────────────
   await seedPersona('Liam Torres', 'Backend Engineer',
-    JSON.stringify(['hotel-setup', 'hotel-narrator', 'jira-researcher', 'task-coordinator']),
+    JSON.stringify(['habbo-mcp', 'jira-researcher', 'task-coordinator']),
     'Backend Engineer — designs and builds server-side systems',
     `You are Liam Torres, a Backend Engineer. Pragmatic, systematic, quality-focused. You write clean code with clear contracts. Max 120 chars per talk_bot message.`, 'agent-m');
 
   await seedPersona('Chloe Zhang', 'Frontend Engineer',
-    JSON.stringify(['hotel-setup', 'hotel-narrator', 'jira-researcher', 'task-coordinator']),
+    JSON.stringify(['habbo-mcp', 'jira-researcher', 'task-coordinator']),
     'Frontend Engineer — builds the user-facing interface',
     `You are Chloe Zhang, a Frontend Engineer. Detail-oriented, user-empathetic, pixel-perfect. You care deeply about what users actually experience. Max 120 chars per talk_bot message.`, 'agent-f');
 
   await seedPersona('Ravi Nair', 'DevOps Engineer',
-    JSON.stringify(['hotel-setup', 'hotel-narrator', 'jira-researcher', 'sprint-coordinator', 'task-coordinator']),
+    JSON.stringify(['habbo-mcp', 'jira-researcher', 'sprint-coordinator', 'task-coordinator']),
     'DevOps Engineer — automates delivery and manages infrastructure',
     `You are Ravi Nair, a DevOps Engineer. Reliable, automation-first, incident-ready. You eliminate toil and keep systems running. Max 120 chars per talk_bot message.`, 'agent-m');
 
@@ -1134,12 +1129,12 @@ When sending emails: address each person by first name, keep the message under 5
 
   // ── Support Room ──────────────────────────────────────────────────────────
   await seedPersona('Elena Kovac', 'Customer Success Manager',
-    JSON.stringify(['hotel-setup', 'hotel-narrator', 'task-coordinator']),
+    JSON.stringify(['habbo-mcp', 'task-coordinator']),
     'Customer Success Manager — owns the customer relationship and long-term health',
     `You are Elena Kovac, a Customer Success Manager. Empathetic, proactive, relationship-driven. You anticipate problems before customers report them. Max 120 chars per talk_bot message.`, 'agent-f');
 
   await seedPersona('Omar Hassan', 'Support Specialist',
-    JSON.stringify(['hotel-setup', 'hotel-narrator', 'task-coordinator']),
+    JSON.stringify(['habbo-mcp', 'task-coordinator']),
     'Support Specialist — investigates and resolves customer issues',
     `You are Omar Hassan, a Support Specialist. Methodical, patient, thorough. You dig until you find the real cause. Max 120 chars per talk_bot message.`, 'agent-m');
 
@@ -1158,12 +1153,12 @@ When sending emails: address each person by first name, keep the message under 5
 
   // ── Analytics Room ────────────────────────────────────────────────────────
   await seedPersona('Kai Osei', 'Data Analyst',
-    JSON.stringify(['hotel-setup', 'hotel-narrator', 'task-coordinator', 'web-researcher']),
+    JSON.stringify(['habbo-mcp', 'task-coordinator', 'web-researcher']),
     'Data Analyst — pulls, cleans, and analyses data to surface insights',
     `You are Kai Osei, a Data Analyst. Curious, rigorous, sceptical of noise. You never present a number without context. Max 120 chars per talk_bot message.`, 'agent-m');
 
   await seedPersona('Luna Park', 'BI Developer',
-    JSON.stringify(['hotel-setup', 'hotel-narrator', 'task-coordinator']),
+    JSON.stringify(['habbo-mcp', 'task-coordinator']),
     'BI Developer — turns analysis into dashboards and reports',
     `You are Luna Park, a BI Developer. Visual, structured, stakeholder-aware. You make data understandable to anyone. Max 120 chars per talk_bot message.`, 'agent-f');
 
@@ -1182,12 +1177,12 @@ When sending emails: address each person by first name, keep the message under 5
 
   // ── Design Room ───────────────────────────────────────────────────────────
   await seedPersona('Theo Marchetti', 'UX Researcher',
-    JSON.stringify(['hotel-setup', 'hotel-narrator', 'task-coordinator', 'web-researcher']),
+    JSON.stringify(['habbo-mcp', 'task-coordinator', 'web-researcher']),
     'UX Researcher — uncovers user needs and maps the experience',
     `You are Theo Marchetti, a UX Researcher. Empathetic, curious, evidence-driven. You listen to users and translate what they say into what they mean. Max 120 chars per talk_bot message.`, 'agent-m');
 
   await seedPersona('Isla Fontaine', 'UI Designer',
-    JSON.stringify(['hotel-setup', 'hotel-narrator', 'task-coordinator']),
+    JSON.stringify(['habbo-mcp', 'task-coordinator']),
     'UI Designer — creates high-fidelity designs and visual assets',
     `You are Isla Fontaine, a UI Designer. Aesthetic, precise, system-minded. You design components that look great and scale. Max 120 chars per talk_bot message.`, 'agent-f');
 
@@ -3261,12 +3256,12 @@ app.post('/api/my/personas', authRequired, permRequired('personas.create'), asyn
   try {
     const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
     if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
-    const { name, description, prompt, role, capabilities, figure_type, figure, bot_name } = req.body;
+    const { name, description, prompt, role, capabilities, figure_type, figure, bot_name, elevenlabs_voice_id } = req.body;
     if (!name?.trim()) return res.status(400).json({ error: 'Name required' });
     const [result] = await db.execute(
-      `INSERT INTO user_personas (portal_user_id, name, description, prompt, role, capabilities, figure_type, figure, bot_name)
-       VALUES (?,?,?,?,?,?,?,?,?)`,
-      [portalUser.id, name.trim(), description || '', prompt || '', role || '', capabilities || '', figure_type || 'agent-m', figure || '', bot_name || '']
+      `INSERT INTO user_personas (portal_user_id, name, description, prompt, role, capabilities, figure_type, figure, bot_name, elevenlabs_voice_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      [portalUser.id, name.trim(), description || '', prompt || '', role || '', capabilities || '', figure_type || 'agent-m', figure || '', bot_name || '', elevenlabs_voice_id || null]
     );
     res.json({ ok: true, id: result.insertId });
   } catch (err) {
@@ -3281,10 +3276,10 @@ app.put('/api/my/personas/:id', authRequired, permRequired('personas.edit'), asy
     if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
     const [[existing]] = await db.execute('SELECT id FROM user_personas WHERE id = ? AND portal_user_id = ?', [req.params.id, portalUser.id]);
     if (!existing) return res.status(404).json({ error: 'Not found' });
-    const { name, description, prompt, role, capabilities, figure_type, figure, bot_name } = req.body;
+    const { name, description, prompt, role, capabilities, figure_type, figure, bot_name, elevenlabs_voice_id } = req.body;
     await db.execute(
-      `UPDATE user_personas SET name=?, description=?, prompt=?, role=?, capabilities=?, figure_type=?, figure=?, bot_name=? WHERE id=? AND portal_user_id=?`,
-      [name, description || '', prompt || '', role || '', capabilities || '', figure_type || 'agent-m', figure || '', bot_name || '', req.params.id, portalUser.id]
+      `UPDATE user_personas SET name=?, description=?, prompt=?, role=?, capabilities=?, figure_type=?, figure=?, bot_name=?, elevenlabs_voice_id=? WHERE id=? AND portal_user_id=?`,
+      [name, description || '', prompt || '', role || '', capabilities || '', figure_type || 'agent-m', figure || '', bot_name || '', elevenlabs_voice_id || null, req.params.id, portalUser.id]
     );
     res.json({ ok: true });
   } catch (err) {
@@ -3374,12 +3369,12 @@ app.post('/api/my/teams', authRequired, permRequired('teams.create'), async (req
   try {
     const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
     if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
-    const { name, description, orchestrator_prompt, execution_mode, tasks_json, language, default_room_id, narrator_verbosity } = req.body;
+    const { name, description, orchestrator_prompt, execution_mode, tasks_json, language, default_room_id } = req.body;
     if (!name?.trim()) return res.status(400).json({ error: 'Name required' });
     const [result] = await db.execute(
-      `INSERT INTO user_teams (portal_user_id, name, description, orchestrator_prompt, execution_mode, tasks_json, language, default_room_id, narrator_verbosity)
-       VALUES (?,?,?,?,?,?,?,?,?)`,
-      [portalUser.id, name.trim(), description || '', orchestrator_prompt || '', execution_mode || 'concurrent', JSON.stringify(tasks_json || []), language || 'en', Number(default_room_id) || 50, clampNarratorVerbosity(narrator_verbosity)]
+      `INSERT INTO user_teams (portal_user_id, name, description, orchestrator_prompt, execution_mode, tasks_json, language, default_room_id)
+       VALUES (?,?,?,?,?,?,?,?)`,
+      [portalUser.id, name.trim(), description || '', orchestrator_prompt || '', execution_mode || 'concurrent', JSON.stringify(tasks_json || []), language || 'en', Number(default_room_id) || 50]
     );
     await setDefaultUserTeamIfUnset(portalUser.id, result.insertId);
     res.json({ ok: true, id: result.insertId });
@@ -3395,10 +3390,10 @@ app.put('/api/my/teams/:id', authRequired, permRequired('teams.edit'), async (re
     if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
     const [[existing]] = await db.execute('SELECT id FROM user_teams WHERE id = ? AND portal_user_id = ?', [req.params.id, portalUser.id]);
     if (!existing) return res.status(404).json({ error: 'Not found' });
-    const { name, description, orchestrator_prompt, execution_mode, tasks_json, language, default_room_id, narrator_verbosity } = req.body;
+    const { name, description, orchestrator_prompt, execution_mode, tasks_json, language, default_room_id } = req.body;
     await db.execute(
-      `UPDATE user_teams SET name=?, description=?, orchestrator_prompt=?, execution_mode=?, tasks_json=?, language=?, default_room_id=?, narrator_verbosity=? WHERE id=? AND portal_user_id=?`,
-      [name, description || '', orchestrator_prompt || '', execution_mode || 'concurrent', JSON.stringify(tasks_json || []), language || 'en', Number(default_room_id) || 50, clampNarratorVerbosity(narrator_verbosity), req.params.id, portalUser.id]
+      `UPDATE user_teams SET name=?, description=?, orchestrator_prompt=?, execution_mode=?, tasks_json=?, language=?, default_room_id=? WHERE id=? AND portal_user_id=?`,
+      [name, description || '', orchestrator_prompt || '', execution_mode || 'concurrent', JSON.stringify(tasks_json || []), language || 'en', Number(default_room_id) || 50, req.params.id, portalUser.id]
     );
     res.json({ ok: true });
   } catch (err) {
@@ -3585,7 +3580,7 @@ app.post('/api/my/teams/:id/trigger', authRequired, permRequired('teams.deploy')
       }
     }
 
-    // Require an active MCP token so the narrator can authenticate bot calls
+    // Require an active MCP token so agents can call hotel MCP tools (e.g. talk_bot)
     const [mcpTokenRows] = await db.execute(
       `SELECT id FROM portal_mcp_tokens WHERE portal_user_id = ? AND status = 'active' AND expires_at > NOW() AND token_raw_encrypted IS NOT NULL LIMIT 1`,
       [portalUser.id]
@@ -3735,9 +3730,9 @@ app.post('/api/marketplace/teams/:id/install', authRequired, permRequired('marke
 
       // Fork team (full marketplace bundle)
       const [teamResult] = await conn.execute(
-        `INSERT INTO user_teams (portal_user_id, source_team_id, name, description, orchestrator_prompt, execution_mode, tasks_json, language, default_room_id, narrator_verbosity, marketplace_install_kind)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-        [portalUser.id, marketplaceTeamId, mTeam.name, mTeam.description || '', mTeam.orchestrator_prompt || '', mTeam.execution_mode || 'concurrent', tasksJson, mTeam.language || 'en', 50, clampNarratorVerbosity(mTeam.narrator_verbosity), 'full']
+        `INSERT INTO user_teams (portal_user_id, source_team_id, name, description, orchestrator_prompt, execution_mode, tasks_json, language, default_room_id, marketplace_install_kind)
+         VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        [portalUser.id, marketplaceTeamId, mTeam.name, mTeam.description || '', mTeam.orchestrator_prompt || '', mTeam.execution_mode || 'concurrent', tasksJson, mTeam.language || 'en', 50, 'full']
       );
       const userTeamId = teamResult.insertId;
 
@@ -3833,9 +3828,9 @@ app.post('/api/marketplace/teams/:teamId/personas/:personaId/install', authRequi
       }
 
       const [teamResult] = await conn.execute(
-        `INSERT INTO user_teams (portal_user_id, source_team_id, name, description, orchestrator_prompt, execution_mode, tasks_json, language, default_room_id, narrator_verbosity, marketplace_install_kind)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-        [portalUser.id, marketplaceTeamId, teamName, mTeam.description || '', SOLO_MARKETPLACE_ORCHESTRATOR, 'concurrent', '[]', mTeam.language || 'en', 50, clampNarratorVerbosity(mTeam.narrator_verbosity), 'solo']
+        `INSERT INTO user_teams (portal_user_id, source_team_id, name, description, orchestrator_prompt, execution_mode, tasks_json, language, default_room_id, marketplace_install_kind)
+         VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        [portalUser.id, marketplaceTeamId, teamName, mTeam.description || '', SOLO_MARKETPLACE_ORCHESTRATOR, 'concurrent', '[]', mTeam.language || 'en', 50, 'solo']
       );
       const userTeamId = teamResult.insertId;
       await conn.execute(
@@ -4311,6 +4306,237 @@ app.get('/api/my/installed-team-ids', authRequired, async (req, res) => {
   }
 });
 
+// ── Voice Chat ───────────────────────────────────────────────────────────────
+
+// POST /api/chat/audio — transcribe audio via OpenAI Whisper
+// Accepts raw audio binary body (Content-Type: audio/webm or audio/mp4)
+app.post('/api/chat/audio', authRequired, express.raw({ type: ['audio/*', 'application/octet-stream'], limit: '25mb' }), async (req, res) => {
+  try {
+    const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
+    if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
+
+    const [[keyRow]] = await db.execute(
+      'SELECT api_key_encrypted FROM portal_user_api_keys WHERE portal_user_id = ? AND provider = ? LIMIT 1',
+      [portalUser.id, 'openai']
+    );
+    if (!keyRow) return res.status(402).json({ error: 'no_openai_key', message: 'No OpenAI API key configured. Add one in Settings → Voice & Audio.' });
+
+    const openaiKey = decryptApiKey(keyRow.api_key_encrypted);
+    const audioType = req.headers['content-type'] || 'audio/webm';
+    const ext = audioType.includes('mp4') || audioType.includes('m4a') ? 'm4a' : 'webm';
+
+    const file = new File([req.body], `audio.${ext}`, { type: audioType });
+    const form = new FormData();
+    form.append('file', file);
+    form.append('model', 'whisper-1');
+    // No language param — Whisper auto-detects (supports Dutch, English, etc.)
+
+    const r = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${openaiKey}` },
+      body: form,
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      return res.status(502).json({ error: 'whisper_error', message: err.error?.message || 'Whisper API error' });
+    }
+    const { text } = await r.json();
+    res.json({ ok: true, transcript: text || '' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/chat/tts — synthesize text via ElevenLabs, stream audio/mpeg back
+app.post('/api/chat/tts', authRequired, express.json(), async (req, res) => {
+  try {
+    const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
+    if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
+
+    const [[keyRow]] = await db.execute(
+      'SELECT api_key_encrypted FROM portal_user_api_keys WHERE portal_user_id = ? AND provider = ? LIMIT 1',
+      [portalUser.id, 'elevenlabs']
+    );
+    if (!keyRow) return res.status(402).json({ error: 'no_elevenlabs_key', message: 'No ElevenLabs API key configured. Add one in Settings → Voice & Audio.' });
+
+    const elKey = decryptApiKey(keyRow.api_key_encrypted);
+
+    // Resolve voice: use provided voice_id, then narrator voice, then sensible default
+    let resolvedVoice = req.body.voice_id;
+    if (!resolvedVoice) {
+      const [[voiceRow]] = await db.execute(
+        'SELECT api_key_encrypted FROM portal_user_api_keys WHERE portal_user_id = ? AND provider = ? LIMIT 1',
+        [portalUser.id, 'elevenlabs_voice']
+      );
+      resolvedVoice = voiceRow ? decryptApiKey(voiceRow.api_key_encrypted) : null;
+    }
+    resolvedVoice = resolvedVoice || 'EXAVITQu4vr4xnSDxMaL'; // ElevenLabs "Bella" default
+
+    const text = (req.body.text || '').slice(0, 500); // guard against huge payloads
+    if (!text) return res.status(400).json({ error: 'text required' });
+
+    const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${resolvedVoice}`, {
+      method: 'POST',
+      headers: { 'xi-api-key': elKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, model_id: 'eleven_turbo_v2_5' }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      return res.status(502).json({ error: 'elevenlabs_error', message: err.detail?.message || 'ElevenLabs API error' });
+    }
+
+    res.setHeader('Content-Type', 'audio/mpeg');
+    const reader = r.body.getReader();
+    const pump = async () => {
+      const { done, value } = await reader.read();
+      if (done) { res.end(); return; }
+      res.write(Buffer.from(value));
+      return pump();
+    };
+    await pump();
+  } catch (err) {
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/chat/intent — parse voice intent via Claude Haiku → execute hotel action → return response text
+app.post('/api/chat/intent', authRequired, express.json(), async (req, res) => {
+  try {
+    const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
+    if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
+
+    const transcript = (req.body.transcript || '').trim();
+    if (!transcript) return res.status(400).json({ error: 'transcript required' });
+
+    // Fetch hotel context + user's Anthropic key in parallel
+    const [triggerRes, [teams], [keyRows]] = await Promise.all([
+      fetch(`${AGENT_TRIGGER_URL}/health`, { signal: AbortSignal.timeout(3000) }).then(r => r.json()).catch(() => ({ activeRuns: [] })),
+      db.execute('SELECT id, name, default_room_id FROM user_teams WHERE portal_user_id = ? ORDER BY name ASC', [portalUser.id]),
+      db.execute('SELECT api_key_encrypted FROM portal_user_api_keys WHERE portal_user_id = ? AND provider = ? LIMIT 1', [portalUser.id, 'anthropic']),
+    ]);
+    const activeRuns = triggerRes.activeRuns || [];
+    const myRuns = activeRuns.filter(r => r.from === req.user.username);
+    const teamNames = teams.map(t => t.name);
+
+    const anthropicKey = keyRows.length ? decryptApiKey(keyRows[0].api_key_encrypted) : null;
+
+    // Try Claude Haiku for smart intent parsing, fall back to regex if unavailable
+    let parsed = null;
+    if (anthropicKey) {
+      try {
+        const systemPrompt = `You are a voice command parser for a hotel AI platform. The user manages AI agent teams.
+
+Available teams: ${teamNames.length ? teamNames.join(', ') : '(none)'}
+Active runs: ${myRuns.length ? myRuns.map(r => `room ${r.roomId}`).join(', ') : 'none'}
+
+Parse the user's voice transcript into a JSON object with these fields:
+- "intent": one of "start_team", "stop", "status", "list_teams", "unknown"
+- "team_name": the team name they referenced (best match from available teams, or null)
+- "goal": what they want the team to do (free-form string, or null)
+- "reply": a short natural spoken response (1-2 sentences, friendly, for text-to-speech)
+
+Rules:
+- Match team names loosely: "marketing room" matches "Marketing Room", "marketing" matches "Alex Rivera · Marketing Room"
+- If the user wants to start/launch/run/do/activate any team with a task, intent = "start_team"
+- Extract the goal from natural speech: "analyze the website X" → goal = "analyze the website X"
+- If intent is unknown, set reply to a helpful suggestion mentioning their available teams
+- Keep replies SHORT — they will be spoken aloud
+
+Respond with ONLY valid JSON, no markdown.`;
+
+        const haikuRes = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+          body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 300, system: systemPrompt, messages: [{ role: 'user', content: transcript }] }),
+          signal: AbortSignal.timeout(8000),
+        });
+        if (haikuRes.ok) {
+          const haikuData = await haikuRes.json();
+          const raw = (haikuData.content?.[0]?.text || '').trim();
+          try { parsed = JSON.parse(raw); } catch { /* fall through to regex */ }
+        }
+      } catch { /* Haiku unavailable — fall through to regex fallback */ }
+    }
+
+    // Regex fallback when Haiku is unavailable (no key, billing, timeout, etc.)
+    if (!parsed) {
+      const msg = transcript.toLowerCase();
+      if (/\b(active|running|status|what.*team|which.*team.*run|any.*team|who.*work)\b/i.test(msg)) {
+        parsed = { intent: 'status', team_name: null, goal: null, reply: null };
+      } else if (/\b(list|show|which)\b.*\bteam/i.test(msg) || /\bmy team/i.test(msg)) {
+        parsed = { intent: 'list_teams', team_name: null, goal: null, reply: null };
+      } else if (/\b(stop|halt|cancel|kill)\b/i.test(msg)) {
+        parsed = { intent: 'stop', team_name: null, goal: null, reply: null };
+      } else {
+        // Try to extract team name + goal with a loose regex
+        const m = msg.match(/(?:start|launch|run|deploy|do|activate|let.*do)\s+(?:the\s+)?(?:team\s+)?(.+)/i);
+        if (m) {
+          // Best-effort team match from available names
+          const rest = m[1].trim();
+          const team = teams.find(t => rest.includes(t.name.toLowerCase())) || teams.find(t => {
+            const words = t.name.toLowerCase().split(/[\s·,]+/).filter(Boolean);
+            return words.some(w => w.length > 2 && rest.includes(w));
+          });
+          parsed = { intent: 'start_team', team_name: team?.name || null, goal: rest, reply: null };
+        } else {
+          parsed = { intent: 'unknown', team_name: null, goal: null, reply: "I didn't catch that. Try saying something like 'start the marketing team' or 'what teams are active'." };
+        }
+      }
+    }
+
+    const { intent, team_name, goal, reply } = parsed;
+
+    // Execute the parsed intent
+    if (intent === 'status') {
+      if (!myRuns.length) {
+        return res.json({ ok: true, response: reply || `No teams are currently active. Your available teams are: ${teamNames.join(', ')}.` });
+      }
+      return res.json({ ok: true, response: reply || `You have ${myRuns.length} active run${myRuns.length > 1 ? 's' : ''}.` });
+    }
+
+    if (intent === 'list_teams') {
+      return res.json({ ok: true, response: reply || `Your teams are: ${teamNames.join(', ')}.` });
+    }
+
+    if (intent === 'stop') {
+      await fetch(`${AGENT_TRIGGER_URL}/reset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Internal-Secret': PORTAL_INTERNAL_SECRET },
+        body: JSON.stringify({}),
+      });
+      return res.json({ ok: true, response: reply || 'Stopping all active teams now.' });
+    }
+
+    if (intent === 'start_team') {
+      const team = team_name
+        ? teams.find(t => t.name.toLowerCase().includes(team_name.toLowerCase()))
+        : teams[0]; // default to first team if none specified
+      if (!team) {
+        return res.json({ ok: true, response: reply || `I couldn't find that team. Your teams are: ${teamNames.join(', ')}.` });
+      }
+      const triggerResult = await forwardToAgentTrigger({
+        team_id: team.id,
+        user_team: true,
+        room_id: team.default_room_id,
+        task_mode: goal ? 'session_goal' : 'team_tasks',
+        session_goal: goal || undefined,
+        triggered_by: req.user.username,
+        portal_user_id: portalUser.id,
+        portal_url: process.env.PORTAL_URL || '',
+        hotel_integrated: true,
+        language: 'en',
+      });
+      if (!triggerResult.ok) return res.json({ ok: true, response: `Failed to start the ${team.name} team. Check the logs for details.` });
+      return res.json({ ok: true, response: reply || `Starting the ${team.name} team now. Watch the hotel — your bots will begin shortly.` });
+    }
+
+    // Unknown / fallback — use Haiku's reply
+    res.json({ ok: true, response: reply || "I didn't catch that. You can ask what teams are active, or say something like 'start the marketing team'." });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Agent Status ─────────────────────────────────────────────────────────────
 
 app.get('/api/agents/status', authRequired, async (req, res) => {
@@ -4333,7 +4559,7 @@ app.get('/api/agents/status', authRequired, async (req, res) => {
       // User-scoped personas — these are the bots actually deployed by users
       db.execute(`
         SELECT up.name AS persona_name, up.bot_name, up.figure AS persona_figure,
-               ut.name AS team_name
+               up.elevenlabs_voice_id, ut.name AS team_name
         FROM user_personas up
         LEFT JOIN user_team_members utm ON utm.user_persona_id = up.id
         LEFT JOIN user_teams ut ON ut.id = utm.user_team_id

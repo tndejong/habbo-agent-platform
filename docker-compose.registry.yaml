@@ -59,6 +59,11 @@ services:
       - ${HABBO_NITRO_BIND_PORT:-1080}:5154
       - ${HABBO_ASSETS_BIND_PORT:-8080}:8080
       - ${HABBO_SWF_BIND_PORT:-8081}:8081
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /app/nitro-assets/gamedata/FigureData.json"]
+      interval: 10s
+      start_period: 120s
+      retries: 30
     networks:
       nitro:
       proxy_net:
@@ -148,6 +153,9 @@ services:
       - GAMEDATA_DIR=/assets/gamedata
     ports:
       - "127.0.0.1:${HABBO_IMAGER_PORT:-3005}:3005"
+    depends_on:
+      nitro:
+        condition: service_healthy
     networks:
       nitro:
 

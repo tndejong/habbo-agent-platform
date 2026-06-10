@@ -15,7 +15,7 @@ COPY package.json ./
 COPY src/ ./src/
 COPY entrypoint.sh ./entrypoint.sh
 
-# Bake Claude hook settings + narrator script into the image
+# Bake Claude hook settings into the image
 COPY .claude/ /home/claude/.claude/
 COPY hooks/ /app/hooks/
 

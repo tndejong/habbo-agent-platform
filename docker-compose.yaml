@@ -209,7 +209,6 @@ services:
       - PORTAL_INTERNAL_SECRET=${HOTEL_PORTAL_INTERNAL_SECRET:-change-this-secret}
       - AGENT_TRIGGER_HEADLESS_ROOM_ID=${AGENT_TRIGGER_HEADLESS_ROOM_ID:-900001}
       - SHELL=/bin/bash
-      # narrator_verbosity (3–10) is stored per team in the database, not here
     volumes:
       - .:/project:ro
     ports:
