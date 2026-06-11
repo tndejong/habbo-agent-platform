@@ -382,6 +382,27 @@ async function ensurePortalSchema() {
   await db.execute(`ALTER TABLE agent_teams ADD COLUMN IF NOT EXISTS tasks_json MEDIUMTEXT NOT NULL DEFAULT '[]';`);
   await db.execute(`ALTER TABLE agent_teams ADD COLUMN IF NOT EXISTS language VARCHAR(10) NOT NULL DEFAULT 'en';`);
   await db.execute(`ALTER TABLE agent_teams ADD COLUMN IF NOT EXISTS category VARCHAR(64) NOT NULL DEFAULT '' AFTER name;`);
+
+  // Ensure user_personas and user_teams exist before any ALTER TABLE references them.
+  // The full definitions appear later in this function; these stubs are no-ops on existing installs.
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS user_personas (
+      id INT NOT NULL AUTO_INCREMENT,
+      user_id INT NOT NULL,
+      PRIMARY KEY (id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS user_teams (
+      id INT NOT NULL AUTO_INCREMENT,
+      user_id INT NOT NULL,
+      team_id INT NOT NULL,
+      source_team_id INT NULL,
+      PRIMARY KEY (id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+
   await db.execute(`
     ALTER TABLE user_teams ADD COLUMN IF NOT EXISTS marketplace_install_kind ENUM('full','solo') NULL AFTER source_team_id
   `);
