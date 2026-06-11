@@ -384,22 +384,49 @@ async function ensurePortalSchema() {
   await db.execute(`ALTER TABLE agent_teams ADD COLUMN IF NOT EXISTS category VARCHAR(64) NOT NULL DEFAULT '' AFTER name;`);
 
   // Ensure user_personas and user_teams exist before any ALTER TABLE references them.
-  // The full definitions appear later in this function; these stubs are no-ops on existing installs.
+  // These definitions are intentionally complete so that a fresh install gets the correct
+  // schema immediately; the identical CREATE TABLE IF NOT EXISTS blocks later in this
+  // function become no-ops on both new and existing databases.
   await db.execute(`
     CREATE TABLE IF NOT EXISTS user_personas (
       id INT NOT NULL AUTO_INCREMENT,
-      user_id INT NOT NULL,
-      PRIMARY KEY (id)
+      portal_user_id INT NOT NULL,
+      source_persona_id INT NULL,
+      name VARCHAR(64) NOT NULL,
+      description VARCHAR(255) NOT NULL DEFAULT '',
+      prompt MEDIUMTEXT NOT NULL DEFAULT '',
+      role VARCHAR(64) NOT NULL DEFAULT '',
+      capabilities TEXT NOT NULL DEFAULT '',
+      figure_type VARCHAR(64) NOT NULL DEFAULT 'agent-m',
+      figure TEXT NOT NULL DEFAULT '',
+      bot_name VARCHAR(25) NOT NULL DEFAULT '',
+      elevenlabs_voice_id VARCHAR(100) NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_user_persona_name (portal_user_id, name),
+      CONSTRAINT fk_up_user FOREIGN KEY (portal_user_id) REFERENCES portal_users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
   await db.execute(`
     CREATE TABLE IF NOT EXISTS user_teams (
       id INT NOT NULL AUTO_INCREMENT,
-      user_id INT NOT NULL,
-      team_id INT NOT NULL,
+      portal_user_id INT NOT NULL,
       source_team_id INT NULL,
-      PRIMARY KEY (id)
+      name VARCHAR(64) NOT NULL,
+      description VARCHAR(255) NOT NULL DEFAULT '',
+      orchestrator_prompt MEDIUMTEXT NOT NULL DEFAULT '',
+      execution_mode VARCHAR(20) NOT NULL DEFAULT 'concurrent',
+      tasks_json MEDIUMTEXT NOT NULL DEFAULT '[]',
+      language VARCHAR(10) NOT NULL DEFAULT 'en',
+      default_room_id INT NOT NULL DEFAULT 50,
+      marketplace_install_kind ENUM('full','solo') NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_user_team_name (portal_user_id, name),
+      CONSTRAINT fk_ut_user FOREIGN KEY (portal_user_id) REFERENCES portal_users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
@@ -1251,6 +1278,7 @@ async function createHabboUser(username) {
 }
 
 const app = express();
+app.set('trust proxy', 1);
 // Plain HTTP local dev: disable HSTS and CSP (CSP can include upgrade-insecure-requests in defaults).
 app.use(helmet({ hsts: false, contentSecurityPolicy: false }));
 app.use(express.json({ limit: '64kb' }));

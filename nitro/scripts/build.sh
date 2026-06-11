@@ -36,34 +36,28 @@ cp /app/configuration/nitro-react/public/* /app/nitro-react/public/
 cd /app/nitro-react
 yarn install
 
-# Align public Nitro endpoints with mapped host ports for Portainer/proxy setups.
+# Always regenerate renderer-config.json from environment variables.
 node <<'NODE'
 const fs = require('fs');
 const p = '/app/nitro-react/public/renderer-config.json';
 const c = JSON.parse(fs.readFileSync(p, 'utf8'));
 
-const host = process.env.HABBO_PUBLIC_HOST || '127.0.0.1';
-const proto = process.env.HABBO_PUBLIC_PROTOCOL || 'http';
+const assetsHost = process.env.HABBO_ASSETS_PUBLIC_HOST || '127.0.0.1';
 const assetsPort = process.env.HABBO_ASSETS_PUBLIC_PORT || '8080';
-const swfPort = process.env.HABBO_SWF_PUBLIC_PORT || '8081';
-const wsHost = process.env.HABBO_WS_PUBLIC_HOST || host;
-const wsProto = process.env.HABBO_WS_PUBLIC_PROTOCOL || (proto === 'https' ? 'wss' : 'ws');
+const assetUrl = assetsPort === '443'
+  ? `https://${assetsHost}`
+  : `http://${assetsHost}:${assetsPort}`;
 
-// Use HABBO_WS_PUBLIC_PORT if explicitly set; fall back to the container-internal port.
-// Omit the port entirely when it matches the protocol default (80/443) so that
-// reverse-proxy setups (e.g. wss://ws.hotel.example.com via nginx on 443) work
-// without any extra configuration.
-const wsPortEnvRaw = process.env.HABBO_WS_PUBLIC_PORT;
-const wsPort = (wsPortEnvRaw !== undefined && wsPortEnvRaw !== '')
-  ? wsPortEnvRaw
-  : (process.env.HABBO_WS_PORT || '2096');
-const defaultPort = wsProto === 'wss' ? '443' : '80';
-const portSuffix = wsPort === defaultPort ? '' : `:${wsPort}`;
+const wsHost = process.env.HABBO_WS_PUBLIC_HOST || '127.0.0.1';
+const wsPort = process.env.HABBO_WS_PUBLIC_PORT || '2096';
+const wsProto = process.env.HABBO_WS_PUBLIC_PROTOCOL || (wsPort === '443' ? 'wss' : 'ws');
+const defaultWsPort = wsProto === 'wss' ? '443' : '80';
+const wsPortSuffix = wsPort === defaultWsPort ? '' : `:${wsPort}`;
 
-c['socket.url'] = `${wsProto}://${wsHost}${portSuffix}`;
-c['asset.url'] = `${proto}://${host}:${assetsPort}`;
-c['image.library.url'] = `${proto}://${host}:${swfPort}/c_images/`;
-c['hof.furni.url'] = `${proto}://${host}:${swfPort}/dcr/hof_furni`;
+c['asset.url'] = assetUrl;
+c['socket.url'] = `${wsProto}://${wsHost}${wsPortSuffix}`;
+c['image.library.url'] = 'https://images.habbo.com/c_images/';
+c['hof.furni.url'] = 'https://images.habbo.com/dcr/hof_furni';
 
 fs.writeFileSync(p, JSON.stringify(c, null, 4));
 NODE
