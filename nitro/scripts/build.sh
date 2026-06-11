@@ -42,7 +42,7 @@ const fs = require('fs');
 const p = '/app/nitro-react/public/renderer-config.json';
 const c = JSON.parse(fs.readFileSync(p, 'utf8'));
 
-const assetsHost = process.env.HABBO_ASSETS_PUBLIC_HOST || '127.0.0.1';
+const assetsHost = process.env.HABBO_ASSETS_PUBLIC_HOST || process.env.HABBO_PUBLIC_HOST || '127.0.0.1';
 const assetsPort = process.env.HABBO_ASSETS_PUBLIC_PORT || '8080';
 const assetUrl = assetsPort === '443'
   ? `https://${assetsHost}`
