@@ -48,6 +48,15 @@ const assetUrl = assetsPort === '443'
   ? `https://${assetsHost}`
   : `http://${assetsHost}:${assetsPort}`;
 
+// SWF server (port 8081) serves c_images and hof_furni.
+// Set HABBO_SWF_PUBLIC_HOST to your Cloudflare tunnel hostname and
+// HABBO_SWF_PUBLIC_PORT to 443 to get https://{host} with no port suffix.
+const swfHost = process.env.HABBO_SWF_PUBLIC_HOST || assetsHost;
+const swfPort = process.env.HABBO_SWF_PUBLIC_PORT || '8081';
+const swfBase = swfPort === '443'
+  ? `https://${swfHost}`
+  : `http://${swfHost}:${swfPort}`;
+
 const wsHost = process.env.HABBO_WS_PUBLIC_HOST || '127.0.0.1';
 const wsPort = process.env.HABBO_WS_PUBLIC_PORT || '2096';
 const wsProto = process.env.HABBO_WS_PUBLIC_PROTOCOL || (wsPort === '443' ? 'wss' : 'ws');
@@ -56,8 +65,8 @@ const wsPortSuffix = wsPort === defaultWsPort ? '' : `:${wsPort}`;
 
 c['asset.url'] = assetUrl;
 c['socket.url'] = `${wsProto}://${wsHost}${wsPortSuffix}`;
-c['image.library.url'] = 'https://images.habbo.com/c_images/';
-c['hof.furni.url'] = 'https://images.habbo.com/dcr/hof_furni';
+c['image.library.url'] = `${swfBase}/c_images/`;
+c['hof.furni.url'] = `${swfBase}/dcr/hof_furni`;
 
 fs.writeFileSync(p, JSON.stringify(c, null, 4));
 NODE
