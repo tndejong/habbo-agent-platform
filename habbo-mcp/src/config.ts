@@ -1,5 +1,5 @@
 export type Config = {
-  rcon: { host: string; port: number };
+  rcon: { host: string; port: number; poolMax: number; retries: number; timeoutMs: number };
   db: {
     host: string;
     port: number;
@@ -23,6 +23,9 @@ export function getConfig(): Config {
     rcon: {
       host: process.env.RCON_HOST || '127.0.0.1',
       port: parseInt(process.env.RCON_PORT || '3001', 10),
+      poolMax: parseInt(process.env.RCON_POOL_MAX || '4', 10),
+      retries: parseInt(process.env.RCON_RETRIES || '1', 10),
+      timeoutMs: parseInt(process.env.RCON_TIMEOUT_MS || '5000', 10),
     },
     db: {
       host: process.env.DB_HOST || '127.0.0.1',
