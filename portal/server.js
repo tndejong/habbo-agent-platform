@@ -1757,6 +1757,38 @@ app.get('/api/internal/user-by-phone/:number', requireInternalSecret, async (req
   }
 });
 
+function getHabboMcpBaseUrl() {
+  if (process.env.HABBO_MCP_BASE_URL) return process.env.HABBO_MCP_BASE_URL.replace(/\/+$/, '');
+  const mcp = process.env.HABBO_MCP_URL || 'http://habbo-mcp:3003/mcp';
+  return mcp.replace(/\/mcp\/?$/, '').replace(/\/+$/, '');
+}
+
+app.get('/api/mcp/health', authRequired, async (req, res) => {
+  const base = getHabboMcpBaseUrl();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2500);
+  try {
+    const response = await fetch(`${base}/healthz`, { signal: controller.signal });
+    const body = await response.json().catch(() => null);
+    res.status(200).json({
+      reachable: true,
+      http_status: response.status,
+      ok: !!(body && body.ok),
+      checks: body?.checks ?? null,
+      version: body?.version ?? null,
+      uptime_s: body?.uptime_s ?? null,
+    });
+  } catch (err) {
+    res.status(200).json({
+      reachable: false,
+      ok: false,
+      error: err.name === 'AbortError' ? 'timeout' : err.message,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+});
+
 app.get('/api/mcp/tokens', authRequired, async (req, res) => {
   const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
   if (!portalUser) {
