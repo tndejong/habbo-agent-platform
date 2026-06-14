@@ -28,6 +28,14 @@ import { registerInternalRoutes } from './server/routes/internal.js';
 import { registerDevRoutes } from './server/routes/dev.js';
 import { registerMyRoutes } from './server/routes/my.js';
 import { registerAgentsRoutes } from './server/routes/agents.js';
+import {
+  sha256, encryptApiKey, decryptApiKey, maskApiKey,
+  createPasswordResetToken, createMcpToken, maskTokenPreview,
+} from './server/lib/crypto.js';
+import { createMailer } from './server/lib/mail.js';
+import {
+  loadSkillsCatalog, collectRequiredIntegrations, resolvePersonaSkills,
+} from './server/lib/skills.js';
 
 dotenv.config();
 
@@ -132,6 +140,19 @@ const mailTransport = PORTAL_SMTP_HOST
       auth: PORTAL_SMTP_USER ? { user: PORTAL_SMTP_USER, pass: PORTAL_SMTP_PASS } : undefined
     })
   : null;
+
+const {
+  sendPasswordResetEmail,
+  sendWelcomeEmail,
+  sendUpgradeRequestNotification,
+  sendUpgradeDecisionEmail,
+} = createMailer({
+  mailTransport,
+  PORTAL_SMTP_FROM,
+  PORTAL_PUBLIC_URL,
+  PORTAL_RESET_TOKEN_TTL_MINUTES,
+  PORTAL_ADMIN_EMAIL,
+});
 
 function issueAuthCookie(res, payload) {
   const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '14d' });
@@ -280,63 +301,6 @@ async function ensurePortalSchema() {
   await seedAgentPersonas(db);
 }
 
-function sha256(input) {
-  return crypto.createHash('sha256').update(input).digest('hex');
-}
-
-// ─── AES-256-GCM encryption for sensitive user data (API keys) ────────────────
-function getEncryptionKey() {
-  if (PORTAL_ENCRYPTION_KEY) {
-    return crypto.createHash('sha256').update(PORTAL_ENCRYPTION_KEY).digest(); // 32 bytes
-  }
-  // Fallback: derive from JWT secret (not ideal, but functional when no dedicated key is set)
-  return crypto.createHash('sha256').update(JWT_SECRET + ':apikey-enc').digest();
-}
-
-function encryptApiKey(plaintext) {
-  const key = getEncryptionKey();
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  // Format: iv(24 hex) + ':' + tag(32 hex) + ':' + ciphertext(hex)
-  return iv.toString('hex') + ':' + tag.toString('hex') + ':' + encrypted.toString('hex');
-}
-
-function decryptApiKey(ciphertext) {
-  try {
-    const key = getEncryptionKey();
-    const [ivHex, tagHex, dataHex] = ciphertext.split(':');
-    if (!ivHex || !tagHex || !dataHex) throw new Error('invalid format');
-    const iv = Buffer.from(ivHex, 'hex');
-    const tag = Buffer.from(tagHex, 'hex');
-    const data = Buffer.from(dataHex, 'hex');
-    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
-    decipher.setAuthTag(tag);
-    return decipher.update(data, undefined, 'utf8') + decipher.final('utf8');
-  } catch {
-    return null;
-  }
-}
-
-function maskApiKey(key) {
-  if (!key || key.length < 8) return '••••••••';
-  return key.slice(0, 7) + '••••••••••••' + key.slice(-4);
-}
-
-function createPasswordResetToken() {
-  return crypto.randomBytes(32).toString('hex');
-}
-
-function createMcpToken() {
-  return `mcp_${crypto.randomBytes(24).toString('hex')}`;
-}
-
-function maskTokenPreview(token) {
-  if (!token || token.length < 10) return '********';
-  return `${token.slice(0, 8)}...${token.slice(-4)}`;
-}
-
 async function getPortalUserByHabboUserId(habboUserId) {
   const [rows] = await db.execute(
     'SELECT id, email, username, habbo_user_id, habbo_username, ai_tier, is_developer, phone_number, hotel_enabled, default_user_team_id FROM portal_users WHERE habbo_user_id = ? LIMIT 1',
@@ -393,118 +357,6 @@ async function portalUserHasAnthropicApiKey(portalUserId) {
   return !!row;
 }
 
-async function sendPasswordResetEmail({ toEmail, username, resetUrl }) {
-  if (!mailTransport) {
-    console.warn(`Password reset requested for ${toEmail}, but SMTP is not configured. URL: ${resetUrl}`);
-    return;
-  }
-
-  await mailTransport.sendMail({
-    from: PORTAL_SMTP_FROM,
-    to: toEmail,
-    subject: 'Reset your Agent Hotel Portal password',
-    text: [
-      `Hi ${username},`,
-      '',
-      'A password reset was requested for your Agent Hotel Portal account.',
-      `Use this link to reset your password (valid for ${PORTAL_RESET_TOKEN_TTL_MINUTES} minutes):`,
-      resetUrl,
-      '',
-      'If you did not request this, you can ignore this email.'
-    ].join('\n'),
-    html: `
-      <p>Hi ${username},</p>
-      <p>A password reset was requested for your Agent Hotel Portal account.</p>
-      <p>
-        Use this link to reset your password (valid for ${PORTAL_RESET_TOKEN_TTL_MINUTES} minutes):<br />
-        <a href="${resetUrl}">${resetUrl}</a>
-      </p>
-      <p>If you did not request this, you can ignore this email.</p>
-    `
-  });
-}
-
-async function sendWelcomeEmail({ toEmail, username }) {
-  if (!mailTransport) return;
-  const loginUrl = `${PORTAL_PUBLIC_URL}/login`;
-  await mailTransport.sendMail({
-    from: PORTAL_SMTP_FROM,
-    to: toEmail,
-    subject: 'Welcome to Agent Hotel Portal!',
-    text: [
-      `Hi ${username},`,
-      '',
-      'Your Agent Hotel Portal account is ready. You can log in and start exploring:',
-      loginUrl,
-      '',
-      'Your account starts on the Basic tier. You can request a Pro upgrade from inside the portal once you are ready to deploy agent teams.',
-      '',
-      'See you in the hotel!',
-    ].join('\n'),
-    html: `
-      <p>Hi ${username},</p>
-      <p>Your Agent Hotel Portal account is ready. <a href="${loginUrl}">Log in now</a> and start exploring.</p>
-      <p>Your account starts on the <strong>Basic</strong> tier. You can request a Pro upgrade from inside the portal once you are ready to deploy agent teams.</p>
-      <p>See you in the hotel!</p>
-    `,
-  });
-}
-
-async function sendUpgradeRequestNotification({ request, user }) {
-  if (!mailTransport || !PORTAL_ADMIN_EMAIL) return;
-  const reviewUrl = `${PORTAL_PUBLIC_URL}/app/home`;
-  await mailTransport.sendMail({
-    from: PORTAL_SMTP_FROM,
-    to: PORTAL_ADMIN_EMAIL,
-    subject: `[Agent Hotel] Tier upgrade request from ${user.username}`,
-    text: [
-      `New tier upgrade request`,
-      '',
-      `User:       ${user.username} (${user.email})`,
-      `Requested:  ${request.requested_tier}`,
-      `Motivation: ${request.motivation || '(none)'}`,
-      '',
-      `Review it in the portal: ${reviewUrl}`,
-    ].join('\n'),
-    html: `
-      <p><strong>New tier upgrade request</strong></p>
-      <table cellpadding="4">
-        <tr><td><strong>User</strong></td><td>${user.username} (${user.email})</td></tr>
-        <tr><td><strong>Requested tier</strong></td><td>${request.requested_tier}</td></tr>
-        <tr><td><strong>Motivation</strong></td><td>${request.motivation || '<em>none</em>'}</td></tr>
-      </table>
-      <p><a href="${reviewUrl}">Review in the portal</a></p>
-    `,
-  });
-}
-
-async function sendUpgradeDecisionEmail({ toEmail, username, status, requestedTier, adminNote }) {
-  if (!mailTransport) return;
-  const approved = status === 'approved';
-  await mailTransport.sendMail({
-    from: PORTAL_SMTP_FROM,
-    to: toEmail,
-    subject: `Your ${requestedTier} upgrade request was ${approved ? 'approved' : 'denied'}`,
-    text: [
-      `Hi ${username},`,
-      '',
-      approved
-        ? `Great news — your request to upgrade to ${requestedTier} has been approved! Your account has been updated.`
-        : `Your request to upgrade to ${requestedTier} has been denied.`,
-      adminNote ? `\nNote from the admin: ${adminNote}` : '',
-      '',
-      `Log in to the portal: ${PORTAL_PUBLIC_URL}/login`,
-    ].join('\n'),
-    html: `
-      <p>Hi ${username},</p>
-      ${approved
-        ? `<p>Great news — your request to upgrade to <strong>${requestedTier}</strong> has been <strong>approved</strong>! Your account has been updated.</p>`
-        : `<p>Your request to upgrade to <strong>${requestedTier}</strong> has been <strong>denied</strong>.</p>`}
-      ${adminNote ? `<p><em>Note from the admin: ${adminNote}</em></p>` : ''}
-      <p><a href="${PORTAL_PUBLIC_URL}/login">Log in to the portal</a></p>
-    `,
-  });
-}
 
 async function ensureBootstrapPortalUser() {
   if (!PORTAL_BOOTSTRAP_ENABLED) return;
@@ -1136,117 +988,6 @@ registerMarketplaceRoutes(app, {
   deleteOrphanedForkedPersonas, SOLO_MARKETPLACE_ORCHESTRATOR,
 });
 
-// ── Skills catalog (agents/skills/*/SKILL.md) ─────────────────────────────────
-
-const SKILLS_DIR = path.join(__dirname, 'agents/skills');
-
-/** Parse YAML frontmatter + markdown body from a SKILL.md string */
-function parseSkillFile(slug, raw) {
-  const fmMatch = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
-  if (!fmMatch) return null;
-  const meta = {};
-  for (const line of fmMatch[1].split('\n')) {
-    const colon = line.indexOf(':');
-    if (colon === -1) continue;
-    const key = line.slice(0, colon).trim();
-    const val = line.slice(colon + 1).trim();
-    if (!key) continue;
-    // Simple array parsing: [a, b, c]
-    if (val.startsWith('[') && val.endsWith(']')) {
-      meta[key] = val.slice(1, -1).split(',').map(s => s.trim()).filter(Boolean);
-    } else if (val === '>') {
-      meta[key] = ''; // multiline — will be overwritten by next lines if needed
-    } else {
-      meta[key] = val.replace(/^['"]|['"]$/g, '');
-    }
-  }
-  // Collect multiline description (lines indented with 2+ spaces after description: >)
-  const descLines = [];
-  let inDesc = false;
-  for (const line of fmMatch[1].split('\n')) {
-    if (/^description:\s*>/.test(line)) { inDesc = true; continue; }
-    if (inDesc && /^\s{2,}/.test(line)) { descLines.push(line.trim()); continue; }
-    if (inDesc && line.trim() && !/^\s/.test(line)) inDesc = false;
-  }
-  if (descLines.length) meta.description = descLines.join(' ');
-
-  return {
-    slug,
-    name: meta.name || slug,
-    title: meta.title || slug,
-    description: meta.description || '',
-    category: meta.category || 'general',
-    tags: Array.isArray(meta.tags) ? meta.tags : [],
-    mcp_tools: Array.isArray(meta.mcp_tools) ? meta.mcp_tools : [],
-    requires_integration: meta.requires_integration || null,
-    difficulty: meta.difficulty || 'beginner',
-    version: meta.version || '1.0',
-    body: fmMatch[2].trim(),
-  };
-}
-
-/** Load all skills from the skills directory — reads from disk each call so updates are live */
-function loadSkillsCatalog() {
-  if (!existsSync(SKILLS_DIR)) return [];
-  return readdirSync(SKILLS_DIR, { withFileTypes: true })
-    .filter(d => d.isDirectory())
-    .map(d => {
-      const skillFile = path.join(SKILLS_DIR, d.name, 'SKILL.md');
-      if (!existsSync(skillFile)) return null;
-      try {
-        return parseSkillFile(d.name, readFileSync(skillFile, 'utf8'));
-      } catch { return null; }
-    })
-    .filter(Boolean)
-    .sort((a, b) => a.title.localeCompare(b.title));
-}
-
-/** Convert an array of skill slugs to a bullet-point capabilities string for agent-trigger */
-function skillSlugsToCapabilities(slugs) {
-  if (!Array.isArray(slugs) || slugs.length === 0) return '';
-  const catalog = loadSkillsCatalog();
-  return slugs
-    .map(slug => {
-      const skill = catalog.find(s => s.slug === slug);
-      return skill ? `- ${skill.title}` : `- ${slug}`;
-    })
-    .join('\n');
-}
-
-/** Collect unique required integrations from a list of already-resolved members */
-function collectRequiredIntegrations(resolvedMembers) {
-  return [...new Set(resolvedMembers.flatMap(m => m.required_integrations || []))];
-}
-
-/** Resolve skill slugs in capabilities field, injecting skill bodies into prompt */
-function resolvePersonaSkills(member) {
-  let capabilities = member.capabilities || '';
-  let extraPrompt = '';
-  let requiredIntegrations = [];
-  try {
-    const slugs = JSON.parse(capabilities);
-    if (Array.isArray(slugs) && slugs.length > 0) {
-      const catalog = loadSkillsCatalog();
-      const resolved = slugs.map(slug => catalog.find(s => s.slug === slug)).filter(Boolean);
-      // Capabilities line for roster
-      capabilities = resolved.map(s => `- ${s.title}`).join('\n');
-      // Collect required integrations from skills
-      requiredIntegrations = resolved.map(s => s.requires_integration).filter(Boolean);
-      // Inject skill bodies into the persona's instructions
-      if (resolved.length > 0) {
-        extraPrompt = '\n\n## Skills\n\n' + resolved.map(s =>
-          `### ${s.title}\n\n${s.body}`
-        ).join('\n\n---\n\n');
-      }
-    }
-  } catch { /* legacy free-text capabilities — use as-is */ }
-  return {
-    ...member,
-    capabilities,
-    prompt: (member.prompt || '') + extraPrompt,
-    required_integrations: requiredIntegrations,
-  };
-}
 
 registerSkillsRoutes(app, { authRequired, loadSkillsCatalog });
 
