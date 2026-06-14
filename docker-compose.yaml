@@ -115,6 +115,7 @@ services:
       - ./portal/dist:/app/dist
       - ./portal/server.js:/app/server.js
       - ./portal/server:/app/server
+      - ./portal/shared:/app/shared
       - ./agents/skills:/app/agents/skills:ro
     ports:
       - ${HABBO_PORTAL_PORT:-3090}:3000

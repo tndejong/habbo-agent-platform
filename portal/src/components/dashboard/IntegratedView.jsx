@@ -30,6 +30,7 @@ import { LoadingState, ErrorBanner, EmptyState } from './states'
 import { DeployGoalModal } from './DeployGoalModal'
 import { SkillBrowser, SkillDetailModal } from './SkillBrowser'
 import { RunReportsSection } from './RunReports'
+import { parseTeamTasksJson, detectRequiredIntegrations } from '../../../shared/teams.js'
 
 export function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0, activeSection = 'teams', onSubpageChange }) {
   const [personas, setPersonas] = useState([])
@@ -424,42 +425,6 @@ export function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVers
 }
 
 // ── Integrated Team Card ───────────────────────────────────────────────────
-
-// Must match the server-side INTEGRATION_KEYWORDS map in portal/server.js
-const INTEGRATION_KEYWORDS = {
-  notion:    ['notion'],
-  linear:    ['linear.app', 'linear mcp'],
-  atlassian: ['atlassian', 'jira', 'confluence'],
-  airtable:  ['airtable'],
-  supabase:  ['supabase'],
-  resend:    ['resend'],
-  github:    ['github'],
-  slack:     ['slack mcp', 'slack integration'],
-}
-
-function parseTeamTasksJson(team) {
-  try {
-    let v = JSON.parse(team?.tasks_json || '[]')
-    // Unwrap any number of extra stringify layers (e.g. from saveTeamRoomId corruption)
-    let guard = 0
-    while (typeof v === 'string' && guard++ < 5) { try { v = JSON.parse(v) } catch { break } }
-    return Array.isArray(v) ? v : []
-  } catch { return [] }
-}
-
-function detectRequiredIntegrations(team, members) {
-  const texts = []
-  try {
-    const tasks = parseTeamTasksJson(team)
-    texts.push(...tasks.map(t => `${t.title || ''} ${t.description || ''}`))
-  } catch { /* skip */ }
-  if (members) texts.push(...members.map(m => `${m.capabilities || ''} ${m.prompt || ''}`))
-  if (team.orchestrator_prompt) texts.push(team.orchestrator_prompt)
-  const combined = texts.join(' ').toLowerCase()
-  return Object.entries(INTEGRATION_KEYWORDS)
-    .filter(([, kws]) => kws.some(kw => combined.includes(kw)))
-    .map(([name]) => name)
-}
 
 function IntegratedTeamCard({ team, canManage = false, bots = [], liveBots = [], rooms = [], deploying, hasApiKey = true, hasMcpToken = true, integrations = [], onDeploy, onRoomChange, onEdit, onDelete }) {
   const { habboConnected } = useHotel()

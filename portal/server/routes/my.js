@@ -503,8 +503,8 @@ export function registerMyRoutes(app, ctx) {
         }
       }
 
-      const tasksJsonForCheck = taskMode === 'session_goal' ? '' : (team.tasks_json || '');
-      const required = detectRequiredIntegrations(tasksJsonForCheck, members, team.orchestrator_prompt);
+      const teamForCheck = taskMode === 'session_goal' ? { ...team, tasks_json: '' } : team;
+      const required = detectRequiredIntegrations(teamForCheck, members);
       if (required.length > 0) {
         const [userIntegrations] = await db.execute(
           `SELECT name FROM portal_user_integrations

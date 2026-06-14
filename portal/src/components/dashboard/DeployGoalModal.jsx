@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { X, Loader2, AlertTriangle } from 'lucide-react'
+import { parseTeamTasksJson } from '../../../shared/teams.js'
 
 const CURATED_GOALS = [
   'Welcome visitors and tell them about this room',
@@ -10,17 +11,8 @@ const CURATED_GOALS = [
   'Host a Q&A session and answer visitor questions',
 ]
 
-export const GOAL_MIN_LENGTH = 10
-export const GOAL_MAX_LENGTH = 4000
-
-export function parseTeamTasksJson(team) {
-  try {
-    let v = JSON.parse(team?.tasks_json || '[]')
-    let guard = 0
-    while (typeof v === 'string' && guard++ < 5) { try { v = JSON.parse(v) } catch { break } }
-    return Array.isArray(v) ? v : []
-  } catch { return [] }
-}
+const GOAL_MIN_LENGTH = 10
+const GOAL_MAX_LENGTH = 4000
 
 function getSessionGoalPlaceholder(team) {
   if (team?.description?.trim()) return team.description.trim()

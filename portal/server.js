@@ -36,6 +36,7 @@ import { createMailer } from './server/lib/mail.js';
 import {
   loadSkillsCatalog, collectRequiredIntegrations, resolvePersonaSkills,
 } from './server/lib/skills.js';
+import { detectRequiredIntegrations } from './shared/teams.js';
 
 dotenv.config();
 
@@ -936,36 +937,6 @@ registerAgentsRoutes(app, {
 // ── User-scoped endpoints (/api/my/*) ─────────────────────────────────────────
 
 // My Personas CRUD
-
-// Trigger my team
-// Maps a known integration service name to the keywords we look for in task/capability text.
-// Keywords are intentionally specific to avoid false positives on common English words.
-const INTEGRATION_KEYWORDS = {
-  notion:     ['notion'],
-  linear:     ['linear.app', 'linear mcp'],
-  atlassian:  ['atlassian', 'jira', 'confluence'],
-  airtable:   ['airtable'],
-  supabase:   ['supabase'],
-  resend:     ['resend'],
-  github:     ['github'],
-  slack:      ['slack mcp', 'slack integration'],
-};
-
-// Scan free-text content (tasks + capabilities) for service names that require an integration.
-function detectRequiredIntegrations(tasksJson, members, orchestratorPrompt) {
-  const texts = [];
-  try {
-    const tasks = JSON.parse(tasksJson || '[]');
-    texts.push(...tasks.map(t => `${t.title || ''} ${t.description || ''}`));
-  } catch { /* malformed json — skip */ }
-  texts.push(...(members || []).map(m => `${m.capabilities || ''} ${m.prompt || ''}`));
-  if (orchestratorPrompt) texts.push(orchestratorPrompt);
-  const combined = texts.join(' ').toLowerCase();
-
-  return Object.entries(INTEGRATION_KEYWORDS)
-    .filter(([, keywords]) => keywords.some(kw => combined.includes(kw)))
-    .map(([name]) => name);
-}
 
 async function forwardToAgentTrigger(payload) {
   const r = await fetch(`${AGENT_TRIGGER_URL}/trigger`, {
