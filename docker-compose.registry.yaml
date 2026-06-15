@@ -131,6 +131,10 @@ services:
       - PORTAL_INTERNAL_SECRET=${HOTEL_PORTAL_INTERNAL_SECRET:-change-this-secret}
       - MCP_API_KEY=${HOTEL_MCP_API_KEY:-}
       - HABBO_MCP_URL=${HOTEL_MCP_URL:-http://habbo-mcp:3003/mcp}
+    volumes:
+      # server.js imports ./shared/teams.js at runtime; mount from git checkout so
+      # registry deploys work even when :latest was not re-pulled on the host.
+      - ./portal/shared:/app/shared:ro
     ports:
       - ${HABBO_PORTAL_PORT:-3090}:3000
     depends_on:
