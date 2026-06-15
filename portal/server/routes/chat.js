@@ -10,6 +10,7 @@ export function registerChatRoutes(app, ctx) {
     forwardToAgentTrigger,
     AGENT_TRIGGER_URL,
     PORTAL_INTERNAL_SECRET,
+    rconCommand,
   } = ctx;
 
   // POST /api/chat/audio — transcribe audio via OpenAI Whisper
@@ -50,7 +51,16 @@ export function registerChatRoutes(app, ctx) {
   });
 
   // POST /api/chat/tts — synthesize text via ElevenLabs
-  app.post('/api/chat/tts', authRequired, express.json(), async (req, res) => {
+  const ttsCors = (req, res, next) => {
+    const origin = req.headers.origin || 'http://localhost:8080';
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') { res.status(204).end(); return; }
+    next();
+  };
+  app.post('/api/chat/tts', ttsCors, authRequired, express.json(), async (req, res) => {
     try {
       const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
       if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -73,7 +83,7 @@ export function registerChatRoutes(app, ctx) {
       }
       resolvedVoice = resolvedVoice || 'EXAVITQu4vr4xnSDxMaL';
 
-      const text = (req.body.text || '').slice(0, 500);
+      const text = (req.body.text || '').slice(0, 250);
       if (!text) return res.status(400).json({ error: 'text required' });
 
       const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${resolvedVoice}`, {
@@ -83,7 +93,8 @@ export function registerChatRoutes(app, ctx) {
       });
       if (!r.ok) {
         const err = await r.json().catch(() => ({}));
-        return res.status(502).json({ error: 'elevenlabs_error', message: err.detail?.message || 'ElevenLabs API error' });
+        const msg = err.detail?.message || err.detail || 'ElevenLabs API error';
+        return res.status(502).json({ error: 'elevenlabs_error', message: msg.includes('quota') ? 'Your ElevenLabs account has run out of credits. Top up at elevenlabs.io or use a different API key.' : msg });
       }
 
       res.setHeader('Content-Type', 'audio/mpeg');
@@ -97,6 +108,70 @@ export function registerChatRoutes(app, ctx) {
       await pump();
     } catch (err) {
       if (!res.headersSent) res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/chat/tts/hotel — unauthenticated TTS for Nitro client (uses key from body)
+  const ttsHotelCors = (req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') { res.status(204).end(); return; }
+    next();
+  };
+  app.all('/api/chat/tts/hotel', ttsHotelCors, express.json(), async (req, res) => {
+    if (req.method === 'OPTIONS') return;
+    const t0 = Date.now();
+    const text = (req.body.text || '').slice(0, 250);
+    const elKey = (req.body.api_key || '').trim();
+    const voiceId = req.body.voice_id || 'EXAVITQu4vr4xnSDxMaL';
+    if (!text) return res.status(400).json({ error: 'text required' });
+    if (!elKey) return res.status(400).json({ error: 'api_key required' });
+    try {
+      const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+        method: 'POST',
+        headers: { 'xi-api-key': elKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, model_id: 'eleven_turbo_v2_5' }),
+      });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        console.log(`[TIMING] tts/hotel ELEVENLABS_FAIL ms=${Date.now() - t0} textLen=${text.length} status=${r.status}`);
+        return res.status(502).json({ error: 'elevenlabs_error', message: err.detail?.message || 'ElevenLabs error' });
+      }
+      res.setHeader('Content-Type', 'audio/mpeg');
+      const reader = r.body.getReader();
+      const pump = async () => {
+        const { done, value } = await reader.read();
+        if (done) { console.log(`[TIMING] tts/hotel OK ms=${Date.now() - t0} textLen=${text.length}`); res.end(); return; }
+        res.write(Buffer.from(value));
+        return pump();
+      };
+      await pump();
+    } catch (err) {
+      if (!res.headersSent) res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/chat/ai_next/hotel — unauthenticated signal for Nitro client to advance bot duet turn
+  const aiNextHotelCors = (req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') { res.status(204).end(); return; }
+    next();
+  };
+  app.all('/api/chat/ai_next/hotel', aiNextHotelCors, express.json(), async (req, res) => {
+    if (req.method === 'OPTIONS') return;
+    const { user_id } = req.body;
+    if (!user_id) return res.status(400).json({ error: 'user_id required' });
+    const t0 = Date.now();
+    try {
+      await rconCommand('executecommand', { user_id, command: ':ai_next' });
+      console.log(`[TIMING] ai_next/hotel user_id=${user_id} rconMs=${Date.now() - t0}`);
+      res.json({ ok: true });
+    } catch (err) {
+      console.log(`[TIMING] ai_next/hotel user_id=${user_id} rconMs=${Date.now() - t0} error=${err.message}`);
+      res.status(502).json({ error: err.message });
     }
   });
 
@@ -175,7 +250,7 @@ Respond with ONLY valid JSON, no markdown.`;
             });
             parsed = { intent: 'start_team', team_name: team?.name || null, goal: rest, reply: null };
           } else {
-            parsed = { intent: 'unknown', team_name: null, goal: null, reply: "I didn't catch that. Try saying something like 'start the marketing team' or 'what teams are active'." };
+            parsed = { intent: 'unknown', team_name: null, goal: null, reply: "You can ask me: 'what teams are active', 'show my teams', 'stop all teams', or 'start the (team name) to do (task)'." };
           }
         }
       }
@@ -199,7 +274,7 @@ Respond with ONLY valid JSON, no markdown.`;
           headers: { 'Content-Type': 'application/json', 'X-Internal-Secret': PORTAL_INTERNAL_SECRET },
           body: JSON.stringify({}),
         });
-        return res.json({ ok: true, response: reply || 'Stopping all active teams now.' });
+        return res.json({ ok: true, response: reply || 'Stopping your active teams now.' });
       }
 
       if (intent === 'start_team') {

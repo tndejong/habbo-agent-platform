@@ -56,8 +56,11 @@ export async function chat(botId: number, username: string, message: string): Pr
   }
 
   const fullPersona = `${HABBO_STYLE_INSTRUCTION}\n\n${session.persona}`;
+  const t0 = Date.now();
   const raw = await session.provider.chat(session.history, fullPersona);
+  const elapsed = Date.now() - t0;
   const reply = sanitizeForHabbo(raw);
+  console.log(`[TIMING] sessions.chat bot=${botId} provider_ms=${elapsed} rawLen=${raw.length} replyLen=${reply.length}`);
 
   session.history.push({ role: 'assistant', content: reply });
 

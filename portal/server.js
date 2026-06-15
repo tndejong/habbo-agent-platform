@@ -1024,6 +1024,7 @@ registerMyRoutes(app, {
 registerChatRoutes(app, {
   db, authRequired, getPortalUserByHabboUserId, decryptApiKey,
   forwardToAgentTrigger, AGENT_TRIGGER_URL, PORTAL_INTERNAL_SECRET,
+  rconCommand,
 });
 
 const indexPath = path.join(__dirname, 'dist/index.html');

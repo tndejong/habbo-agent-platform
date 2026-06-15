@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Mic, MicOff, Square, Volume2, VolumeX, Settings, Bot, User, AlertTriangle, Loader2, Radio, ChevronRight, Terminal } from 'lucide-react'
+import { Mic, MicOff, Square, Settings, Bot, User, AlertTriangle, Loader2, Radio, ChevronRight, Terminal, Send } from 'lucide-react'
 import { api } from '../utils/api'
 import { useNavigate } from 'react-router-dom'
 
@@ -67,6 +67,7 @@ export default function VoiceChat({ me }) {
   const audioQueue = useRef([])
   const playingAudio = useRef(false)
   const [ttsPlaying, setTtsPlaying] = useState(false)
+  const [ttsError, setTtsError] = useState(null)
 
   const drainQueue = useCallback(async () => {
     if (!audioQueue.current.length) { playingAudio.current = false; setTtsPlaying(false); return }
@@ -80,14 +81,25 @@ export default function VoiceChat({ me }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, voice_id: voiceId || undefined }),
       })
-      if (!res.ok) { drainQueue(); return }
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}))
+        const errMsg = errBody.message || errBody.error || `TTS failed (HTTP ${res.status})`
+        setTtsError(errMsg)
+        setTimeout(() => setTtsError(null), 5000)
+        drainQueue()
+        return
+      }
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
       const audio = new Audio(url)
       audio.onended = () => { URL.revokeObjectURL(url); drainQueue() }
-      audio.onerror = () => { URL.revokeObjectURL(url); drainQueue() }
-      audio.play().catch(() => drainQueue())
-    } catch { drainQueue() }
+      audio.onerror = () => { URL.revokeObjectURL(url); setTtsError('Audio playback failed'); setTimeout(() => setTtsError(null), 5000); drainQueue() }
+      audio.play().catch(() => { setTtsError('Browser blocked audio playback'); setTimeout(() => setTtsError(null), 5000); drainQueue() })
+    } catch (err) {
+      setTtsError(err.message || 'TTS request failed')
+      setTimeout(() => setTtsError(null), 5000)
+      drainQueue()
+    }
   }, [])
 
   const queueTTS = useCallback((text, voiceId = null) => {
@@ -167,6 +179,10 @@ export default function VoiceChat({ me }) {
     pendingLogs.current = []
   }, [activeRun?.roomId])
 
+  // ── text input state ──────────────────────────────────────────────────────
+  const [textInput, setTextInput] = useState('')
+  const textInputRef = useRef(null)
+
   // ── recording state ───────────────────────────────────────────────────────
   const [recording, setRecording] = useState(false)
   const [processing, setProcessing] = useState(false)
@@ -177,6 +193,8 @@ export default function VoiceChat({ me }) {
   const checkSilenceRef = useRef(null)
   const chunksRef = useRef([])
   const [micLevel, setMicLevel] = useState(0)
+  const waveformDataRef = useRef(new Uint8Array(128))
+  const [waveformBars, setWaveformBars] = useState([])
 
   const stopAndSend = useCallback(async () => {
     if (checkSilenceRef.current) { clearInterval(checkSilenceRef.current); checkSilenceRef.current = null }
@@ -188,6 +206,15 @@ export default function VoiceChat({ me }) {
 
   const sendTranscript = useCallback(async (text) => {
     if (!text?.trim()) { setProcessing(false); return }
+
+    // Local commands handled without the intent API
+    if (/stop (recording|listening|mic)/i.test(text.trim())) {
+      manualStopRef.current = true
+      setProcessing(false)
+      setChatHistory(h => [...h, { role: 'user', text: text.trim() }])
+      return
+    }
+
     setTranscript(text)
     setChatHistory(h => [...h, { role: 'user', text }])
     try {
@@ -204,6 +231,7 @@ export default function VoiceChat({ me }) {
 
   const startRecording = useCallback(async () => {
     if (recording || processing) return
+    manualStopRef.current = false // user wants to start, clear any previous stop
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       streamRef.current = stream
@@ -228,11 +256,15 @@ export default function VoiceChat({ me }) {
 
       checkSilenceRef.current = setInterval(() => {
         analyser.getByteTimeDomainData(data)
+        waveformDataRef.current = new Uint8Array(data)
         const rms = Math.sqrt(data.reduce((s, v) => s + (v - 128) ** 2, 0) / data.length)
         setMicLevel(Math.min(1, rms / 20))
-        if (rms < 4) {
+        // require 1.5s minimum recording before silence-triggered stop
+        const elapsed = Date.now() - recordingStartedAt
+        if (elapsed < 1500) return
+        if (rms < 3) {
           if (!silenceTimerRef.current) {
-            silenceTimerRef.current = setTimeout(() => stopAndSend(), 1500)
+            silenceTimerRef.current = setTimeout(() => stopAndSend(), 2500)
           }
         } else {
           if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null }
@@ -272,14 +304,81 @@ export default function VoiceChat({ me }) {
       recorder.start()
       setRecording(true)
       setTranscript('')
+      const recordingStartedAt = Date.now()
     } catch (err) {
       setChatHistory(h => [...h, { role: 'error', text: `Microphone error: ${err.message}` }])
     }
   }, [recording, processing, stopAndSend, sendTranscript])
 
   const stopRecording = useCallback(() => {
+    manualStopRef.current = true
     stopAndSend()
   }, [stopAndSend])
+
+  // ── text message send ──────────────────────────────────────────────────────
+  const sendTextMessage = useCallback(async () => {
+    const msg = textInput.trim()
+    if (!msg) return
+    setTextInput('')
+    textInputRef.current?.focus()
+
+    const lower = msg.toLowerCase()
+    if (/stop (recording|listening|mic)/i.test(lower)) {
+      manualStopRef.current = true
+      if (recording) stopRecording()
+      return
+    }
+
+    setChatHistory(h => [...h, { role: 'user', text: msg }])
+    setProcessing(true)
+    try {
+      const d = await api('/api/chat/intent', { method: 'POST', body: { transcript: msg } })
+      setChatHistory(h => [...h, { role: 'assistant', text: d.response }])
+      queueTTS(d.response)
+    } catch (err) {
+      const errMsg = err.message || 'Something went wrong.'
+      setChatHistory(h => [...h, { role: 'error', text: errMsg }])
+    } finally {
+      setProcessing(false)
+    }
+  }, [textInput, recording, stopRecording, queueTTS])
+
+  // ── waveform visualizer RAF loop ─────────────────────────────────────────
+  useEffect(() => {
+    if (!recording) { setWaveformBars([]); return }
+    let rafId
+    const loop = () => {
+      const raw = waveformDataRef.current
+      if (raw && raw.length) {
+        const bars = []
+        const step = Math.floor(raw.length / 32)
+        for (let i = 0; i < 32; i++) {
+          let sum = 0
+          for (let j = 0; j < step; j++) {
+            sum += Math.abs((raw[i * step + j] || 128) - 128)
+          }
+          bars.push(Math.min(1, sum / step / 128))
+        }
+        setWaveformBars(bars)
+      }
+      rafId = requestAnimationFrame(loop)
+    }
+    rafId = requestAnimationFrame(loop)
+    return () => cancelAnimationFrame(rafId)
+  }, [recording])
+
+  // ── auto-start / re-start recording when idle ────────────────────────────
+  // On mount, and after processing + TTS both finish, the mic re-activates —
+  // unless the user explicitly tapped stop (manualStopRef).
+  const manualStopRef = useRef(false)
+
+  useEffect(() => {
+    if (recording || processing || ttsPlaying) return
+    if (!ready) return
+    if (manualStopRef.current) return
+    const id = setTimeout(() => startRecording(), 200)
+    return () => clearTimeout(id)
+  }, [recording, processing, ttsPlaying, ready, startRecording])
 
   // ── setup screen when keys are missing ───────────────────────────────────
   if (keysLoading) {
@@ -335,11 +434,19 @@ export default function VoiceChat({ me }) {
         <div className="flex items-center gap-2">
           <Radio className="w-4 h-4 text-primary" />
           <span className="font-semibold text-sm">Hotel Voice Chat</span>
+          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-primary/10 text-primary">v3</span>
         </div>
         <div className="flex items-center gap-3 text-xs text-muted-foreground">
           {ttsPlaying && (
-            <span className="flex items-center gap-1 text-primary">
-              <Volume2 className="w-3 h-3" /> Speaking…
+            <span className="text-primary text-xs flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+              Speaking…
+            </span>
+          )}
+          {ttsError && (
+            <span className="flex items-center gap-1 text-red-500 max-w-[200px] truncate" title={ttsError}>
+              <AlertTriangle className="w-3 h-3 flex-shrink-0" />
+              <span className="truncate">{ttsError}</span>
             </span>
           )}
           {activeRun && (
@@ -366,6 +473,31 @@ export default function VoiceChat({ me }) {
         <div ref={chatEndRef} />
       </div>
 
+      {/* text input */}
+      <div className="px-4 py-3 border-t border-border">
+        <form
+          onSubmit={e => { e.preventDefault(); sendTextMessage() }}
+          className="flex items-center gap-2"
+        >
+          <input
+            ref={textInputRef}
+            type="text"
+            value={textInput}
+            onChange={e => setTextInput(e.target.value)}
+            placeholder="Type a message…"
+            disabled={processing}
+            className="flex-1 h-10 rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-50"
+          />
+          <button
+            type="submit"
+            disabled={processing || !textInput.trim()}
+            className="h-10 w-10 rounded-lg bg-primary text-primary-foreground flex items-center justify-center hover:bg-primary/90 disabled:opacity-50 transition-colors"
+          >
+            {processing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+          </button>
+        </form>
+      </div>
+
       {/* mic button area */}
       <div className="px-4 py-6 border-t border-border">
         {processing && (
@@ -375,22 +507,16 @@ export default function VoiceChat({ me }) {
           </div>
         )}
         {recording && (
-          <div className="flex items-center justify-center gap-2 text-xs text-red-500 mb-4">
-            <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-            Recording… speak now, pause to send
+          <div className="mb-4">
+            <WaveVisualizer bars={waveformBars} />
+            <div className="flex items-center justify-center gap-2 text-xs text-red-500 mt-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+              Recording… pause to send
+            </div>
           </div>
         )}
 
         <div className="flex items-center justify-center gap-6">
-          {/* mute/stop TTS */}
-          <button
-            onClick={() => { audioQueue.current = []; playingAudio.current = false; setTtsPlaying(false) }}
-            className="w-10 h-10 rounded-full bg-muted flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors"
-            title="Stop playback"
-          >
-            <VolumeX className="w-4 h-4" />
-          </button>
-
           {/* main mic button */}
           <MicButton
             recording={recording}
@@ -478,6 +604,27 @@ function MicButton({ recording, processing, level, onStart, onStop }) {
         )}
       </span>
     </button>
+  )
+}
+
+function WaveVisualizer({ bars }) {
+  return (
+    <div className="flex items-end justify-center gap-[3px] h-12 px-4">
+      {bars.length > 0 ? bars.map((pct, i) => (
+        <div key={i} className="flex flex-col justify-end w-[3px] h-full">
+          <div
+            className="w-full rounded-full bg-primary transition-all duration-75"
+            style={{ height: `${Math.max(3, pct * 44)}px` }}
+          />
+        </div>
+      )) : (
+        <div className="flex items-end gap-[3px] h-full">
+          {Array.from({ length: 32 }).map((_, i) => (
+            <div key={i} className="w-[3px] rounded-full bg-muted-foreground/20" style={{ height: '3px' }} />
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 

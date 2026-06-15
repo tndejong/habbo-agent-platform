@@ -11,7 +11,7 @@
 // readability more than file size.
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
-  AlertCircle, AlertTriangle, Bot, Check, ChevronLeft, Edit, Edit2, ExternalLink,
+  AlertCircle, AlertTriangle, Bot, Building2, Check, ChevronLeft, Edit, Edit2, ExternalLink,
   FileText, Hotel, LinkIcon, Loader2, Plus, Settings, Sparkles, Trash2,
   Users, Volume2, Workflow, X, Zap,
 } from 'lucide-react'

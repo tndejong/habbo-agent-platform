@@ -9,23 +9,27 @@ export class AnthropicProvider implements AIProvider {
   }
 
   async chat(history: Message[], systemPrompt: string): Promise<string> {
+    const t0 = Date.now();
     const response = await this.client.messages.create({
-      model: 'claude-3-5-haiku-latest',
-      max_tokens: 256,
+      model: 'claude-3-haiku-20240307',
+      max_tokens: 100,
       system: systemPrompt,
       messages: history.map((m) => ({ role: m.role, content: m.content })),
     });
+    const elapsed = Date.now() - t0;
 
     const block = response.content[0];
     if (block.type !== 'text') {
       throw new Error('Unexpected response type from Anthropic');
     }
-    return block.text.trim();
+    const text = block.text.trim();
+    console.log(`[TIMING] anthropic.chat api_ms=${elapsed} model=${response.model} inputTokens=${response.usage.input_tokens} outputTokens=${response.usage.output_tokens} textLen=${text.length}`);
+    return text;
   }
 
   async verify(): Promise<void> {
     await this.client.messages.create({
-      model: 'claude-3-5-haiku-latest',
+      model: 'claude-3-haiku-20240307',
       max_tokens: 1,
       messages: [{ role: 'user', content: 'ping' }],
     });

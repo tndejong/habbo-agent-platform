@@ -239,4 +239,4 @@ networks:
       config:
         - subnet: ${HABBO_DOCKER_SUBNET:-172.28.0.0/16}
   proxy_net:
-    external: true
+    name: proxy_net
