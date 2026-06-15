@@ -12,6 +12,7 @@ RUN npm install --omit=dev
 COPY --from=build /app/dist ./dist
 COPY portal/server.js ./server.js
 COPY portal/server ./server
+COPY portal/shared ./shared
 COPY agents/skills ./agents/skills
 EXPOSE 3000
 CMD ["npm", "start"]
