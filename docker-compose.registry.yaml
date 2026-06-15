@@ -97,6 +97,7 @@ services:
   agent-portal:
     container_name: agent-portal
     image: ghcr.io/${HABBO_OWNER_OR_ORG}/agent-portal:latest
+    pull_policy: always
     restart: unless-stopped
     environment:
       - PORT=3000
@@ -131,10 +132,8 @@ services:
       - PORTAL_INTERNAL_SECRET=${HOTEL_PORTAL_INTERNAL_SECRET:-change-this-secret}
       - MCP_API_KEY=${HOTEL_MCP_API_KEY:-}
       - HABBO_MCP_URL=${HOTEL_MCP_URL:-http://habbo-mcp:3003/mcp}
-    volumes:
-      # server.js imports ./shared/teams.js at runtime; mount from git checkout so
-      # registry deploys work even when :latest was not re-pulled on the host.
-      - ./portal/shared:/app/shared:ro
+    # Do not bind-mount ./portal/shared here: Coolify's compose cwd often lacks that
+    # path, which creates an empty host dir and hides /app/shared baked into the image.
     ports:
       - ${HABBO_PORTAL_PORT:-3090}:3000
     depends_on:
