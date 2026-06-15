@@ -158,15 +158,12 @@ export function AuthPage({ onLogin, UiBuildFooter }) {
             <div className="space-y-4">
               <h2 className="text-base font-semibold text-foreground">Reset Password</h2>
               <form onSubmit={handleReset} onKeyDown={submitOnEnter} className="space-y-3">
-                <AuthInput
-                  type="email" placeholder="Email address" required
-                  value={resetForm.email}
-                  onChange={v => setResetForm(s => ({ ...s, email: v }))}
-                />
-                <AuthInput
-                  type="text" placeholder="Reset token" required
-                  value={resetForm.token}
-                  onChange={v => setResetForm(s => ({ ...s, token: v }))}
+                <input type="hidden" name="email" value={resetForm.email} />
+                <input type="hidden" name="token" value={resetForm.token} />
+                <input
+                  type="email" placeholder="Email address" required disabled
+                  value={resetForm.email} readOnly
+                  className="flex h-10 w-full rounded-lg border border-input bg-background/30 px-3 py-2 text-sm text-muted-foreground cursor-not-allowed"
                 />
                 <AuthInput
                   type="password" placeholder="New password (min 8 chars)" required minLength={8}
