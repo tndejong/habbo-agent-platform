@@ -3,7 +3,7 @@ import { useNavigate, useParams, useOutletContext } from 'react-router-dom'
 import { Provider as TooltipProvider } from '@radix-ui/react-tooltip'
 import {
   Bot, ChevronDown, ChevronLeft, ChevronRight, ClipboardList,
-  Home, Hotel, Loader2, LogOut, MessageSquarePlus, Moon,
+  Home, Hotel, Loader2, LogOut, MessageSquarePlus, Mic, Moon,
   Settings, Square, Sun, Wifi, WifiOff, Wrench,
 } from 'lucide-react'
 import { api } from '../utils/api'
@@ -14,6 +14,7 @@ import { HabboFigure } from '../components/HabboFigure'
 import { AgentDashboard, OnlineView } from '../components/AgentDashboard'
 import { SettingsView } from '../components/settings/SettingsView'
 import { FeedbackWidget, FeedbackView } from '../components/FeedbackWidget'
+import VoiceChat from '../components/VoiceChat'
 import { BotsTab } from '../tabs/BotsTab'
 import { UpgradeRequestsTab } from '../tabs/UpgradeRequests'
 import { DevToolsView } from '../tabs/DevToolsView'
@@ -23,7 +24,7 @@ import { UiBuildFooter } from '../UiBuildFooter'
 
 const DASHBOARD_TAB_IDS = new Set([
   'home', 'agents', 'settings', 'requests',
-  'tiers', 'online', 'devtools', 'feedback',
+  'tiers', 'online', 'devtools', 'feedback', 'voice',
 ])
 
 function resolveDashboardTab(tab, me) {
@@ -156,6 +157,7 @@ export function DashboardInner() {
   const tabs = [
     { id: 'home', label: 'Dashboard', icon: Home },
     { id: 'agents', label: 'My Agents', icon: Bot },
+    { id: 'voice', label: 'Voice Chat', icon: Mic },
     { id: 'online', label: 'Active Bots', icon: Hotel },
     { id: 'settings', label: 'Settings', icon: Settings },
     ...(can(me, 'admin.requests') ? [{ id: 'requests', label: 'Requests', icon: ClipboardList, badge: pendingRequestCount }] : []),
@@ -417,6 +419,9 @@ export function DashboardInner() {
           )}
           {activeTab === 'feedback' && can(me, 'admin.feedback') && (
             <FeedbackView />
+          )}
+          {activeTab === 'voice' && (
+            <VoiceChat me={me} />
           )}
           </div>
         </main>

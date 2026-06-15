@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import {
   AlertCircle, AlertTriangle, ArrowUpCircle, Bell, Bot, CheckCircle,
   ChevronRight, ClipboardList, Home, Hotel, Key,
-  Settings, Users, Wifi, WifiOff,
+  Mic, Settings, Users, Wifi, WifiOff,
 } from 'lucide-react'
 import { api } from '../utils/api'
 import { useHotel } from '../HotelContext'
@@ -12,6 +12,7 @@ import { HabboFigure } from '../components/HabboFigure'
 
 const QUICK_LINKS = [
   { label: 'My Agents',    description: 'Create and manage your AI agents', icon: Bot,     tab: 'agents'   },
+  { label: 'Voice Chat',   description: 'Talk to your agents using voice',  icon: Mic,     tab: 'voice'   },
   { label: 'Active Bots',  description: 'See bots working in the hotel',    icon: Hotel,   tab: 'online'   },
   { label: 'Settings',     description: 'Account and API key settings',     icon: Settings, tab: 'settings' },
 ]
