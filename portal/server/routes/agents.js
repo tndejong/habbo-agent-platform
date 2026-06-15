@@ -7,6 +7,7 @@ export function registerAgentsRoutes(app, ctx) {
   const {
     db,
     authRequired,
+    apiKeysRequired,
     permRequired,
     getPortalUserByHabboUserId,
     portalUserHasAnthropicApiKey,
@@ -17,7 +18,7 @@ export function registerAgentsRoutes(app, ctx) {
   app.use('/api/agents', express.json({ limit: '1mb' }));
 
   // ── Personas ─────────────────────────────────────────────────────────────
-  app.get('/api/agents/personas', authRequired, async (req, res) => {
+  app.get('/api/agents/personas', authRequired, apiKeysRequired, async (req, res) => {
     try {
       const [rows] = await db.execute(
         `SELECT p.*,
@@ -28,7 +29,7 @@ export function registerAgentsRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/agents/personas', authRequired, permRequired('marketplace.manage'), async (req, res) => {
+  app.post('/api/agents/personas', authRequired, apiKeysRequired, permRequired('marketplace.manage'), async (req, res) => {
     try {
       const { name, description, prompt, capabilities, figure_type, bot_name } = req.body;
       if (!name || !name.trim()) return res.status(400).json({ error: 'Name required' });
@@ -40,7 +41,7 @@ export function registerAgentsRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.get('/api/agents/personas/:id', authRequired, async (req, res) => {
+  app.get('/api/agents/personas/:id', authRequired, apiKeysRequired, async (req, res) => {
     try {
       const [[row]] = await db.execute('SELECT * FROM agent_personas WHERE id=?', [req.params.id]);
       if (!row) return res.status(404).json({ error: 'Not found' });
@@ -48,7 +49,7 @@ export function registerAgentsRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.put('/api/agents/personas/:id', authRequired, permRequired('marketplace.manage'), async (req, res) => {
+  app.put('/api/agents/personas/:id', authRequired, apiKeysRequired, permRequired('marketplace.manage'), async (req, res) => {
     try {
       const { name, role, capabilities, description, prompt, figure_type, bot_name, figure } = req.body;
       await db.execute(
@@ -59,7 +60,7 @@ export function registerAgentsRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.delete('/api/agents/personas/:id', authRequired, permRequired('marketplace.manage'), async (req, res) => {
+  app.delete('/api/agents/personas/:id', authRequired, apiKeysRequired, permRequired('marketplace.manage'), async (req, res) => {
     try {
       await db.execute('DELETE FROM agent_personas WHERE id=?', [req.params.id]);
       res.json({ ok: true });
@@ -67,7 +68,7 @@ export function registerAgentsRoutes(app, ctx) {
   });
 
   // ── Teams ────────────────────────────────────────────────────────────────
-  app.get('/api/agents/teams', authRequired, async (req, res) => {
+  app.get('/api/agents/teams', authRequired, apiKeysRequired, async (req, res) => {
     try {
       const [teams] = await db.execute('SELECT * FROM agent_teams ORDER BY name ASC');
       for (const team of teams) {
@@ -78,7 +79,7 @@ export function registerAgentsRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/agents/teams', authRequired, permRequired('marketplace.manage'), async (req, res) => {
+  app.post('/api/agents/teams', authRequired, apiKeysRequired, permRequired('marketplace.manage'), async (req, res) => {
     try {
       const { name, description, orchestrator_prompt, pack_source_url, role_assignments, execution_mode, tasks_json, language } = req.body;
       if (!name?.trim()) return res.status(400).json({ error: 'Name required' });
@@ -90,7 +91,7 @@ export function registerAgentsRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.get('/api/agents/teams/:id', authRequired, async (req, res) => {
+  app.get('/api/agents/teams/:id', authRequired, apiKeysRequired, async (req, res) => {
     try {
       const [[team]] = await db.execute('SELECT * FROM agent_teams WHERE id=?', [req.params.id]);
       if (!team) return res.status(404).json({ error: 'Not found' });
@@ -111,7 +112,7 @@ export function registerAgentsRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.put('/api/agents/teams/:id', authRequired, permRequired('marketplace.manage'), async (req, res) => {
+  app.put('/api/agents/teams/:id', authRequired, apiKeysRequired, permRequired('marketplace.manage'), async (req, res) => {
     try {
       const { name, description, orchestrator_prompt, pack_source_url, role_assignments, execution_mode, tasks_json, language } = req.body;
       await db.execute(
@@ -122,7 +123,7 @@ export function registerAgentsRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.delete('/api/agents/teams/:id', authRequired, permRequired('marketplace.manage'), async (req, res) => {
+  app.delete('/api/agents/teams/:id', authRequired, apiKeysRequired, permRequired('marketplace.manage'), async (req, res) => {
     try {
       await db.execute('DELETE FROM agent_teams WHERE id=?', [req.params.id]);
       res.json({ ok: true });
@@ -130,14 +131,14 @@ export function registerAgentsRoutes(app, ctx) {
   });
 
   // ── Packs ────────────────────────────────────────────────────────────────
-  app.get('/api/agents/packs', authRequired, async (req, res) => {
+  app.get('/api/agents/packs', authRequired, apiKeysRequired, async (req, res) => {
     try {
       const [rows] = await db.execute('SELECT * FROM agent_packs ORDER BY name ASC');
       res.json({ ok: true, packs: rows });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/agents/packs', authRequired, permRequired('marketplace.manage'), async (req, res) => {
+  app.post('/api/agents/packs', authRequired, apiKeysRequired, permRequired('marketplace.manage'), async (req, res) => {
     try {
       const { name, description, room_id, pack_source_url, role_assignments } = req.body;
       if (!name?.trim()) return res.status(400).json({ error: 'Name required' });
@@ -149,7 +150,7 @@ export function registerAgentsRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.get('/api/agents/packs/:id', authRequired, async (req, res) => {
+  app.get('/api/agents/packs/:id', authRequired, apiKeysRequired, async (req, res) => {
     try {
       const [[row]] = await db.execute('SELECT * FROM agent_packs WHERE id=?', [req.params.id]);
       if (!row) return res.status(404).json({ error: 'Not found' });
@@ -157,7 +158,7 @@ export function registerAgentsRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.put('/api/agents/packs/:id', authRequired, permRequired('marketplace.manage'), async (req, res) => {
+  app.put('/api/agents/packs/:id', authRequired, apiKeysRequired, permRequired('marketplace.manage'), async (req, res) => {
     try {
       const { name, description, room_id, pack_source_url, role_assignments } = req.body;
       await db.execute(
@@ -168,14 +169,14 @@ export function registerAgentsRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.delete('/api/agents/packs/:id', authRequired, permRequired('marketplace.manage'), async (req, res) => {
+  app.delete('/api/agents/packs/:id', authRequired, apiKeysRequired, permRequired('marketplace.manage'), async (req, res) => {
     try {
       await db.execute('DELETE FROM agent_packs WHERE id=?', [req.params.id]);
       res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/agents/packs/:id/trigger', authRequired, async (req, res) => {
+  app.post('/api/agents/packs/:id/trigger', authRequired, apiKeysRequired, async (req, res) => {
     try {
       const [[pack]] = await db.execute('SELECT * FROM agent_packs WHERE id=?', [req.params.id]);
       if (!pack) return res.status(404).json({ error: 'Pack not found' });
@@ -207,7 +208,7 @@ export function registerAgentsRoutes(app, ctx) {
   });
 
   // ── Team members ─────────────────────────────────────────────────────────
-  app.post('/api/agents/teams/:id/members', authRequired, permRequired('marketplace.manage'), async (req, res) => {
+  app.post('/api/agents/teams/:id/members', authRequired, apiKeysRequired, permRequired('marketplace.manage'), async (req, res) => {
     try {
       const { persona_id, role } = req.body;
       await db.execute(
@@ -218,7 +219,7 @@ export function registerAgentsRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.delete('/api/agents/teams/:id/members/:memberId', authRequired, permRequired('marketplace.manage'), async (req, res) => {
+  app.delete('/api/agents/teams/:id/members/:memberId', authRequired, apiKeysRequired, permRequired('marketplace.manage'), async (req, res) => {
     try {
       await db.execute('DELETE FROM agent_team_members WHERE id=? AND team_id=?', [req.params.memberId, req.params.id]);
       res.json({ ok: true });
@@ -226,7 +227,7 @@ export function registerAgentsRoutes(app, ctx) {
   });
 
   // ── Team flows ───────────────────────────────────────────────────────────
-  app.post('/api/agents/teams/:id/flows', authRequired, permRequired('marketplace.manage'), async (req, res) => {
+  app.post('/api/agents/teams/:id/flows', authRequired, apiKeysRequired, permRequired('marketplace.manage'), async (req, res) => {
     try {
       const { flow_id } = req.body;
       await db.execute('INSERT IGNORE INTO agent_team_flows (team_id, flow_id) VALUES (?,?)', [req.params.id, flow_id]);
@@ -234,7 +235,7 @@ export function registerAgentsRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.delete('/api/agents/teams/:id/flows/:flowId', authRequired, permRequired('marketplace.manage'), async (req, res) => {
+  app.delete('/api/agents/teams/:id/flows/:flowId', authRequired, apiKeysRequired, permRequired('marketplace.manage'), async (req, res) => {
     try {
       await db.execute('DELETE FROM agent_team_flows WHERE team_id=? AND flow_id=?', [req.params.id, req.params.flowId]);
       res.json({ ok: true });
@@ -242,7 +243,7 @@ export function registerAgentsRoutes(app, ctx) {
   });
 
   // ── Room templates ───────────────────────────────────────────────────────
-  app.get('/api/agents/teams/:id/templates', authRequired, async (req, res) => {
+  app.get('/api/agents/teams/:id/templates', authRequired, apiKeysRequired, async (req, res) => {
     try {
       const [rows] = await db.execute(
         'SELECT * FROM agent_room_templates WHERE team_id=? ORDER BY bot_name ASC',
@@ -252,7 +253,7 @@ export function registerAgentsRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/agents/teams/:id/templates', authRequired, permRequired('marketplace.manage'), async (req, res) => {
+  app.post('/api/agents/teams/:id/templates', authRequired, apiKeysRequired, permRequired('marketplace.manage'), async (req, res) => {
     try {
       const { bot_name, room_id, x, y, rot } = req.body;
       if (!bot_name?.trim()) return res.status(400).json({ error: 'bot_name required' });
@@ -266,7 +267,7 @@ export function registerAgentsRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.delete('/api/agents/teams/:id/templates/:templateId', authRequired, permRequired('marketplace.manage'), async (req, res) => {
+  app.delete('/api/agents/teams/:id/templates/:templateId', authRequired, apiKeysRequired, permRequired('marketplace.manage'), async (req, res) => {
     try {
       await db.execute(
         'DELETE FROM agent_room_templates WHERE id=? AND team_id=?',
@@ -277,7 +278,7 @@ export function registerAgentsRoutes(app, ctx) {
   });
 
   // ── Marketplace team trigger (dev) ───────────────────────────────────────
-  app.post('/api/agents/teams/:id/trigger', authRequired, permRequired('marketplace.manage'), async (req, res) => {
+  app.post('/api/agents/teams/:id/trigger', authRequired, apiKeysRequired, permRequired('marketplace.manage'), async (req, res) => {
     try {
       const { flow_id, room_id } = req.body;
       const [[team]] = await db.execute('SELECT id, name, pack_source_url, role_assignments FROM agent_teams WHERE id=?', [req.params.id]);
@@ -345,7 +346,7 @@ export function registerAgentsRoutes(app, ctx) {
   });
 
   // ── Stop / logs ──────────────────────────────────────────────────────────
-  app.post('/api/agents/stop', authRequired, async (req, res) => {
+  app.post('/api/agents/stop', authRequired, apiKeysRequired, async (req, res) => {
     try {
       const body = req.body?.room_id ? { room_id: Number(req.body.room_id) } : {};
       const r = await fetch(`${AGENT_TRIGGER_URL}/reset`, {
@@ -358,7 +359,7 @@ export function registerAgentsRoutes(app, ctx) {
     } catch (err) { res.status(502).json({ error: 'Agent trigger unavailable' }); }
   });
 
-  app.get('/api/agents/logs', authRequired, permRequired('devtools.access'), async (req, res) => {
+  app.get('/api/agents/logs', authRequired, apiKeysRequired, permRequired('devtools.access'), async (req, res) => {
     try {
       const lines = Math.min(parseInt(req.query.lines ?? '150'), 500);
       const r = await fetch(`${AGENT_TRIGGER_URL}/logs?lines=${lines}`);
@@ -371,7 +372,7 @@ export function registerAgentsRoutes(app, ctx) {
     } catch (err) { res.json({ ok: false, lines: [], error: 'Agent trigger unavailable' }); }
   });
 
-  app.get('/api/agents/logs/bak', authRequired, permRequired('devtools.access'), async (req, res) => {
+  app.get('/api/agents/logs/bak', authRequired, apiKeysRequired, permRequired('devtools.access'), async (req, res) => {
     try {
       const r = await fetch(`${AGENT_TRIGGER_URL}/logs/bak`);
       if (r.status === 404) return res.status(404).json({ error: 'No previous session log found.' });
@@ -384,14 +385,14 @@ export function registerAgentsRoutes(app, ctx) {
   });
 
   // ── Flows ────────────────────────────────────────────────────────────────
-  app.get('/api/agents/flows', authRequired, async (req, res) => {
+  app.get('/api/agents/flows', authRequired, apiKeysRequired, async (req, res) => {
     try {
       const [rows] = await db.execute('SELECT * FROM agent_flows ORDER BY name ASC');
       res.json({ ok: true, flows: rows });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/agents/flows', authRequired, permRequired('marketplace.manage'), async (req, res) => {
+  app.post('/api/agents/flows', authRequired, apiKeysRequired, permRequired('marketplace.manage'), async (req, res) => {
     try {
       const { name, description, tasks_json, allowed_tools_json } = req.body;
       if (!name?.trim()) return res.status(400).json({ error: 'Name required' });
@@ -403,7 +404,7 @@ export function registerAgentsRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.get('/api/agents/flows/:id', authRequired, async (req, res) => {
+  app.get('/api/agents/flows/:id', authRequired, apiKeysRequired, async (req, res) => {
     try {
       const [[row]] = await db.execute('SELECT * FROM agent_flows WHERE id=?', [req.params.id]);
       if (!row) return res.status(404).json({ error: 'Not found' });
@@ -411,7 +412,7 @@ export function registerAgentsRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.put('/api/agents/flows/:id', authRequired, permRequired('marketplace.manage'), async (req, res) => {
+  app.put('/api/agents/flows/:id', authRequired, apiKeysRequired, permRequired('marketplace.manage'), async (req, res) => {
     try {
       const { name, description, tasks_json, allowed_tools_json } = req.body;
       await db.execute(
@@ -422,7 +423,7 @@ export function registerAgentsRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.delete('/api/agents/flows/:id', authRequired, permRequired('marketplace.manage'), async (req, res) => {
+  app.delete('/api/agents/flows/:id', authRequired, apiKeysRequired, permRequired('marketplace.manage'), async (req, res) => {
     try {
       await db.execute('DELETE FROM agent_flows WHERE id=?', [req.params.id]);
       res.json({ ok: true });
@@ -430,7 +431,7 @@ export function registerAgentsRoutes(app, ctx) {
   });
 
   // ── Bot picker ───────────────────────────────────────────────────────────
-  app.get('/api/agents/bots', authRequired, async (req, res) => {
+  app.get('/api/agents/bots', authRequired, apiKeysRequired, async (req, res) => {
     try {
       if (req.query.mine === 'true') {
         const [rows] = await db.execute(
@@ -447,7 +448,7 @@ export function registerAgentsRoutes(app, ctx) {
   });
 
   // ── Status (heavy: aggregates trigger + MCP + persona joins) ─────────────
-  app.get('/api/agents/status', authRequired, async (req, res) => {
+  app.get('/api/agents/status', authRequired, apiKeysRequired, async (req, res) => {
     try {
       const MCP_URL = (process.env.HOTEL_MCP_URL || 'http://habbo-mcp:3003/mcp').replace(/\/?$/, '');
       const MCP_KEY = process.env.MCP_API_KEY || '';
@@ -544,7 +545,7 @@ export function registerAgentsRoutes(app, ctx) {
   });
 
   // ── Run reports ──────────────────────────────────────────────────────────
-  app.get('/api/agents/run-reports', authRequired, async (req, res) => {
+  app.get('/api/agents/run-reports', authRequired, apiKeysRequired, async (req, res) => {
     try {
       const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
       if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -564,5 +565,27 @@ export function registerAgentsRoutes(app, ctx) {
       );
       res.json({ ok: true, reports: rows });
     } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.delete('/api/agents/run-reports/:id', authRequired, apiKeysRequired, async (req, res) => {
+    try {
+      console.log('DELETE /api/agents/run-reports/:id called', { params: req.params, user: req.user })
+      const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
+      if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
+      
+      // Verify report belongs to user before deleting
+      const [result] = await db.execute(
+        'DELETE FROM team_run_reports WHERE id = ? AND portal_user_id = ?',
+        [req.params.id, portalUser.id]
+      );
+      
+      console.log('Delete result:', { affectedRows: result.affectedRows, reportId: req.params.id, portalUserId: portalUser.id })
+      
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ error: 'Report not found or not authorized' });
+      }
+      
+      res.json({ ok: true, message: 'Report deleted' });
+    } catch (err) { console.error('Delete error:', err); res.status(500).json({ error: err.message }); }
   });
 }

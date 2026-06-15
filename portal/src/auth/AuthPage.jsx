@@ -71,9 +71,12 @@ export function AuthPage({ onLogin, UiBuildFooter }) {
     e.preventDefault()
     setBusy(true); setError(''); setMessage('')
     try {
-      const data = await api('/api/auth/register', { method: 'POST', body: JSON.stringify(registerForm) })
-      onLogin(data.user)
-      navigate('/app/home', { replace: true })
+      await api('/api/auth/register', { method: 'POST', body: JSON.stringify(registerForm) })
+      // Fetch complete user data after registration
+      const meData = await api('/api/auth/me')
+      onLogin(meData.user)
+      // Let React Router handle the redirection based on needsOnboarding
+      // The <Navigate> in App.jsx will redirect to /onboarding or /app/home
     } catch (err) { setError(err.message) }
     finally { setBusy(false) }
   }
@@ -82,9 +85,12 @@ export function AuthPage({ onLogin, UiBuildFooter }) {
     e.preventDefault()
     setBusy(true); setError(''); setMessage('')
     try {
-      const data = await api('/api/auth/login', { method: 'POST', body: JSON.stringify(loginForm) })
-      onLogin(data.user)
-      navigate('/app/home', { replace: true })
+      await api('/api/auth/login', { method: 'POST', body: JSON.stringify(loginForm) })
+      // Fetch complete user data after login
+      const meData = await api('/api/auth/me')
+      onLogin(meData.user)
+      // Let React Router handle the redirection based on needsOnboarding
+      // The <Navigate> in App.jsx will redirect to /onboarding or /app/home
     } catch (err) { setError(err.message) }
     finally { setBusy(false) }
   }

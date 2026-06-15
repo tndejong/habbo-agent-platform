@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
 import {
   AlertCircle, AlertTriangle, ArrowUpCircle, Bell, Bot, CheckCircle,
-  ChevronRight, ClipboardList, FileText, Home, Hotel, Key, Network,
-  Settings, ShoppingBag, Users, Wifi, WifiOff,
+  ChevronRight, ClipboardList, Home, Hotel, Key,
+  Settings, Users, Wifi, WifiOff,
 } from 'lucide-react'
 import { api } from '../utils/api'
 import { useHotel } from '../HotelContext'
@@ -11,12 +11,9 @@ import { HabboFigure } from '../components/HabboFigure'
 // ── Home Tab ──────────────────────────────────────────────────────────────
 
 const QUICK_LINKS = [
-  { label: 'My Agents',    description: 'Manage your agent teams',         icon: Bot,           tab: 'agents'       },
-  { label: 'Marketplace',  description: 'Browse and install teams',        icon: ShoppingBag,   tab: 'marketplace'  },
-  { label: 'Integrations', description: 'Connect external services',       icon: Network,       tab: 'integrations' },
-  { label: 'Reports',     description: 'View and evaluate reports',        icon: FileText,      tab: 'reports'      },
-  { label: 'Requests', description: 'View and manage requests',            icon: ClipboardList, tab: 'requests'     },
-  { label: 'Settings',     description: 'Account and API key settings',    icon: Settings,      tab: 'settings'     },
+  { label: 'My Agents',    description: 'Create and manage your AI agents', icon: Bot,     tab: 'agents'   },
+  { label: 'Active Bots',  description: 'See bots working in the hotel',    icon: Hotel,   tab: 'online'   },
+  { label: 'Settings',     description: 'Account and API key settings',     icon: Settings, tab: 'settings' },
 ]
 
 export function HomeTab({ me, onNavigate }) {

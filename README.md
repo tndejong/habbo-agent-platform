@@ -92,16 +92,16 @@ Full hook docs: [`hooks/README.md`](hooks/README.md)
 
 Hotel visitors can chat with AI-powered bots directly inside game rooms. Each bot has its own persona and remembers the last 20 messages of a conversation. Responses are automatically formatted for Habbo's chat bubbles — short, plain text, no markdown.
 
-**Supported AI providers:** Claude (Anthropic) and GPT (OpenAI)
+**Supported AI providers:** Claude (Anthropic) only. OpenAI key optional for voice transcription.
 
 **How it works:**
 
 1. Register at [https://hotel-portal.fixdev.nl](https://hotel-portal.fixdev.nl)
-2. Add your Anthropic or OpenAI API key in the portal
+2. Add your Anthropic API key in the portal (OpenAI key optional for voice features)
 3. Create an agent persona with a name, figure, and personality prompt
 4. Deploy the bot to a hotel room — it spawns automatically and listens for chat
 
-When a visitor says something in the room, the bot picks it up, sends it to Claude/GPT with its persona as the system prompt, and responds in-game within seconds.
+When a visitor says something in the room, the bot picks it up, sends it to Claude with its persona as the system prompt, and responds in-game within seconds.
 
 Full details: [`habbo-ai-service/README.md`](habbo-ai-service/README.md) · [`portal/README.md`](portal/README.md)
 

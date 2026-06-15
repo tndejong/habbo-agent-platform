@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   AlertCircle, Check, Copy, Eye, EyeOff, Key, Loader2, Phone,
   ServerCog, Shield, Terminal, Trash2, User, Wifi, WifiOff,
@@ -10,7 +11,12 @@ import { McpHealthBadge } from '../dashboard/McpHealthBadge'
 import { VoiceAudioSettings } from './VoiceAudioSettings'
 
 export function SettingsView({ me, onKeyUpdated, onTokenChange }) {
-  const [settingsTab, setSettingsTab] = useState('account') // 'account' | 'auth'
+  const [searchParams, setSearchParams] = useSearchParams()
+  const urlTab = searchParams.get('subtab')
+  const validTabs = ['account', 'auth']
+  const initialTab = validTabs.includes(urlTab) ? urlTab : 'account'
+  
+  const [settingsTab, setSettingsTab] = useState(initialTab) // 'account' | 'auth'
 
   const [keys, setKeys] = useState([])
   const [loading, setLoading] = useState(true)
@@ -33,6 +39,21 @@ export function SettingsView({ me, onKeyUpdated, onTokenChange }) {
   const [phoneSaving, setPhoneSaving] = useState(false)
   const [phoneDeleting, setPhoneDeleting] = useState(false)
   const [phoneMsg, setPhoneMsg] = useState(null) // { type: 'success'|'error', text }
+
+  // Update URL when tab changes
+  const handleTabChange = (newTab) => {
+    setSettingsTab(newTab)
+    const newParams = new URLSearchParams(searchParams)
+    newParams.set('subtab', newTab)
+    setSearchParams(newParams)
+  }
+
+  // Sync URL tab changes
+  useEffect(() => {
+    if (urlTab && validTabs.includes(urlTab) && urlTab !== settingsTab) {
+      setSettingsTab(urlTab)
+    }
+  }, [urlTab])
 
   const [defaultTeamState, setDefaultTeamState] = useState({ loading: true, teamId: null, teams: [] })
   const [defaultTeamSaving, setDefaultTeamSaving] = useState(false)
@@ -310,7 +331,7 @@ export function SettingsView({ me, onKeyUpdated, onTokenChange }) {
           return (
             <button
               key={t.id}
-              onClick={() => setSettingsTab(t.id)}
+              onClick={() => handleTabChange(t.id)}
               className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
                 active
                   ? 'border-primary text-foreground'

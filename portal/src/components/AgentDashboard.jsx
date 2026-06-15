@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { createPortal } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
 import { HabboFigure } from './HabboFigure'
@@ -33,7 +34,12 @@ import {
 // ── Main Dashboard Component ───────────────────────────────────────────────
 
 export function AgentDashboard({ me, onActiveTeamChange, onStopTeam, mcpTokenVersion }) {
-  const [tab, setTab] = useState('teams')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const urlTab = searchParams.get('section')
+  const validTabs = ['teams', 'personas', 'reports']
+  const initialTab = validTabs.includes(urlTab) ? urlTab : 'teams'
+  
+  const [tab, setTab] = useState(initialTab)
   const [inSubpage, setInSubpage] = useState(false)
   const [activeTeam, setActiveTeam] = useState(null)  // my own active run
   const [stopping, setStopping] = useState(false)
@@ -43,6 +49,21 @@ export function AgentDashboard({ me, onActiveTeamChange, onStopTeam, mcpTokenVer
   const [logPaused, setLogPaused] = useState(false)
   const [teamError, setTeamError] = useState(null)
   const prevActiveTeam = useRef(null)
+
+  // Update URL when tab changes
+  const handleTabChange = (newTab) => {
+    setTab(newTab)
+    const newParams = new URLSearchParams(searchParams)
+    newParams.set('section', newTab)
+    setSearchParams(newParams)
+  }
+
+  // Sync URL tab changes
+  useEffect(() => {
+    if (urlTab && validTabs.includes(urlTab) && urlTab !== tab) {
+      setTab(urlTab)
+    }
+  }, [urlTab])
 
   // Poll agent-trigger health every 5s — find this user's own run by matching username
   useEffect(() => {
@@ -122,7 +143,7 @@ export function AgentDashboard({ me, onActiveTeamChange, onStopTeam, mcpTokenVer
           {tabs.map(({ id, label, icon: Icon, badge }) => (
             <button
               key={id}
-              onClick={() => setTab(id)}
+              onClick={() => handleTabChange(id)}
               className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
                 tab === id
                   ? 'border-primary text-primary'

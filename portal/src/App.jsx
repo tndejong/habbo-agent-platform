@@ -4,8 +4,10 @@ import { Loader2 } from 'lucide-react'
 import { api } from './utils/api'
 import { HotelProvider } from './HotelContext'
 import { AuthPage } from './auth/AuthPage'
+import { OnboardingPage } from './onboarding/OnboardingPage'
 import { DashboardInner } from './dashboard/DashboardInner'
 import { UiBuildFooter } from './UiBuildFooter'
+import { ProtectedRoute } from './components/ProtectedRoute'
 
 export default function App() {
   const [me, setMe] = useState(null)
@@ -26,29 +28,48 @@ export default function App() {
     </div>
   )
 
+  // Check if user needs onboarding (no API keys configured)
+  const needsOnboarding = me && !me.has_anthropic_key
+
+  // Check for password reset params — always route to /login with them preserved
+  const params = new URLSearchParams(window.location.search)
+  const hasResetParams = params.get('reset') === '1'
+
   return (
     <Routes>
       <Route
         path="/login"
-        element={me ? <Navigate to="/app/home" replace /> : <AuthPage onLogin={setMe} UiBuildFooter={UiBuildFooter} />}
+        element={me && !hasResetParams ? <Navigate to={needsOnboarding ? '/onboarding' : '/app/home'} replace /> : <AuthPage onLogin={setMe} UiBuildFooter={UiBuildFooter} />}
       />
-      <Route path="/" element={<Navigate to={me ? '/app/home' : '/login'} replace />} />
+      <Route path="/" element={<Navigate to={me && !hasResetParams ? (needsOnboarding ? '/onboarding' : '/app/home') : (hasResetParams ? '/login' + window.location.search : '/login')} replace />} />
+      
+      {/* Onboarding route - only shown to users without API keys */}
       <Route
-        path="/app"
+        path="/onboarding"
         element={
           me ? (
-            <HotelProvider me={me}>
-              <Outlet context={{ me, setMe }} />
-            </HotelProvider>
+needsOnboarding ? (
+                <OnboardingPage me={me} onComplete={() => {
+                  // After onboarding completion, refetch user data to get accurate has_*_key values
+                  api('/api/auth/me').then(d => setMe(d.user))
+                }} />
+              ) : (
+              <Navigate to="/app/home" replace />
+            )
           ) : (
             <Navigate to="/login" replace />
           )
         }
+      />
+
+      <Route
+        path="/app"
+        element={<ProtectedRoute me={me} setMe={setMe} hasResetParams={hasResetParams} />}
       >
         <Route index element={<Navigate to="home" replace />} />
         <Route path=":tab" element={<DashboardInner />} />
       </Route>
-      <Route path="*" element={<Navigate to={me ? '/app/home' : '/login'} replace />} />
+      <Route path="*" element={<Navigate to={me && !hasResetParams ? (needsOnboarding ? '/onboarding' : '/app/home') : (hasResetParams ? '/login' + window.location.search : '/login')} replace />} />
     </Routes>
   )
 }

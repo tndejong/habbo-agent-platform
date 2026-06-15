@@ -14,6 +14,11 @@ export async function setApiKeyHandler(req: Request, res: Response): Promise<voi
     return;
   }
 
+  if (provider !== 'anthropic') {
+    res.status(400).json({ ok: false, error: 'Only "anthropic" provider is supported for chat completion' });
+    return;
+  }
+
   if (!supportedProviders().includes(provider)) {
     res.status(400).json({ ok: false, error: `Unsupported provider "${provider}". Supported: ${supportedProviders().join(', ')}` });
     return;

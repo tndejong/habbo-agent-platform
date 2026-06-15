@@ -222,9 +222,13 @@ export function registerAuthRoutes(app, ctx) {
   app.get('/api/auth/me', authRequired, async (req, res) => {
     const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
     const [[habboUser]] = await db.execute('SELECT look FROM users WHERE id = ? LIMIT 1', [req.user.habbo_user_id]);
-    const [[keyRow]] = await db.execute(
+    const [[anthropicKeyRow]] = await db.execute(
       'SELECT id FROM portal_user_api_keys WHERE portal_user_id = ? AND provider = ? LIMIT 1',
       [portalUser?.id, 'anthropic']
+    );
+    const [[openaiKeyRow]] = await db.execute(
+      'SELECT id FROM portal_user_api_keys WHERE portal_user_id = ? AND provider = ? LIMIT 1',
+      [portalUser?.id, 'openai']
     );
     const [[mcpRow]] = await db.execute(
       `SELECT id FROM portal_mcp_tokens WHERE portal_user_id = ? AND status = 'active' LIMIT 1`,
@@ -233,14 +237,15 @@ export function registerAuthRoutes(app, ctx) {
 
     res.json({
       ok: true,
-      user: {
-        email: req.user.email,
+user: {
+        habbo_user_id: req.user.habbo_user_id,
         username: req.user.username,
-        habbo_username: req.user.habbo_username,
+        email: portalUser?.email || null,
         ai_tier: portalUser?.ai_tier || 'basic',
         is_developer: portalUser?.is_developer || 0,
         figure: habboUser?.look || null,
-        has_anthropic_key: !!keyRow,
+        has_anthropic_key: !!anthropicKeyRow,
+        has_openai_key: !!openaiKeyRow,
         has_mcp_token: !!mcpRow,
         habboConnected: portalUser ? !!portalUser.hotel_enabled : true,
         default_user_team_id: portalUser?.default_user_team_id ?? null,

@@ -5,6 +5,7 @@ export function registerMyRoutes(app, ctx) {
   const {
     db,
     authRequired,
+    apiKeysRequired,
     permRequired,
     getPortalUserByHabboUserId,
     encryptApiKey,
@@ -22,7 +23,7 @@ export function registerMyRoutes(app, ctx) {
   } = ctx;
 
   // ─── Integrations ──────────────────────────────────────────────────────────
-  app.get('/api/my/integrations', authRequired, async (req, res) => {
+  app.get('/api/my/integrations', authRequired, apiKeysRequired, async (req, res) => {
     try {
       const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
       if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -46,7 +47,7 @@ export function registerMyRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/my/integrations', authRequired, async (req, res) => {
+  app.post('/api/my/integrations', authRequired, apiKeysRequired, async (req, res) => {
     try {
       const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
       if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -77,7 +78,7 @@ export function registerMyRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.put('/api/my/integrations/:id', authRequired, async (req, res) => {
+  app.put('/api/my/integrations/:id', authRequired, apiKeysRequired, async (req, res) => {
     try {
       const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
       if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -129,7 +130,7 @@ export function registerMyRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.delete('/api/my/integrations/:id', authRequired, async (req, res) => {
+  app.delete('/api/my/integrations/:id', authRequired, apiKeysRequired, async (req, res) => {
     try {
       const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
       if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -142,7 +143,7 @@ export function registerMyRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/my/integrations/ping', authRequired, async (req, res) => {
+  app.post('/api/my/integrations/ping', authRequired, apiKeysRequired, async (req, res) => {
     try {
       const url = String(req.body?.url || '').trim();
       if (!url) return res.status(400).json({ error: 'url is required' });
@@ -151,7 +152,7 @@ export function registerMyRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/my/integrations/:id/test', authRequired, async (req, res) => {
+  app.post('/api/my/integrations/:id/test', authRequired, apiKeysRequired, async (req, res) => {
     try {
       const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
       if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -171,7 +172,7 @@ export function registerMyRoutes(app, ctx) {
   });
 
   // ─── Personas ──────────────────────────────────────────────────────────────
-  app.get('/api/my/personas', authRequired, async (req, res) => {
+  app.get('/api/my/personas', authRequired, apiKeysRequired, async (req, res) => {
     try {
       const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
       if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -186,7 +187,7 @@ export function registerMyRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/my/personas', authRequired, permRequired('personas.create'), async (req, res) => {
+  app.post('/api/my/personas', authRequired, apiKeysRequired, permRequired('personas.create'), async (req, res) => {
     try {
       const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
       if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -204,7 +205,7 @@ export function registerMyRoutes(app, ctx) {
     }
   });
 
-  app.put('/api/my/personas/:id', authRequired, permRequired('personas.edit'), async (req, res) => {
+  app.put('/api/my/personas/:id', authRequired, apiKeysRequired, permRequired('personas.edit'), async (req, res) => {
     try {
       const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
       if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -222,7 +223,7 @@ export function registerMyRoutes(app, ctx) {
     }
   });
 
-  app.patch('/api/my/personas/:id/bot', authRequired, permRequired('personas.link_bot'), async (req, res) => {
+  app.patch('/api/my/personas/:id/bot', authRequired, apiKeysRequired, permRequired('personas.link_bot'), async (req, res) => {
     try {
       const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
       if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -234,7 +235,7 @@ export function registerMyRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.delete('/api/my/personas/:id', authRequired, permRequired('personas.delete'), async (req, res) => {
+  app.delete('/api/my/personas/:id', authRequired, apiKeysRequired, permRequired('personas.delete'), async (req, res) => {
     try {
       const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
       if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -244,7 +245,7 @@ export function registerMyRoutes(app, ctx) {
   });
 
   // ─── Teams ─────────────────────────────────────────────────────────────────
-  app.get('/api/my/teams', authRequired, async (req, res) => {
+  app.get('/api/my/teams', authRequired, apiKeysRequired, async (req, res) => {
     try {
       const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
       if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -271,7 +272,7 @@ export function registerMyRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.get('/api/my/teams/:id', authRequired, async (req, res) => {
+  app.get('/api/my/teams/:id', authRequired, apiKeysRequired, async (req, res) => {
     try {
       const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
       if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -297,7 +298,7 @@ export function registerMyRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/my/teams', authRequired, permRequired('teams.create'), async (req, res) => {
+  app.post('/api/my/teams', authRequired, apiKeysRequired, permRequired('teams.create'), async (req, res) => {
     try {
       const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
       if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -316,7 +317,7 @@ export function registerMyRoutes(app, ctx) {
     }
   });
 
-  app.put('/api/my/teams/:id', authRequired, permRequired('teams.edit'), async (req, res) => {
+  app.put('/api/my/teams/:id', authRequired, apiKeysRequired, permRequired('teams.edit'), async (req, res) => {
     try {
       const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
       if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -334,7 +335,7 @@ export function registerMyRoutes(app, ctx) {
     }
   });
 
-  app.delete('/api/my/teams/:id', authRequired, permRequired('teams.delete'), async (req, res) => {
+  app.delete('/api/my/teams/:id', authRequired, apiKeysRequired, permRequired('teams.delete'), async (req, res) => {
     try {
       const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
       if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -351,7 +352,7 @@ export function registerMyRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/my/teams/:id/members', authRequired, permRequired('teams.edit'), async (req, res) => {
+  app.post('/api/my/teams/:id/members', authRequired, apiKeysRequired, permRequired('teams.edit'), async (req, res) => {
     try {
       const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
       if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -368,7 +369,7 @@ export function registerMyRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.patch('/api/my/teams/:id/members/:memberId', authRequired, permRequired('teams.edit'), async (req, res) => {
+  app.patch('/api/my/teams/:id/members/:memberId', authRequired, apiKeysRequired, permRequired('teams.edit'), async (req, res) => {
     try {
       const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
       if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -380,7 +381,7 @@ export function registerMyRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.delete('/api/my/teams/:id/members/:memberId', authRequired, permRequired('teams.edit'), async (req, res) => {
+  app.delete('/api/my/teams/:id/members/:memberId', authRequired, apiKeysRequired, permRequired('teams.edit'), async (req, res) => {
     try {
       const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
       if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -391,7 +392,7 @@ export function registerMyRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.patch('/api/my/teams/:id/room', authRequired, permRequired('teams.deploy'), async (req, res) => {
+  app.patch('/api/my/teams/:id/room', authRequired, apiKeysRequired, permRequired('teams.deploy'), async (req, res) => {
     try {
       const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
       if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -406,7 +407,7 @@ export function registerMyRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/my/teams/:id/stop', authRequired, async (req, res) => {
+  app.post('/api/my/teams/:id/stop', authRequired, apiKeysRequired, async (req, res) => {
     try {
       const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
       if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -425,7 +426,7 @@ export function registerMyRoutes(app, ctx) {
     } catch (err) { res.status(502).json({ error: 'Agent trigger unavailable: ' + err.message }); }
   });
 
-  app.post('/api/my/teams/:id/trigger', authRequired, permRequired('teams.deploy'), async (req, res) => {
+  app.post('/api/my/teams/:id/trigger', authRequired, apiKeysRequired, permRequired('teams.deploy'), async (req, res) => {
     try {
       const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
       if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -542,7 +543,7 @@ export function registerMyRoutes(app, ctx) {
   });
 
   // ─── Marketplace fork tracking ─────────────────────────────────────────────
-  app.get('/api/my/marketplace-forks', authRequired, async (req, res) => {
+  app.get('/api/my/marketplace-forks', authRequired, apiKeysRequired, async (req, res) => {
     try {
       const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
       if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
@@ -559,7 +560,7 @@ export function registerMyRoutes(app, ctx) {
     }
   });
 
-  app.get('/api/my/installed-team-ids', authRequired, async (req, res) => {
+  app.get('/api/my/installed-team-ids', authRequired, apiKeysRequired, async (req, res) => {
     try {
       const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
       if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });

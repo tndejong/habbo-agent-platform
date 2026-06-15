@@ -143,6 +143,88 @@ export function registerAccountRoutes(app, ctx) {
     res.json({ ok: true, hotel_enabled: !!enabled });
   });
 
+  app.post('/api/onboarding/test-anthropic', authRequired, async (req, res) => {
+    const { api_key } = req.body;
+    
+    if (!api_key || typeof api_key !== 'string' || !api_key.startsWith('sk-ant-api')) {
+      return res.status(400).json({ error: 'Invalid API key format' });
+    }
+
+    try {
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'x-api-key': api_key,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'claude-3-5-haiku-latest',
+          max_tokens: 1,
+          messages: [{ role: 'user', content: 'test' }],
+        }),
+      });
+
+      if (response.ok) {
+        res.json({ valid: true, message: 'API key is valid' });
+      } else if (response.status === 401) {
+        res.json({ valid: false, message: 'Invalid API key' });
+      } else if (response.status === 429) {
+        res.json({ valid: true, message: 'API key is valid (rate limited)' });
+      } else {
+        const errorText = await response.text();
+        console.error('Anthropic API test failed:', response.status, errorText);
+        res.json({ valid: false, message: 'API key validation failed' });
+      }
+    } catch (error) {
+      console.error('Error testing Anthropic API:', error);
+      res.status(500).json({ valid: false, error: 'Failed to test API key' });
+    }
+  });
+
+  app.put('/api/account/api-keys', authRequired, async (req, res) => {
+    const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
+    if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
+
+    const { anthropic_api_key, openai_api_key } = req.body;
+
+    try {
+      if (anthropic_api_key !== undefined) {
+        if (anthropic_api_key === null || anthropic_api_key === '') {
+          await db.execute(
+            'DELETE FROM portal_user_api_keys WHERE portal_user_id = ? AND provider = ?',
+            [portalUser.id, 'anthropic']
+          );
+        } else {
+          const encrypted = encryptApiKey(anthropic_api_key);
+          await db.execute(
+            'INSERT INTO portal_user_api_keys (portal_user_id, provider, api_key_encrypted) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE api_key_encrypted = ?',
+            [portalUser.id, 'anthropic', encrypted, encrypted]
+          );
+        }
+      }
+
+      if (openai_api_key !== undefined) {
+        if (openai_api_key === null || openai_api_key === '') {
+          await db.execute(
+            'DELETE FROM portal_user_api_keys WHERE portal_user_id = ? AND provider = ?',
+            [portalUser.id, 'openai']
+          );
+        } else {
+          const encrypted = encryptApiKey(openai_api_key);
+          await db.execute(
+            'INSERT INTO portal_user_api_keys (portal_user_id, provider, api_key_encrypted) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE api_key_encrypted = ?',
+            [portalUser.id, 'openai', encrypted, encrypted]
+          );
+        }
+      }
+
+      res.json({ ok: true, message: 'API keys updated' });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.post('/api/account/password', authRequired, async (req, res) => {
     const currentPassword = String(req.body?.current_password || '');
     const newPassword     = String(req.body?.new_password || '');

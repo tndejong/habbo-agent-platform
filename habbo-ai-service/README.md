@@ -5,7 +5,7 @@
 ## What it provides
 
 - Hotel -> AI bridge for bot responses
-- Provider integrations (for example Anthropic/OpenAI)
+- Provider integration (Anthropic only)
 - Agent configuration and persistence
 - Runtime APIs used by the emulator/hotel flows
 

@@ -28,6 +28,7 @@ import { registerInternalRoutes } from './server/routes/internal.js';
 import { registerDevRoutes } from './server/routes/dev.js';
 import { registerMyRoutes } from './server/routes/my.js';
 import { registerAgentsRoutes } from './server/routes/agents.js';
+import { registerSpawnSpotsRoutes } from './server/routes/spawnSpots.js';
 import {
   sha256, encryptApiKey, decryptApiKey, maskApiKey,
   createPasswordResetToken, createMcpToken, maskTokenPreview,
@@ -178,7 +179,44 @@ function authRequired(req, res, next) {
   }
 }
 
-// ── Permission Registry ────────────────────────────────────────────────────
+/**
+ * Middleware that checks if user has at least one API key configured (Anthropic or OpenAI).
+ * Users must complete onboarding (configure API keys) before accessing most features.
+ */
+async function apiKeysRequired(req, res, next) {
+  try {
+    // Get portal user to check API keys
+    const [[portalUser]] = await db.execute(
+      'SELECT id FROM portal_users WHERE habbo_user_id = ?',
+      [req.user.habbo_user_id]
+    );
+    
+    if (!portalUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Check if user has at least one API key
+    const [[anthropicKeyRow]] = await db.execute(
+      'SELECT id FROM portal_user_api_keys WHERE portal_user_id = ? AND provider = ? LIMIT 1',
+      [portalUser.id, 'anthropic']
+    );
+    const [[openaiKeyRow]] = await db.execute(
+      'SELECT id FROM portal_user_api_keys WHERE portal_user_id = ? AND provider = ? LIMIT 1',
+      [portalUser.id, 'openai']
+    );
+
+    if (!anthropicKeyRow) {
+      return res.status(403).json({ 
+        error: 'API key required', 
+        message: 'Please configure your Anthropic API key in the onboarding to use chat features.' 
+      });
+    }
+
+    return next();
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
 // KEEP IN SYNC with portal/src/utils/permissions.js (frontend mirror).
 // Add new permission keys here AND in the frontend file whenever a new
 // gated feature is built. The pre-deploy analysis surfaces any drift.
@@ -875,6 +913,10 @@ registerHotelRoutes(app, {
   HABBO_BASE_URL, AI_SERVICE_URL, RCON_HOST, RCON_PORT,
 });
 
+registerSpawnSpotsRoutes(app, {
+  db, authRequired, apiKeysRequired, getPortalUserByHabboUserId
+});
+
 
 
 // Quick RCON connectivity check — admin only, no side effects.
@@ -930,7 +972,7 @@ registerTierRequestRoutes(app, { db, authRequired, permRequired, getPortalUserBy
 
 
 registerAgentsRoutes(app, {
-  db, authRequired, permRequired, getPortalUserByHabboUserId,
+  db, authRequired, apiKeysRequired, permRequired, getPortalUserByHabboUserId,
   portalUserHasAnthropicApiKey, forwardToAgentTrigger, AGENT_TRIGGER_URL,
 });
 
@@ -969,13 +1011,12 @@ registerDevRoutes(app, { db, authRequired, permRequired, getPortalUserByHabboUse
 
 
 registerMyRoutes(app, {
-  db, authRequired, permRequired, getPortalUserByHabboUserId,
+  db, authRequired, apiKeysRequired, permRequired, getPortalUserByHabboUserId,
   encryptApiKey, decryptApiKey,
   parseAndEncryptStdioConfig, probeMcpConnection, checkSocketOnline,
   setDefaultUserTeamIfUnset, clearDefaultUserTeamIfPointsTo,
   deleteOrphanedForkedPersonas, portalUserHasAnthropicApiKey,
-  forwardToAgentTrigger, detectRequiredIntegrations,
-  AGENT_TRIGGER_URL,
+  forwardToAgentTrigger, detectRequiredIntegrations, AGENT_TRIGGER_URL,
 });
 
 // ── Voice Chat ───────────────────────────────────────────────────────────────

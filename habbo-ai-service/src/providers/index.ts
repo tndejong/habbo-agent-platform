@@ -11,13 +11,11 @@ export interface AIProvider {
 }
 
 import { AnthropicProvider } from './anthropic.js';
-import { OpenAIProvider } from './openai.js';
 
 type ProviderFactory = (apiKey: string) => AIProvider;
 
 const registry: Record<string, ProviderFactory> = {
   anthropic: (key) => new AnthropicProvider(key),
-  openai:    (key) => new OpenAIProvider(key),
   // gemini:  (key) => new GeminiProvider(key),
 };
 

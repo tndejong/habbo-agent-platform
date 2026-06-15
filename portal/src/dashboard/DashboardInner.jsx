@@ -2,9 +2,9 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, useParams, useOutletContext } from 'react-router-dom'
 import { Provider as TooltipProvider } from '@radix-ui/react-tooltip'
 import {
-  Bot, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, FileText,
-  Home, Hotel, Loader2, LogOut, MessageSquarePlus, Mic, Moon, Network,
-  Settings, ShoppingBag, Square, Sun, Waves, Wifi, WifiOff, Wrench,
+  Bot, ChevronDown, ChevronLeft, ChevronRight, ClipboardList,
+  Home, Hotel, Loader2, LogOut, MessageSquarePlus, Moon,
+  Settings, Square, Sun, Wifi, WifiOff, Wrench,
 } from 'lucide-react'
 import { api } from '../utils/api'
 import { useTheme } from '../ThemeContext'
@@ -13,21 +13,17 @@ import { can } from '../utils/permissions'
 import { HabboFigure } from '../components/HabboFigure'
 import { AgentDashboard, OnlineView } from '../components/AgentDashboard'
 import { SettingsView } from '../components/settings/SettingsView'
-import VoiceChat from '../components/VoiceChat'
-import { ReportsView } from '../components/ReportsView'
 import { FeedbackWidget, FeedbackView } from '../components/FeedbackWidget'
-import { MarketplaceView } from '../components/MarketplaceView'
 import { BotsTab } from '../tabs/BotsTab'
 import { UpgradeRequestsTab } from '../tabs/UpgradeRequests'
-import { IntegrationsTab } from '../tabs/IntegrationsTab'
 import { DevToolsView } from '../tabs/DevToolsView'
 import { HomeTab } from '../tabs/HomeTab'
 import { TiersTab } from '../tabs/TiersTab'
 import { UiBuildFooter } from '../UiBuildFooter'
 
 const DASHBOARD_TAB_IDS = new Set([
-  'home', 'agents', 'marketplace', 'integrations', 'reports', 'requests',
-  'settings', 'tiers', 'online', 'devtools', 'feedback', 'chat',
+  'home', 'agents', 'settings', 'requests',
+  'tiers', 'online', 'devtools', 'feedback',
 ])
 
 function resolveDashboardTab(tab, me) {
@@ -158,12 +154,10 @@ export function DashboardInner() {
   }
 
   const tabs = [
-    { id: 'home', label: 'Home', icon: Home },
-    { id: 'agents', label: 'Agents', icon: Bot },
-    { id: 'chat', label: 'Voice Chat', icon: Mic },
-    { id: 'marketplace', label: 'Marketplace', icon: ShoppingBag },
-    { id: 'integrations', label: 'Integrations', icon: Network },
-    { id: 'reports', label: 'Reports', icon: FileText },
+    { id: 'home', label: 'Dashboard', icon: Home },
+    { id: 'agents', label: 'My Agents', icon: Bot },
+    { id: 'online', label: 'Active Bots', icon: Hotel },
+    { id: 'settings', label: 'Settings', icon: Settings },
     ...(can(me, 'admin.requests') ? [{ id: 'requests', label: 'Requests', icon: ClipboardList, badge: pendingRequestCount }] : []),
   ]
 
@@ -339,13 +333,12 @@ export function DashboardInner() {
                     <div className="relative flex items-center bg-secondary rounded-lg p-0.5 gap-0">
                       {/* sliding indicator */}
                       <div
-                        className="absolute top-0.5 bottom-0.5 w-1/3 rounded-md bg-background border border-border shadow-sm transition-all duration-200 ease-in-out"
-                        style={{ left: theme === 'light' ? '0.125rem' : theme === 'dark' ? 'calc(33.333% + 0.125rem)' : 'calc(66.666% + 0.125rem)' }}
+                        className="absolute top-0.5 bottom-0.5 w-1/2 rounded-md bg-background border border-border shadow-sm transition-all duration-200 ease-in-out"
+                        style={{ left: theme === 'light' ? '0.125rem' : 'calc(50% + 0.125rem)' }}
                       />
                       {[
                         { id: 'light', icon: Sun,   label: 'Light' },
                         { id: 'dark',  icon: Moon,  label: 'Dark'  },
-                        { id: 'abyss', icon: Waves, label: 'Abyss' },
                       ].map(({ id, icon: Icon, label }) => (
                         <button
                           key={id}
@@ -411,22 +404,8 @@ export function DashboardInner() {
           {activeTab === 'agents' && (
             <AgentDashboard me={me} onActiveTeamChange={setActiveTeam} mcpTokenVersion={mcpTokenVersion} />
           )}
-        {activeTab === 'marketplace' && (
-          <div className="max-w-5xl mx-auto px-4 py-6">
-            <MarketplaceView me={me} onNavigate={setActiveTab} />
-          </div>
-        )}
-
           {activeTab === 'settings' && (
             <SettingsView me={me} onTokenChange={handleTokenChange} onKeyUpdated={refreshMe} />
-          )}
-          {activeTab === 'integrations' && (
-            <IntegrationsTab me={me} hotelStatus={hotelStatus} onHotelToggle={() => { refreshMe(); }} figureTypes={figureTypes} />
-          )}
-          {activeTab === 'reports' && (
-            <div className="max-w-5xl mx-auto px-4 py-6">
-              <ReportsView />
-            </div>
           )}
           {activeTab === 'online' && (
             <div className="max-w-5xl mx-auto px-4 py-6">
@@ -438,9 +417,6 @@ export function DashboardInner() {
           )}
           {activeTab === 'feedback' && can(me, 'admin.feedback') && (
             <FeedbackView />
-          )}
-          {activeTab === 'chat' && (
-            <VoiceChat me={me} />
           )}
           </div>
         </main>
