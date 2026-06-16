@@ -11,8 +11,8 @@ export class AnthropicProvider implements AIProvider {
   async chat(history: Message[], systemPrompt: string): Promise<string> {
     const t0 = Date.now();
     const response = await this.client.messages.create({
-      model: 'claude-3-haiku-20240307',
-      max_tokens: 100,
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 256,
       system: systemPrompt,
       messages: history.map((m) => ({ role: m.role, content: m.content })),
     });
@@ -29,7 +29,7 @@ export class AnthropicProvider implements AIProvider {
 
   async verify(): Promise<void> {
     await this.client.messages.create({
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-haiku-4-5-20251001',
       max_tokens: 1,
       messages: [{ role: 'user', content: 'ping' }],
     });
