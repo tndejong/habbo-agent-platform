@@ -1,6 +1,6 @@
--- Initial schema snapshot — extracted from server.js ensurePortalSchema()
--- All statements are idempotent (CREATE TABLE IF NOT EXISTS / ADD COLUMN IF NOT EXISTS).
--- Safe to run on existing databases. Future schema changes get their own numbered file.
+-- Portal schema reconciler — runs on every agent-portal startup.
+-- Idempotent: CREATE TABLE IF NOT EXISTS / ADD COLUMN IF NOT EXISTS / safe UPDATEs.
+-- Handles fresh installs and legacy stub tables (user_id-only user_teams/user_personas).
 
 CREATE TABLE IF NOT EXISTS portal_users (
   id INT NOT NULL AUTO_INCREMENT,
@@ -64,6 +64,9 @@ ALTER TABLE portal_users ADD COLUMN IF NOT EXISTS phone_number VARCHAR(20) NULL 
 ALTER TABLE portal_users ADD COLUMN IF NOT EXISTS hotel_enabled TINYINT(1) NOT NULL DEFAULT 1 AFTER phone_number;
 ALTER TABLE portal_users ADD UNIQUE INDEX IF NOT EXISTS uq_portal_phone_number (phone_number);
 ALTER TABLE portal_mcp_tokens ADD COLUMN IF NOT EXISTS token_raw_encrypted TEXT NULL AFTER token_hash;
+ALTER TABLE portal_users ADD COLUMN IF NOT EXISTS default_user_team_id INT NULL AFTER hotel_enabled;
+
+-- ── Marketplace templates ─────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS agent_personas (
   id INT NOT NULL AUTO_INCREMENT,
@@ -98,9 +101,17 @@ ALTER TABLE agent_teams ADD COLUMN IF NOT EXISTS tasks_json MEDIUMTEXT NOT NULL 
 ALTER TABLE agent_teams ADD COLUMN IF NOT EXISTS language VARCHAR(10) NOT NULL DEFAULT 'en';
 ALTER TABLE agent_teams ADD COLUMN IF NOT EXISTS category VARCHAR(64) NOT NULL DEFAULT '' AFTER name;
 
--- Ensure user_personas and user_teams exist before any ALTER TABLE references them.
--- These definitions are intentionally complete so a fresh install gets the correct
--- schema immediately; the identical CREATE TABLE IF NOT EXISTS blocks later become no-ops.
+ALTER TABLE agent_personas ADD COLUMN IF NOT EXISTS role VARCHAR(64) NOT NULL DEFAULT '' AFTER name;
+ALTER TABLE agent_personas ADD COLUMN IF NOT EXISTS capabilities TEXT NOT NULL DEFAULT '' AFTER role;
+ALTER TABLE agent_personas ADD COLUMN IF NOT EXISTS figure TEXT NOT NULL DEFAULT '' AFTER figure_type;
+
+UPDATE agent_teams SET name = CONCAT('Team ', id) WHERE name IS NULL OR TRIM(name) = '';
+UPDATE agent_personas SET name = CONCAT('Persona ', id) WHERE name IS NULL OR TRIM(name) = '';
+UPDATE agent_personas SET bot_name = '' WHERE bot_name != '';
+
+-- ── User orchestration ────────────────────────────────────────────────────────
+-- Full definitions for fresh installs; legacy stubs get upgraded via ALTER below.
+
 CREATE TABLE IF NOT EXISTS user_personas (
   id INT NOT NULL AUTO_INCREMENT,
   portal_user_id INT NOT NULL,
@@ -140,16 +151,75 @@ CREATE TABLE IF NOT EXISTS user_teams (
   CONSTRAINT fk_ut_user FOREIGN KEY (portal_user_id) REFERENCES portal_users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-ALTER TABLE user_teams ADD COLUMN IF NOT EXISTS marketplace_install_kind ENUM('full','solo') NULL AFTER source_team_id;
-UPDATE user_teams SET marketplace_install_kind = 'full' WHERE source_team_id IS NOT NULL AND marketplace_install_kind IS NULL;
-ALTER TABLE portal_users ADD COLUMN IF NOT EXISTS default_user_team_id INT NULL AFTER hotel_enabled;
-ALTER TABLE agent_personas ADD COLUMN IF NOT EXISTS role VARCHAR(64) NOT NULL DEFAULT '' AFTER name;
-ALTER TABLE agent_personas ADD COLUMN IF NOT EXISTS capabilities TEXT NOT NULL DEFAULT '' AFTER role;
-ALTER TABLE agent_personas ADD COLUMN IF NOT EXISTS figure TEXT NOT NULL DEFAULT '' AFTER figure_type;
+-- Legacy stub upgrade (production installs that only had user_id / team_id columns).
+ALTER TABLE user_personas ADD COLUMN IF NOT EXISTS portal_user_id INT NULL AFTER id;
+ALTER TABLE user_personas ADD COLUMN IF NOT EXISTS source_persona_id INT NULL;
+ALTER TABLE user_personas ADD COLUMN IF NOT EXISTS name VARCHAR(64) NULL;
+ALTER TABLE user_personas ADD COLUMN IF NOT EXISTS description VARCHAR(255) NOT NULL DEFAULT '';
+ALTER TABLE user_personas ADD COLUMN IF NOT EXISTS prompt MEDIUMTEXT NOT NULL DEFAULT '';
+ALTER TABLE user_personas ADD COLUMN IF NOT EXISTS role VARCHAR(64) NOT NULL DEFAULT '';
+ALTER TABLE user_personas ADD COLUMN IF NOT EXISTS capabilities TEXT NOT NULL DEFAULT '';
+ALTER TABLE user_personas ADD COLUMN IF NOT EXISTS figure_type VARCHAR(64) NOT NULL DEFAULT 'agent-m';
+ALTER TABLE user_personas ADD COLUMN IF NOT EXISTS figure TEXT NOT NULL DEFAULT '';
+ALTER TABLE user_personas ADD COLUMN IF NOT EXISTS bot_name VARCHAR(25) NOT NULL DEFAULT '';
 ALTER TABLE user_personas ADD COLUMN IF NOT EXISTS elevenlabs_voice_id VARCHAR(100) NULL;
+ALTER TABLE user_personas ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE user_personas ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP;
 
--- Marketplace personas are shared templates — bot_name is per-user and must not be stored here.
-UPDATE agent_personas SET bot_name = '' WHERE bot_name != '';
+ALTER TABLE user_teams ADD COLUMN IF NOT EXISTS portal_user_id INT NULL AFTER id;
+ALTER TABLE user_teams ADD COLUMN IF NOT EXISTS name VARCHAR(64) NULL;
+ALTER TABLE user_teams ADD COLUMN IF NOT EXISTS description VARCHAR(255) NOT NULL DEFAULT '';
+ALTER TABLE user_teams ADD COLUMN IF NOT EXISTS orchestrator_prompt MEDIUMTEXT NOT NULL DEFAULT '';
+ALTER TABLE user_teams ADD COLUMN IF NOT EXISTS execution_mode VARCHAR(20) NOT NULL DEFAULT 'concurrent';
+ALTER TABLE user_teams ADD COLUMN IF NOT EXISTS tasks_json MEDIUMTEXT NOT NULL DEFAULT '[]';
+ALTER TABLE user_teams ADD COLUMN IF NOT EXISTS language VARCHAR(10) NOT NULL DEFAULT 'en';
+ALTER TABLE user_teams ADD COLUMN IF NOT EXISTS default_room_id INT NOT NULL DEFAULT 50;
+ALTER TABLE user_teams ADD COLUMN IF NOT EXISTS marketplace_install_kind ENUM('full','solo') NULL;
+ALTER TABLE user_teams ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE user_teams ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP;
+
+SET @has_up_user_id := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'user_personas' AND COLUMN_NAME = 'user_id'
+);
+SET @sql := IF(@has_up_user_id > 0,
+  'UPDATE user_personas up JOIN portal_users pu ON pu.habbo_user_id = up.user_id SET up.portal_user_id = pu.id WHERE up.portal_user_id IS NULL AND up.user_id IS NOT NULL',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @has_ut_user_id := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'user_teams' AND COLUMN_NAME = 'user_id'
+);
+SET @sql := IF(@has_ut_user_id > 0,
+  'UPDATE user_teams ut JOIN portal_users pu ON pu.habbo_user_id = ut.user_id SET ut.portal_user_id = pu.id WHERE ut.portal_user_id IS NULL AND ut.user_id IS NOT NULL',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @has_ut_team_id := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'user_teams' AND COLUMN_NAME = 'team_id'
+);
+SET @sql := IF(@has_ut_team_id > 0,
+  'UPDATE user_teams SET source_team_id = team_id WHERE source_team_id IS NULL AND team_id IS NOT NULL',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+UPDATE user_personas SET name = CONCAT('Persona ', id) WHERE name IS NULL OR TRIM(name) = '';
+UPDATE user_teams SET name = CONCAT('Team ', id) WHERE name IS NULL OR TRIM(name) = '';
+UPDATE user_teams SET marketplace_install_kind = 'full'
+WHERE source_team_id IS NOT NULL AND marketplace_install_kind IS NULL;
+
+-- ── Remaining portal tables ───────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS agent_team_members (
   id INT NOT NULL AUTO_INCREMENT,
