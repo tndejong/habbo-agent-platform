@@ -1,26 +1,16 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import {
-  Bot, Check, CheckCircle, Edit, ExternalLink, Hotel, LayoutGrid,
-  Loader2, Lock, Network, Plus, Search, Sparkles, Terminal, Trash2,
+  Check, CheckCircle, Edit, ExternalLink, LayoutGrid,
+  Loader2, Lock, Network, Sparkles, Terminal, Trash2,
   Wifi, WifiOff, Wrench, X,
 } from 'lucide-react'
 import { api } from '../utils/api'
 import { useToast } from '../ToastContext'
-import { useHotel } from '../HotelContext'
 import { useEscapeKey } from '../utils/useEscapeKey'
-import { BotsTab } from './BotsTab'
 
-const FALLBACK_FIGURE_TYPES = {
-  'default-m':  { gender: 'M', figure: 'hd-180-1.ch-210-66.lg-270-110.sh-300-91' },
-  'citizen-m':  { gender: 'M', figure: 'hd-180-1.ch-210-66.lg-270-110.sh-300-91.ha-1012-110.hr-828-61' },
-  'agent-m':    { gender: 'M', figure: 'hd-3095-12.ch-255-64.lg-3235-96.sh-295-91.ha-3426-110.hr-3531-61.he-1601-0.ea-3169-0.fa-1211-1408.cp-3310-0.cc-3007-0.ca-1809-0.wa-2007-0' },
-  'default-f':  { gender: 'F', figure: 'hd-620-1.ch-680-66.lg-715-110.sh-905-91' },
-  'citizen-f':  { gender: 'F', figure: 'hd-620-1.ch-680-66.lg-715-110.sh-905-91.ha-1012-110.hr-828-61' },
-  'agent-f':    { gender: 'F', figure: 'hd-620-12.ch-3005-64.lg-3006-96.sh-905-91.ha-3426-110.hr-3531-61.he-1601-0.ea-3169-0' },
-}
-
-// ── Integrations Tab ──────────────────────────────────────────────────────
+// ── MCP Integration Browser ───────────────────────────────────────────────
+// Curated and popular MCP integrations — used inside the Orchestration MCP tab.
 
 // Skill-linked integrations (referenced by requires_integration in SKILL.md files)
 const CURATED_INTEGRATIONS = [
@@ -202,10 +192,8 @@ const POPULAR_INTEGRATIONS = [
 
 const ALL_CURATED = [...CURATED_INTEGRATIONS, ...POPULAR_INTEGRATIONS]
 
-export function IntegrationsTab({ me, hotelStatus, onHotelToggle, figureTypes }) {
+export function IntegrationsTab({ me }) {
   const { showToast } = useToast()
-  const { habboConnected } = useHotel()
-  const [hotelToggleBusy, setHotelToggleBusy] = useState(false)
   const [myIntegrations, setMyIntegrations] = useState([])
   const [loadingMy, setLoadingMy] = useState(true)
   const [setupTarget, setSetupTarget] = useState(null)
@@ -213,12 +201,6 @@ export function IntegrationsTab({ me, hotelStatus, onHotelToggle, figureTypes })
   const [integrationTools, setIntegrationTools] = useState({})
   const [confirmDelete, setConfirmDelete] = useState(null)
   const [busy, setBusy] = useState(false)
-
-  const [registryServers, setRegistryServers] = useState([])
-  const [registryLoading, setRegistryLoading] = useState(false)
-  const [registryNextCursor, setRegistryNextCursor] = useState(null)
-  const [registryQuery, setRegistryQuery] = useState('')
-  const [registryFetched, setRegistryFetched] = useState(false)
 
   useEscapeKey(() => {
     if (confirmDelete) setConfirmDelete(null)
@@ -235,19 +217,6 @@ export function IntegrationsTab({ me, hotelStatus, onHotelToggle, figureTypes })
   }, [showToast])
 
   useEffect(() => { loadMy() }, [loadMy])
-
-  async function loadRegistry(cursor = null) {
-    setRegistryLoading(true)
-    try {
-      const qs = cursor ? `?cursor=${encodeURIComponent(cursor)}&limit=60` : '?limit=60'
-      const data = await api(`/api/registry/servers${qs}`)
-      const servers = (data.servers || []).map(s => s.server ?? s)
-      setRegistryServers(prev => cursor ? [...prev, ...servers] : servers)
-      setRegistryNextCursor(data.metadata?.nextCursor || null)
-      setRegistryFetched(true)
-    } catch (err) { showToast('Registry unavailable: ' + err.message, 'error') }
-    finally { setRegistryLoading(false) }
-  }
 
   function findCuratedMatch(integration) {
     const n = integration.name.toLowerCase()
@@ -274,47 +243,6 @@ export function IntegrationsTab({ me, hotelStatus, onHotelToggle, figureTypes })
       command: curated.command,
       args: curated.args,
       envFields: curated.envFields,
-    })
-  }
-
-  function openRegistrySetup(server) {
-    const remote = server.remotes?.[0]
-    const stdioPackage = server.packages?.find(p => p.transport?.type === 'stdio')
-    const commonFields = {
-      name: server.title || server.name?.split('/').pop() || server.name,
-      title: server.title || server.name,
-      icon: server.icons?.[0]?.src ?? null,
-      docsUrl: server.websiteUrl ?? null,
-      existingId: null,
-    }
-
-    if (!remote && stdioPackage) {
-      const cmd = stdioPackage.runtimeHint
-        ?? (stdioPackage.registryType === 'npm' ? 'npx'
-          : stdioPackage.registryType === 'pypi' ? 'uvx'
-          : null)
-      const args = cmd === 'npx'
-        ? ['-y', stdioPackage.identifier]
-        : stdioPackage.identifier ? [stdioPackage.identifier] : []
-      setSetupTarget({
-        ...commonFields,
-        type: 'stdio',
-        command: cmd,
-        args,
-        envFields: (stdioPackage.environmentVariables ?? []).map(ev => ({
-          key: ev.name,
-          description: ev.description ?? '',
-          isRequired: !!ev.isRequired,
-          isSecret: !!ev.isSecret,
-        })),
-      })
-      return
-    }
-
-    setSetupTarget({
-      ...commonFields,
-      defaultUrl: remote?.url ?? '',
-      headers: remote?.headers ?? [],
     })
   }
 
@@ -364,96 +292,14 @@ export function IntegrationsTab({ me, hotelStatus, onHotelToggle, figureTypes })
     finally { setBusy(false) }
   }
 
-  const deduped = useMemo(() => {
-    const q = registryQuery.trim().toLowerCase()
-    if (!q) return registryServers
-    return registryServers.filter(s => {
-      const name = (s.name || '').toLowerCase()
-      const title = (s.title || '').toLowerCase()
-      const desc = (s.description || '').toLowerCase()
-      return name.includes(q) || title.includes(q) || desc.includes(q)
-    })
-  }, [registryServers, registryQuery])
-
-  async function toggleHotelIntegration() {
-    setHotelToggleBusy(true)
-    try {
-      await api('/api/my/hotel-enabled', { method: 'PATCH', body: JSON.stringify({ hotel_enabled: !habboConnected }) })
-      onHotelToggle?.()
-    } catch (err) { showToast(err.message, 'error') }
-    finally { setHotelToggleBusy(false) }
-  }
-
   return (
-    <div className="max-w-5xl mx-auto px-4 py-6 space-y-8">
+    <div className="space-y-8">
       <div>
-        <h2 className="font-semibold text-foreground">Integrations</h2>
+        <h2 className="font-semibold text-foreground">MCP Integration Browser</h2>
         <p className="text-xs text-muted-foreground mt-1">
-          Connect tools and services. Configured integrations are injected into your agent runs automatically.
+          Connect tools and services. Configured integrations are saved to your account and injected into agent runs automatically.
         </p>
       </div>
-
-      {/* Habbo Hotel integration card */}
-      <section className="space-y-3">
-        <IntSectionHeading icon={Hotel} label="Virtual Office" />
-        <div className={`bg-card border rounded-xl p-4 transition-colors ${habboConnected ? 'border-primary/20' : 'border-border'}`}>
-          <div className="flex items-start gap-4">
-            <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center flex-shrink-0">
-              <Hotel className="w-5 h-5 text-primary" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-1">
-                <p className="text-sm font-semibold text-foreground">Habbo Hotel</p>
-                {habboConnected && (
-                  <span className="flex items-center gap-1 text-[10px] text-success font-medium">
-                    <span className="w-1.5 h-1.5 rounded-full bg-success" />
-                    {hotelStatus?.loading ? 'Connecting…' : hotelStatus?.socket_online ? 'Online' : 'Offline'}
-                  </span>
-                )}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                {habboConnected
-                  ? 'Your agents have Habbo avatars and operate in virtual hotel rooms.'
-                  : 'Give your agents a physical presence — they get Habbo avatars and live in virtual hotel rooms.'}
-              </p>
-            </div>
-            <div className="flex items-center gap-2 flex-shrink-0">
-              {habboConnected && hotelStatus?.socket_online && (
-                <button
-                  onClick={async () => {
-                    try {
-                      const data = await api('/api/hotel/join', { method: 'POST' })
-                      window.open(data.login_url, '_blank')
-                    } catch (err) { showToast(err.message, 'error') }
-                  }}
-                  className="flex items-center gap-1.5 h-8 px-3 text-xs font-medium border border-border rounded-lg hover:bg-secondary transition-colors"
-                >
-                  <Hotel className="w-3 h-3" />
-                  Join Hotel
-                </button>
-              )}
-              <button
-                onClick={toggleHotelIntegration}
-                disabled={hotelToggleBusy}
-                className={`h-8 px-3 text-xs font-medium rounded-lg transition-colors disabled:opacity-50 ${
-                  habboConnected
-                    ? 'border border-border text-muted-foreground hover:bg-secondary'
-                    : 'bg-primary text-primary-foreground hover:bg-primary/90'
-                }`}
-              >
-                {hotelToggleBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : habboConnected ? 'Disable' : 'Enable virtual office'}
-              </button>
-            </div>
-          </div>
-
-          {/* Bots section — shown when hotel is connected */}
-          {habboConnected && (
-            <div className="mt-4 pt-4 border-t border-border/50">
-              <BotsTab figureTypes={figureTypes ?? FALLBACK_FIGURE_TYPES} compact />
-            </div>
-          )}
-        </div>
-      </section>
 
       {/* My Configured Integrations */}
       {!loadingMy && myIntegrations.length > 0 && (
@@ -576,80 +422,6 @@ export function IntegrationsTab({ me, hotelStatus, onHotelToggle, figureTypes })
         </div>
       </section>
 
-      {/* Browse MCP Registry */}
-      <section className="space-y-3">
-        <div className="flex items-center justify-between gap-3">
-          <IntSectionHeading icon={LayoutGrid} label="Browse MCP Registry" />
-          {registryFetched && registryServers.length > 0 && (
-            <span className="text-[10px] text-muted-foreground">{registryServers.length} servers loaded</span>
-          )}
-        </div>
-
-        {/* Search — always visible since approved cards are always shown */}
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
-          <input type="text" placeholder="Search servers…" value={registryQuery}
-            onChange={e => setRegistryQuery(e.target.value)}
-            className="w-full h-9 pl-9 pr-3 rounded-lg border border-input bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
-        </div>
-
-        {/* Unified grid — approved cards always pinned first, registry streams in below */}
-        {(() => {
-          const q = registryQuery.trim().toLowerCase()
-          const approvedVisible = ALL_CURATED.filter(c =>
-            !q || c.name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q) || c.slug.includes(q)
-          )
-          const registryVisible = deduped // already filtered by registryQuery via useMemo
-          const hasResults = approvedVisible.length > 0 || registryVisible.length > 0
-
-          return hasResults ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {approvedVisible.map(curated => {
-                const configured = getCuratedStatus(curated)
-                return (
-                  <RegistryIntCard
-                    key={`approved-${curated.slug}`}
-                    server={{
-                      name: curated.slug,
-                      title: curated.name,
-                      description: curated.description,
-                      icons: curated.icon ? [{ src: curated.icon }] : [],
-                      websiteUrl: curated.docsUrl,
-                    }}
-                    approved
-                    configured={!!configured}
-                    onAdd={() => openCuratedSetup(curated, configured ?? undefined)}
-                  />
-                )
-              })}
-
-              {registryFetched && registryVisible.map(server => (
-                <RegistryIntCard key={server.name} server={server} onAdd={() => openRegistrySetup(server)} />
-              ))}
-
-              {registryFetched && registryNextCursor && !q && (
-                <RegistryScrollSentinel loading={registryLoading} onVisible={() => loadRegistry(registryNextCursor)} />
-              )}
-            </div>
-          ) : (
-            <p className="text-center py-8 text-sm text-muted-foreground">No matching servers.</p>
-          )
-        })()}
-
-        {/* Load full registry CTA */}
-        {!registryFetched && !registryLoading && (
-          <button onClick={() => loadRegistry()}
-            className="w-full flex items-center justify-center gap-2 h-9 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
-            <Plus className="w-3.5 h-3.5" />
-            Browse 800+ more servers from the official MCP Registry
-          </button>
-        )}
-        {registryLoading && !registryFetched && (
-          <div className="flex items-center justify-center py-6">
-            <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
-          </div>
-        )}
-      </section>
 
       {/* Setup modal */}
       {setupTarget && (
@@ -660,25 +432,6 @@ export function IntegrationsTab({ me, hotelStatus, onHotelToggle, figureTypes })
   )
 }
 
-function RegistryScrollSentinel({ loading, onVisible }) {
-  const ref = useRef(null)
-  useEffect(() => {
-    const el = ref.current
-    if (!el) return
-    const observer = new IntersectionObserver(
-      ([entry]) => { if (entry.isIntersecting && !loading) onVisible() },
-      { rootMargin: '200px' }
-    )
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [loading, onVisible])
-
-  return (
-    <div ref={ref} className="col-span-full flex justify-center py-4">
-      {loading && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />}
-    </div>
-  )
-}
 
 function IntSectionHeading({ icon: Icon, label }) {
   return (
@@ -751,57 +504,6 @@ function CuratedIntCard({ curated, configured, onSetup }) {
   )
 }
 
-function RegistryIntCard({ server, onAdd, approved = false, configured = false }) {
-  const [imgError, setImgError] = useState(false)
-  const icon = server.icons?.[0]?.src
-  const title = server.title || server.name?.split('/').pop() || server.name
-  const desc = server.description || ''
-  const isStdioOnly = !server.remotes?.length && server.packages?.some(p => p.transport?.type === 'stdio')
-  let hostname = null
-  try { if (server.websiteUrl) hostname = new URL(server.websiteUrl).hostname } catch {}
-
-  return (
-    <div className={`relative bg-card border rounded-xl p-3 flex flex-col gap-2 ${approved ? 'border-primary/20' : 'border-border'}`}>
-      {approved && (
-        <span className="absolute top-2 right-2 flex items-center gap-0.5 text-[9px] font-semibold text-primary bg-primary/10 border border-primary/20 rounded px-1.5 py-0.5 leading-none">
-          ★ verified
-        </span>
-      )}
-      <div className="flex items-start gap-2.5">
-        <div className="w-8 h-8 rounded-md bg-secondary flex items-center justify-center overflow-hidden flex-shrink-0 mt-0.5">
-          {icon && !imgError
-            ? <img src={icon} alt={title} className="w-5 h-5 object-contain" onError={() => setImgError(true)} />
-            : <span className="text-xs font-bold text-muted-foreground">{title[0]?.toUpperCase() ?? '?'}</span>}
-        </div>
-        <div className="flex-1 min-w-0 pr-16">
-          <p className="text-xs font-semibold text-foreground leading-tight truncate">{title}</p>
-          {isStdioOnly ? (
-            <span className="text-[10px] text-muted-foreground flex items-center gap-0.5 mt-0.5">
-              <Terminal className="w-2.5 h-2.5" /> stdio
-            </span>
-          ) : hostname && (
-            <a href={server.websiteUrl} target="_blank" rel="noopener noreferrer"
-              className="text-[10px] text-muted-foreground hover:text-primary truncate block"
-              onClick={e => e.stopPropagation()}>
-              {hostname}
-            </a>
-          )}
-        </div>
-      </div>
-      <p className="text-[11px] text-muted-foreground leading-relaxed line-clamp-2 flex-1">{desc}</p>
-      <button onClick={onAdd}
-        className={`w-full h-7 rounded-md text-xs font-medium transition-colors ${
-          configured
-            ? 'border border-success/30 text-success hover:bg-success/10'
-            : approved
-              ? 'bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20'
-              : 'border border-border text-muted-foreground hover:text-foreground hover:bg-secondary'
-        }`}>
-        {configured ? '✓ Configured' : 'Add'}
-      </button>
-    </div>
-  )
-}
 
 function IntegrationSetupModal({ target, onClose, onSaved }) {
   const { showToast } = useToast()

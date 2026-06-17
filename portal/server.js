@@ -8,7 +8,6 @@ import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import mysql from 'mysql2/promise';
 import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
 import nodemailer from 'nodemailer';
 import { v4 as uuidv4 } from 'uuid';
 import helmet from 'helmet';
@@ -34,6 +33,8 @@ import {
   createPasswordResetToken, createMcpToken, maskTokenPreview,
 } from './server/lib/crypto.js';
 import { createMailer } from './server/lib/mail.js';
+import { createAuth } from './server/lib/auth.js';
+import { createApiKeys } from './server/lib/apiKeys.js';
 import {
   loadSkillsCatalog, collectRequiredIntegrations, resolvePersonaSkills,
 } from './server/lib/skills.js';
@@ -156,28 +157,22 @@ const {
   PORTAL_ADMIN_EMAIL,
 });
 
-function issueAuthCookie(res, payload) {
-  const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '14d' });
-  res.cookie('agent_portal_session', token, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.PORTAL_COOKIE_SECURE === 'true',
-    maxAge: 14 * 24 * 60 * 60 * 1000
-  });
-}
+// Auth primitives (user token via cookie or Bearer, service token via X-Internal-Secret).
+// See server/lib/auth.js — defined here so all routes share one implementation.
+const {
+  authRequired,
+  getSessionUser,
+  issueAuthCookie,
+  mintHotelToken,
+  requireInternalSecret,
+} = createAuth({
+  jwtSecret: JWT_SECRET,
+  internalSecret: PORTAL_INTERNAL_SECRET,
+  cookieSecure: process.env.PORTAL_COOKIE_SECURE === 'true',
+});
 
-function authRequired(req, res, next) {
-  const token = req.cookies.agent_portal_session;
-  if (!token) {
-    return res.status(401).json({ error: 'Not logged in' });
-  }
-  try {
-    req.user = jwt.verify(token, JWT_SECRET);
-    return next();
-  } catch {
-    return res.status(401).json({ error: 'Session expired' });
-  }
-}
+// Credential access (decrypt + lookup of portal_user_api_keys). Shared by routes via ctx.
+const apiKeys = createApiKeys({ db, decryptApiKey });
 
 /**
  * Middleware that checks if user has at least one API key configured (Anthropic or OpenAI).
@@ -269,30 +264,6 @@ function permRequired(permName) {
     } catch {
       res.status(500).json({ error: 'Internal error' })
     }
-  }
-}
-
-function requireInternalSecret(req, res, next) {
-  if (!PORTAL_INTERNAL_SECRET) {
-    // Fail closed: if the secret is not configured, block all internal routes
-    // rather than leaving them open. Set PORTAL_INTERNAL_SECRET in env to enable.
-    return res.status(503).json({ error: 'Internal secret not configured on this server' });
-  }
-  const secret = req.headers['x-internal-secret'];
-  if (secret !== PORTAL_INTERNAL_SECRET) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  return next();
-}
-
-function getSessionUser(req) {
-  const token = req.cookies.agent_portal_session;
-  if (!token) return null;
-
-  try {
-    return jwt.verify(token, JWT_SECRET);
-  } catch {
-    return null;
   }
 }
 
@@ -765,7 +736,7 @@ registerAccountRoutes(app, {
 });
 
 registerInternalRoutes(app, {
-  db, requireInternalSecret, decryptApiKey,
+  db, requireInternalSecret, mintHotelToken, apiKeys, decryptApiKey,
   resolvePersonaSkills, collectRequiredIntegrations,
 });
 
@@ -861,48 +832,7 @@ async function probeMcpConnection(url, authHeaders = {}, timeoutMs = 6000) {
 // ─── MCP Registry proxy ───────────────────────────────────────────────────────
 // Fetches from the official MCP Registry, filters to latest-version entries only,
 // and accumulates pages until we have enough unique servers (or run out of pages).
-app.get('/api/registry/servers', authRequired, async (req, res) => {
-  try {
-    const wantUnique = Math.min(parseInt(req.query.limit) || 60, 100);
-    let cursor = req.query.cursor || null;
-    const unique = [];
-    const seen = new Set();
-    let nextCursor = null;
-    let pages = 0;
-
-    // Keep fetching until we have enough unique servers or exhaust the registry
-    while (unique.length < wantUnique && pages < 6) {
-      let url = `https://registry.modelcontextprotocol.io/v0.1/servers?limit=100`;
-      if (cursor) url += `&cursor=${encodeURIComponent(cursor)}`;
-
-      const resp = await fetch(url, {
-        headers: { 'Accept': 'application/json' },
-        signal: AbortSignal.timeout(10000),
-      });
-      if (!resp.ok) throw new Error(`Registry returned HTTP ${resp.status}`);
-      const data = await resp.json();
-
-      for (const entry of (data.servers || [])) {
-        const meta = entry._meta?.['io.modelcontextprotocol.registry/official'];
-        if (meta?.isLatest !== true) continue;          // skip old versions
-        const name = entry.server?.name ?? entry.name;
-        if (!name || seen.has(name)) continue;           // skip dupes
-        seen.add(name);
-        unique.push(entry);
-        if (unique.length >= wantUnique) break;
-      }
-
-      nextCursor = data.metadata?.nextCursor || null;
-      cursor = nextCursor;
-      pages++;
-      if (!nextCursor) break;
-    }
-
-    res.json({ ok: true, servers: unique, metadata: { nextCursor } });
-  } catch (err) {
-    res.status(502).json({ error: err.message });
-  }
-});
+// MCP registry browse route removed — curated integrations only.
 
 registerFeedbackRoutes(app, { db, authRequired, permRequired, getPortalUserByHabboUserId });
 
@@ -910,7 +840,7 @@ registerFeedbackRoutes(app, { db, authRequired, permRequired, getPortalUserByHab
 registerHotelRoutes(app, {
   db, authRequired, rconCommand, findLiveBot,
   portalPkgVersion, distMainJsFingerprint,
-  HABBO_BASE_URL, AI_SERVICE_URL, RCON_HOST, RCON_PORT,
+  HABBO_BASE_URL, AI_SERVICE_URL, PORTAL_INTERNAL_SECRET, RCON_HOST, RCON_PORT,
 });
 
 registerSpawnSpotsRoutes(app, {
@@ -1022,7 +952,7 @@ registerMyRoutes(app, {
 // ── Voice Chat ───────────────────────────────────────────────────────────────
 
 registerChatRoutes(app, {
-  db, authRequired, getPortalUserByHabboUserId, decryptApiKey,
+  db, authRequired, getPortalUserByHabboUserId, apiKeys,
   forwardToAgentTrigger, AGENT_TRIGGER_URL, PORTAL_INTERNAL_SECRET,
   rconCommand,
 });
@@ -1054,6 +984,7 @@ function sendAppSpa(req, res) {
   return res.sendFile(indexPath);
 }
 app.get(/^\/app(\/.*)?$/, sendAppSpa);
+app.get(/^\/orchestration(\/.*)?$/, sendAppSpa);
 
 app.use(express.static(path.join(__dirname, 'dist'), {
   setHeaders(res, filePath) {

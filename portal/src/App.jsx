@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react'
-import { Routes, Route, Navigate, Outlet } from 'react-router-dom'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import { Loader2 } from 'lucide-react'
 import { api } from './utils/api'
-import { HotelProvider } from './HotelContext'
 import { AuthPage } from './auth/AuthPage'
 import { OnboardingPage } from './onboarding/OnboardingPage'
 import { DashboardInner } from './dashboard/DashboardInner'
+import { OrchestrationLayout } from './orchestration/OrchestrationLayout'
 import { UiBuildFooter } from './UiBuildFooter'
 import { ProtectedRoute } from './components/ProtectedRoute'
 
@@ -69,6 +69,15 @@ needsOnboarding ? (
         <Route index element={<Navigate to="home" replace />} />
         <Route path=":tab" element={<DashboardInner />} />
       </Route>
+
+      <Route
+        path="/orchestration"
+        element={<ProtectedRoute me={me} setMe={setMe} hasResetParams={hasResetParams} />}
+      >
+        <Route index element={<Navigate to="teams" replace />} />
+        <Route path=":tab" element={<OrchestrationLayout />} />
+      </Route>
+
       <Route path="*" element={<Navigate to={me && !hasResetParams ? (needsOnboarding ? '/onboarding' : '/app/home') : (hasResetParams ? '/login' + window.location.search : '/login')} replace />} />
     </Routes>
   )

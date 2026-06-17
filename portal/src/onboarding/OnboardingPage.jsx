@@ -105,8 +105,7 @@ export function OnboardingPage({ me, onComplete }) {
         }),
       })
 
-      // Navigate to the new agent
-      navigate(`/app/agents`)
+      navigate('/app/home')
     } catch (error) {
       console.error('Failed to create agent:', error)
     } finally {

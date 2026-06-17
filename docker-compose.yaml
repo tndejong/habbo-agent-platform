@@ -14,6 +14,9 @@ services:
     environment:
       # Allow Docker bridge networks (portal/habbo-mcp) to call RCON — tighten in production
       - RCON_ALLOWED=${HABBO_RCON_ALLOWED:-127.0.0.1;172.16.0.0/12;10.0.0.0/8}
+      # Portal internal API — secret MUST match agent-portal's PORTAL_INTERNAL_SECRET
+      - PORTAL_INTERNAL_URL=${HOTEL_PORTAL_INTERNAL_URL:-http://agent-portal:3000}
+      - PORTAL_INTERNAL_SECRET=${HOTEL_PORTAL_INTERNAL_SECRET:-change-this-secret}
     volumes:
       - ./emulator/:/app/
       - volume-arcturus-target:/app/arcturus/target
@@ -139,6 +142,8 @@ services:
       - DB_NAME=arcturus
       - DB_USER=arcturus_user
       - DB_PASSWORD=arcturus_pw
+      - PORTAL_URL=${HOTEL_PORTAL_INTERNAL_URL:-http://agent-portal:3000}
+      - PORTAL_INTERNAL_SECRET=${HOTEL_PORTAL_INTERNAL_SECRET:-change-this-secret}
     ports:
       - "127.0.0.1:${HABBO_AI_SERVICE_PORT:-3002}:3002"
     depends_on:

@@ -5,19 +5,38 @@ export function registerInternalRoutes(app, ctx) {
   const {
     db,
     requireInternalSecret,
+    mintHotelToken,
+    apiKeys,
     decryptApiKey,
     resolvePersonaSkills,
     collectRequiredIntegrations,
   } = ctx;
 
   app.get('/api/internal/user/:portalUserId/api-key/:provider', requireInternalSecret, async (req, res) => {
-    const [rows] = await db.execute(
-      'SELECT api_key_encrypted FROM portal_user_api_keys WHERE portal_user_id = ? AND provider = ? LIMIT 1',
-      [req.params.portalUserId, req.params.provider]
+    const api_key = await apiKeys.getDecryptedKey(req.params.portalUserId, req.params.provider);
+    res.json({ ok: true, api_key });
+  });
+
+  // Hotel-side variant: resolve a portal-stored key by the habbo user id. This is
+  // how the emulator / habbo-ai-service fetch keys without storing them locally.
+  app.get('/api/internal/hotel-user/:habboUserId/api-key/:provider', requireInternalSecret, async (req, res) => {
+    const api_key = await apiKeys.getDecryptedKeyByHabbo(req.params.habboUserId, req.params.provider);
+    res.json({ ok: true, api_key });
+  });
+
+  // Mint a short-lived bearer token for the in-hotel Nitro client. Called by the
+  // emulator (which has already authenticated the user via SSO) and relayed to
+  // the client via the AI settings packet.
+  app.post('/api/internal/hotel-token', requireInternalSecret, async (req, res) => {
+    const habboUserId = Number(req.body?.habbo_user_id);
+    if (!habboUserId) return res.status(400).json({ error: 'habbo_user_id required' });
+    const [[user]] = await db.execute(
+      'SELECT habbo_username FROM portal_users WHERE habbo_user_id = ? LIMIT 1',
+      [habboUserId]
     );
-    if (!rows.length) return res.json({ ok: true, api_key: null });
-    const plain = decryptApiKey(rows[0].api_key_encrypted);
-    res.json({ ok: true, api_key: plain });
+    if (!user) return res.status(404).json({ error: 'No portal user for that habbo_user_id' });
+    const token = mintHotelToken(habboUserId, user.habbo_username || '');
+    res.json({ ok: true, token });
   });
 
   app.get('/api/internal/user/:portalUserId/mcp-token', requireInternalSecret, async (req, res) => {

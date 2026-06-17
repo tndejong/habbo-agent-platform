@@ -9,4 +9,10 @@ export const config = {
     user: process.env.DB_USER || 'arcturus_user',
     password: process.env.DB_PASSWORD || 'arcturus_pw',
   },
+  // Portal is the single source of truth for API keys. This service resolves them
+  // over the internal channel (service secret) instead of storing them locally.
+  portal: {
+    url: (process.env.PORTAL_URL || 'http://agent-portal:3000').replace(/\/$/, ''),
+    internalSecret: process.env.PORTAL_INTERNAL_SECRET || '',
+  },
 };

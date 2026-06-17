@@ -11,8 +11,8 @@
 // readability more than file size.
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
-  AlertCircle, AlertTriangle, Bot, Building2, Check, ChevronLeft, Edit, Edit2, ExternalLink,
-  FileText, Hotel, LinkIcon, Loader2, Plus, Settings, Sparkles, Trash2,
+  AlertCircle, AlertTriangle, Bot, Building2, Check, ChevronLeft, Edit2, ExternalLink,
+  FileText, Loader2, Plus, Sparkles, Trash2,
   Users, Volume2, Workflow, X, Zap,
 } from 'lucide-react'
 import { api } from '../../utils/api'
@@ -29,7 +29,6 @@ import { MarkdownEditor } from '../editor/MarkdownEditor'
 import { LoadingState, ErrorBanner, EmptyState } from './states'
 import { DeployGoalModal } from './DeployGoalModal'
 import { SkillBrowser, SkillDetailModal } from './SkillBrowser'
-import { RunReportsSection } from './RunReports'
 import { parseTeamTasksJson, detectRequiredIntegrations } from '../../../shared/teams.js'
 
 export function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVersion = 0, activeSection = 'teams', onSubpageChange }) {
@@ -68,7 +67,6 @@ export function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVers
   const canViewTeams      = can(me, 'teams.view')
   const canManageTeams    = can(me, 'teams.create')   // create implies edit/delete
   const canManagePersonas = can(me, 'personas.create')
-  const canLinkBot        = can(me, 'personas.link_bot')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -156,11 +154,6 @@ export function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVers
         catch { load() }
       },
     })
-  }
-
-  async function linkPersonaBot(personaId, botName) {
-    await api(`/api/my/personas/${personaId}/bot`, { method: 'PATCH', body: JSON.stringify({ bot_name: botName || null }) })
-    setPersonas(prev => prev.map(p => p.id === personaId ? { ...p, bot_name: botName || null } : p))
   }
 
   async function savePersona(data) {
@@ -364,18 +357,14 @@ export function IntegratedView({ me, onAfterTrigger, liveBots = [], mcpTokenVers
               <PersonaCard
                 key={persona.id}
                 persona={persona}
-                bots={bots}
-                personas={personas}
                 onEdit={canManagePersonas ? () => setPersonaPage({ persona }) : undefined}
                 onDelete={canManagePersonas ? () => deletePersona(persona) : undefined}
-                onLinkBot={canLinkBot ? linkPersonaBot : undefined}
               />
             ))}
           </div>
         )}
       </section>}
 
-      {activeSection === 'reports' && <RunReportsSection me={me} />}
 
       {/* Deploy goal modal */}
       {deployModal && (
@@ -460,17 +449,8 @@ function IntegratedTeamCard({ team, canManage = false, bots = [], liveBots = [],
     return `${conflicts.map(c => c.name).join(', ')} ${conflicts.length === 1 ? 'is' : 'are'} active in room ${conflicts[0].room_id}`
   }, [members, memberBotNames, bots, selectedRoomId])
 
-  const hasUnlinked = useMemo(() => habboConnected && members !== null && members.some(m => !m.bot_name?.trim()), [habboConnected, members])
   const noKey = !hasApiKey
   const noMcpToken = !hasMcpToken
-
-  // Members whose bot_name is set but no longer exists in the hotel bot list
-  const missingBots = useMemo(() => {
-    if (!habboConnected || !members || !bots) return []
-    return members
-      .filter(m => m.bot_name?.trim() && !bots.some(b => b.name?.toLowerCase() === m.bot_name.toLowerCase()))
-      .map(m => m.bot_name)
-  }, [habboConnected, members, bots])
 
   // Detect which integrations the team tasks/capabilities require and cross-check
   // against the user's connected integrations (by name substring match).
@@ -480,7 +460,7 @@ function IntegratedTeamCard({ team, canManage = false, bots = [], liveBots = [],
     return required.filter(svc => !connectedNames.some(n => n.includes(svc)))
   }, [team, members, integrations])
 
-  const blocked = !!roomConflict || hasUnlinked || missingBots.length > 0 || noKey || noMcpToken || missingIntegrations.length > 0
+  const blocked = !!roomConflict || noKey || noMcpToken || missingIntegrations.length > 0
 
   const memberCount = team.member_count ?? (members || []).length
 
@@ -488,16 +468,14 @@ function IntegratedTeamCard({ team, canManage = false, bots = [], liveBots = [],
     <div className={`rounded-xl border bg-card overflow-hidden card-lift flex flex-col ${roomConflict ? 'border-warning/40' : 'border-border'}`}>
 
       {/* Status banner */}
-      {(roomConflict || hasUnlinked || missingBots.length > 0 || noKey || noMcpToken || missingIntegrations.length > 0) && (
+      {(roomConflict || noKey || noMcpToken || missingIntegrations.length > 0) && (
         <div className="flex items-center gap-2 px-4 py-2 bg-warning/10 border-b border-warning/20 text-xs text-warning">
           <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
           {roomConflict
             ? `${roomConflict} — can't deploy to room ${selectedRoomId}`
-            : hasUnlinked ? 'Some agents are missing a bot link'
-            : missingBots.length > 0 ? `Bot${missingBots.length > 1 ? 's' : ''} deleted from hotel: ${missingBots.join(', ')} — reassign or recreate them`
-            : noKey ? 'Add an Anthropic API key in Settings'
-            : noMcpToken ? 'Open Account and use Start building! to create your MCP token'
-            : `Missing integrations: ${missingIntegrations.map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(', ')} — connect them in Settings → Integrations`}
+            : noKey ? 'Add an Anthropic API key in Settings → Integrations'
+            : noMcpToken ? 'Create your MCP token in Orchestration → MCP'
+            : `Missing integrations: ${missingIntegrations.map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(', ')} — connect them in Orchestration → MCP`}
         </div>
       )}
 
@@ -558,12 +536,11 @@ function IntegratedTeamCard({ team, canManage = false, bots = [], liveBots = [],
                 const figure = bots.find(b => b.name === m.bot_name)?.figure || null
                 const liveBot = bots.find(b => b.name?.toLowerCase() === m.bot_name?.toLowerCase())
                 const inWrongRoom = liveBot && liveBot.room_id > 0 && selectedRoomId && liveBot.room_id !== selectedRoomId
-                const noBot = !m.bot_name?.trim()
                 return (
                   <div key={m.id ?? `${m.persona_id}-${m.name}`} className="flex flex-col items-center gap-1 group/member">
-                    <div className={`relative rounded-lg overflow-hidden border ${noBot ? 'border-destructive/40 bg-destructive/5' : inWrongRoom ? 'border-warning/40 bg-warning/5' : 'border-border bg-secondary/30'}`}>
+                    <div className={`relative rounded-lg overflow-hidden border ${inWrongRoom ? 'border-warning/40 bg-warning/5' : 'border-border bg-secondary/30'}`}>
                       <HabboFigure figure={figure} size="sm" animate={true} />
-                      {(noBot || inWrongRoom) && (
+                      {inWrongRoom && (
                         <div className="absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full flex items-center justify-center bg-background border border-border">
                           <AlertTriangle className="w-2 h-2 text-warning" />
                         </div>
@@ -610,9 +587,8 @@ function IntegratedTeamCard({ team, canManage = false, bots = [], liveBots = [],
             onClick={() => onDeploy(selectedRoomId)}
             disabled={deploying || blocked}
             title={
-              noKey ? 'Add an Anthropic API key in Settings'
-              : noMcpToken ? 'Open Account and use Start building! to create your MCP token'
-              : missingBots.length > 0 ? `Bots deleted from hotel: ${missingBots.join(', ')}`
+              noKey ? 'Add an Anthropic API key in Settings → Integrations'
+              : noMcpToken ? 'Create your MCP token in Orchestration → MCP'
               : missingIntegrations.length > 0 ? `Connect integrations first: ${missingIntegrations.join(', ')}`
               : roomConflict || undefined
             }
@@ -1179,32 +1155,10 @@ function IntegratedTeamForm({ team, personas, rooms = [], isDev, onSave, onCance
 
 // ── Persona Card ──────────────────────────────────────────────────────────
 
-function PersonaCard({ persona, bots = [], personas = [], onEdit, onDelete, onLinkBot }) {
-  const { habboConnected } = useHotel()
-  const { showToast } = useToast()
+function PersonaCard({ persona, onEdit, onDelete }) {
   const { catalog } = useSkillsCatalog()
-  const linkedBot = persona.bot_name
-    ? bots.find(b => b.name?.toLowerCase() === persona.bot_name.toLowerCase())
-    : null
-  const botMissing = !!persona.bot_name && !linkedBot
-  const figure = persona.figure || linkedBot?.figure || ''
-
-  // Bot names already claimed by OTHER personas — exclude from the dropdown.
-  const takenBotNames = useMemo(() =>
-    new Set(
-      personas
-        .filter(p => p.id !== persona.id && p.bot_name)
-        .map(p => p.bot_name.toLowerCase())
-    ),
-  [personas, persona.id])
-
-  const [linking, setLinking] = useState(false)
-  const [selectedBot, setSelectedBot] = useState(persona.bot_name || '')
-  const [savingBot, setSavingBot] = useState(false)
+  const figure = persona.figure || ''
   const [skillDetail, setSkillDetail] = useState(null)
-
-  // Keep selectedBot in sync if persona.bot_name changes externally
-  useEffect(() => { setSelectedBot(persona.bot_name || '') }, [persona.bot_name])
 
   // Resolve slugs to { slug, title } pairs so chips are clickable
   const skills = useMemo(() => {
@@ -1219,24 +1173,6 @@ function PersonaCard({ persona, bots = [], personas = [], onEdit, onDelete, onLi
     return parseSkills(persona.capabilities, catalog, { max: 5 }).map(title => ({ slug: null, title }))
   }, [persona.capabilities, catalog])
 
-  async function handleLinkBot() {
-    setSavingBot(true)
-    try {
-      await onLinkBot(persona.id, selectedBot)
-      showToast(
-        selectedBot
-          ? `"${selectedBot}" linked to ${persona.name}`
-          : `Bot unlinked from ${persona.name}`,
-        'success'
-      )
-      setLinking(false)
-    } catch (e) {
-      showToast(e.message || 'Failed to link bot', 'error')
-    } finally {
-      setSavingBot(false)
-    }
-  }
-
   return (
     <>
     <div
@@ -1248,11 +1184,6 @@ function PersonaCard({ persona, bots = [], personas = [], onEdit, onDelete, onLi
         {/* Figure column */}
         <div className="flex flex-col items-center justify-start pt-4 px-4 pb-4 bg-secondary/30 border-r border-border flex-shrink-0 w-24">
           <HabboFigure figure={figure} figureType={persona.figure_type} size="xl" animate={true} />
-          {persona.bot_name && !linking && (
-            <span className={`mt-2 text-[10px] text-center font-medium leading-tight truncate w-full text-center ${botMissing ? 'text-destructive/80' : 'text-info'}`}>
-              {persona.bot_name}
-            </span>
-          )}
         </div>
 
         {/* Main content */}
@@ -1317,69 +1248,7 @@ function PersonaCard({ persona, bots = [], personas = [], onEdit, onDelete, onLi
             </div>
           )}
 
-          {/* Bot link footer — only when hotel integration is active */}
-          {habboConnected && <div className="mt-auto pt-2 border-t border-border flex items-center gap-2" onClick={e => e.stopPropagation()}>
-            {onLinkBot && linking ? (
-              <>
-                <Bot className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
-                <select
-                  value={selectedBot}
-                  onChange={e => setSelectedBot(e.target.value)}
-                  className="flex-1 h-7 text-xs bg-background border border-border rounded-md px-2 focus:outline-none focus:ring-1 focus:ring-primary/40 text-foreground"
-                  autoFocus
-                >
-                  <option value="">— No bot —</option>
-                  {bots.map(b => {
-                    const taken = takenBotNames.has(b.name?.toLowerCase())
-                    return (
-                      <option key={b.id ?? b.name} value={b.name} disabled={taken}>
-                        {b.name}{taken ? ' (linked to another agent)' : ''}
-                      </option>
-                    )
-                  })}
-                </select>
-                <button
-                  onClick={handleLinkBot}
-                  disabled={savingBot}
-                  className="h-7 px-3 text-xs bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50 flex items-center gap-1 flex-shrink-0"
-                >
-                  {savingBot ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
-                  {savingBot ? 'Saving…' : 'Save'}
-                </button>
-                <button
-                  onClick={() => { setLinking(false); setSelectedBot(persona.bot_name || '') }}
-                  className="h-7 w-7 flex items-center justify-center border border-border rounded-md hover:bg-secondary transition-colors flex-shrink-0"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              </>
-            ) : (
-              <>
-                {persona.bot_name ? (
-                  botMissing ? (
-                    <span className="inline-flex items-center gap-1.5 text-xs bg-destructive/10 text-destructive border border-destructive/20 rounded-full px-2.5 py-0.5" title="This bot no longer exists — link a new one">
-                      <AlertTriangle className="w-3 h-3" /> {persona.bot_name} not found
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1.5 text-xs bg-info/10 text-info border border-info/20 rounded-full px-2.5 py-0.5">
-                      <Bot className="w-3 h-3" /> {persona.bot_name}
-                    </span>
-                  )
-                ) : (
-                  <span className="text-xs text-muted-foreground/50 italic">No bot linked</span>
-                )}
-                {onLinkBot && (
-                  <button
-                    onClick={() => setLinking(true)}
-                    className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground border border-border hover:border-primary/40 rounded-md px-2.5 py-1 transition-colors flex-shrink-0"
-                  >
-                    <LinkIcon className="w-3 h-3" />
-                    {persona.bot_name ? 'Change bot' : 'Link bot'}
-                  </button>
-                )}
-              </>
-            )}
-          </div>}
+          {/* bot_name stored as optional metadata — not shown in card UI */}
         </div>
       </div>
     </div>

@@ -1,9 +1,10 @@
 import express from 'express';
 import { config } from './config.js';
 import { runMigrations } from './migrate.js';
-import { setApiKeyHandler } from './routes/setApiKey.js';
 import { initSessionHandler } from './routes/initSession.js';
 import { chatMessageHandler } from './routes/chatMessage.js';
+import { requireServiceSecret } from './middleware/requireServiceSecret.js';
+import { resolveAnthropicKey } from './portal/keyResolver.js';
 import { createProvider } from './providers/index.js';
 import { initSession } from './sessions.js';
 import { pool } from './db.js';
@@ -11,23 +12,23 @@ import { pool } from './db.js';
 const app = express();
 app.use(express.json());
 
-app.post('/api/set-api-key', setApiKeyHandler);
-app.post('/api/init-session', initSessionHandler);
-app.post('/api/chat', chatMessageHandler);
+// All endpoints are machine-to-machine (emulator -> this service); guard with the service secret.
+app.post('/api/init-session', requireServiceSecret, initSessionHandler);
+app.post('/api/chat', requireServiceSecret, chatMessageHandler);
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
 async function restoreSessionsOnStartup(): Promise<void> {
   try {
     const [rows] = await pool.execute<any[]>(
-      `SELECT a.bot_id, a.persona, a.user_id, k.api_key, k.provider
-       FROM ai_agent_configs a
-       JOIN ai_api_keys k ON k.user_id = a.user_id AND k.verified = 1
-       WHERE a.active = 1 AND a.bot_id IS NOT NULL AND a.persona IS NOT NULL`
+      `SELECT bot_id, persona, user_id
+       FROM ai_agent_configs
+       WHERE active = 1 AND bot_id IS NOT NULL AND persona IS NOT NULL`
     );
     for (const row of rows) {
       try {
-        const provider = createProvider(row.provider || 'anthropic', row.api_key);
+        const apiKey = await resolveAnthropicKey(row.user_id);
+        const provider = createProvider('anthropic', apiKey);
         initSession(row.bot_id, provider, row.persona);
         console.log(`[startup] Restored session for bot_id ${row.bot_id}`);
       } catch (e) {

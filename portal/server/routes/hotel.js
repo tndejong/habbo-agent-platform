@@ -12,6 +12,7 @@ export function registerHotelRoutes(app, ctx) {
     distMainJsFingerprint,
     HABBO_BASE_URL,
     AI_SERVICE_URL,
+    PORTAL_INTERNAL_SECRET,
     RCON_HOST,
     RCON_PORT,
   } = ctx;
@@ -292,23 +293,19 @@ export function registerHotelRoutes(app, ctx) {
 
     let personaUpdated = false;
     if (newPersona !== config.persona) {
-      const [[keyRow]] = await db.execute(
-        'SELECT api_key, provider FROM ai_api_keys WHERE user_id=? AND verified=1',
-        [habboUserId]
-      );
-      if (keyRow) {
-        const updatedConfig = { ...config, name: newName };
-        const bot = await findLiveBot(updatedConfig, habboUserId);
-        if (bot) {
-          try {
-            const r = await fetch(`${AI_SERVICE_URL}/api/init-session`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ bot_id: bot.id, user_id: habboUserId, persona: newPersona, api_key: keyRow.api_key, provider: keyRow.provider || 'anthropic' }),
-            });
-            personaUpdated = r.ok;
-          } catch { /* AI service unavailable */ }
-        }
+      // The AI service resolves the API key from the portal by user id, so we
+      // only relay the new persona over the internal service channel.
+      const updatedConfig = { ...config, name: newName };
+      const bot = await findLiveBot(updatedConfig, habboUserId);
+      if (bot) {
+        try {
+          const r = await fetch(`${AI_SERVICE_URL}/api/init-session`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Internal-Secret': PORTAL_INTERNAL_SECRET },
+            body: JSON.stringify({ bot_id: bot.id, user_id: habboUserId, persona: newPersona, provider: 'anthropic' }),
+          });
+          personaUpdated = r.ok;
+        } catch { /* AI service unavailable */ }
       }
     }
 

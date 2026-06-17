@@ -14,6 +14,9 @@ services:
       - HABBO_SQL_BASE_FILE=${HABBO_SQL_BASE_FILE:-arcturus_3.0.0-stable_base_database--compact.sql}
       - HABBO_SQL_MIGRATION_FILE=${HABBO_SQL_MIGRATION_FILE:-arcturus_migration_3.0.0_to_3.5.0.sql}
       - RCON_ALLOWED=${HABBO_RCON_ALLOWED:-127.0.0.1}
+      # Portal internal API — secret MUST match agent-portal's PORTAL_INTERNAL_SECRET
+      - PORTAL_INTERNAL_URL=${HOTEL_PORTAL_INTERNAL_URL:-http://agent-portal:3000}
+      - PORTAL_INTERNAL_SECRET=${HOTEL_PORTAL_INTERNAL_SECRET:-change-this-secret}
     ports:
       - ${HABBO_GAME_PORT:-3000}:3000
       - 127.0.0.1:${HABBO_RCON_HOST_PORT:-3001}:3001
@@ -172,6 +175,8 @@ services:
       - DB_NAME=arcturus
       - DB_USER=arcturus_user
       - DB_PASSWORD=arcturus_pw
+      - PORTAL_URL=${HOTEL_PORTAL_INTERNAL_URL:-http://agent-portal:3000}
+      - PORTAL_INTERNAL_SECRET=${HOTEL_PORTAL_INTERNAL_SECRET:-change-this-secret}
     ports:
       - "127.0.0.1:${HABBO_AI_SERVICE_PORT:-3002}:3002"
     depends_on:

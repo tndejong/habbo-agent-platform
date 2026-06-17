@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import ReactMarkdown from 'react-markdown'
 import { Mic, MicOff, Square, Settings, Bot, User, AlertTriangle, Loader2, Radio, ChevronRight, Terminal, Send } from 'lucide-react'
 import { api } from '../utils/api'
 import { useNavigate } from 'react-router-dom'
 
 // ── VoiceChat ─────────────────────────────────────────────────────────────────
 // Phone-optimised voice assistant for the hotel.
-// Records audio (MediaRecorder), sends to Whisper STT, matches intent,
-// and plays ElevenLabs TTS responses. Also monitors active runs and
+// Records audio (MediaRecorder), sends to Whisper STT, talks to the
+// orchestration voice agent (Anthropic + tools), and plays ElevenLabs TTS.
 // reads out agent talk_bot messages in each bot's own ElevenLabs voice.
 
 const TALK_BOT_RE = /\[tool→\] talk_bot \{[^}]*?"bot_id"\s*:\s*(\d+)[^}]*?"message"\s*:\s*"((?:[^"\\]|\\.)*)"/
@@ -21,7 +22,7 @@ export default function VoiceChat({ me }) {
   const navigate = useNavigate()
 
   // ── key availability ──────────────────────────────────────────────────────
-  const [keys, setKeys] = useState(null)   // { openai, elevenlabs } — masked strings or null
+  const [keys, setKeys] = useState(null)   // { openai, elevenlabs, anthropic } — masked strings or null
   const [keysLoading, setKeysLoading] = useState(true)
 
   useEffect(() => {
@@ -37,7 +38,8 @@ export default function VoiceChat({ me }) {
 
   const hasOpenAI = keys && keys['openai']
   const hasElevenLabs = keys && keys['elevenlabs']
-  const ready = hasOpenAI && hasElevenLabs
+  const hasAnthropic = keys && keys['anthropic']
+  const ready = hasOpenAI && hasElevenLabs && hasAnthropic
 
   // ── hotel state ───────────────────────────────────────────────────────────
   const [activeRun, setActiveRun] = useState(null)
@@ -391,16 +393,22 @@ export default function VoiceChat({ me }) {
 
   if (!ready) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center p-8 gap-6 max-w-md mx-auto text-center">
+      <div className="flex-1 flex flex-col items-center justify-center p-8 gap-6 w-full text-center">
         <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center">
           <Mic className="w-8 h-8 text-muted-foreground" />
         </div>
         <div>
           <h2 className="text-xl font-semibold mb-2">Voice Chat Setup Required</h2>
           <p className="text-sm text-muted-foreground mb-4">
-            To use Voice Chat you need to add API keys for speech recognition and text-to-speech.
+            Voice Chat needs API keys for speech recognition, AI orchestration, and text-to-speech.
           </p>
           <div className="text-left space-y-3 mb-6">
+            <SetupRow
+              done={!!hasAnthropic}
+              label="Anthropic API Key"
+              detail="Powers the voice orchestration assistant"
+              link="https://console.anthropic.com"
+            />
             <SetupRow
               done={!!hasOpenAI}
               label="OpenAI API Key"
@@ -420,7 +428,7 @@ export default function VoiceChat({ me }) {
           className="flex items-center gap-2 px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
         >
           <Settings className="w-4 h-4" />
-          Go to Settings → Voice & Audio
+          Go to Settings → Integrations
         </button>
       </div>
     )
@@ -428,13 +436,13 @@ export default function VoiceChat({ me }) {
 
   // ── main voice chat UI ────────────────────────────────────────────────────
   return (
-    <div className="flex flex-col h-full max-w-2xl mx-auto w-full">
+    <div className="flex flex-col h-full w-full">
       {/* header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <div className="flex items-center gap-2">
           <Radio className="w-4 h-4 text-primary" />
           <span className="font-semibold text-sm">Hotel Voice Chat</span>
-          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-primary/10 text-primary">v3</span>
+          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-primary/10 text-primary">agent</span>
         </div>
         <div className="flex items-center gap-3 text-xs text-muted-foreground">
           {ttsPlaying && (
@@ -464,7 +472,7 @@ export default function VoiceChat({ me }) {
           <div className="text-center text-muted-foreground text-sm py-8">
             <Mic className="w-8 h-8 mx-auto mb-3 opacity-30" />
             <p className="font-medium">Tap the mic and start talking</p>
-            <p className="text-xs mt-1 opacity-70">Try: "What teams are active?" or "Start the marketing team"</p>
+            <p className="text-xs mt-1 opacity-70">Ask about your teams, start a run, or check what's active</p>
           </div>
         )}
         {chatHistory.map((msg, i) => (
@@ -628,6 +636,25 @@ function WaveVisualizer({ bars }) {
   )
 }
 
+function ChatMarkdown({ text }) {
+  if (!text) return null
+  return (
+    <div className="chat-markdown text-sm leading-relaxed
+      [&_p]:my-1.5 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0
+      [&_strong]:font-semibold [&_em]:italic
+      [&_ul]:my-1.5 [&_ul]:pl-4 [&_ul]:list-disc [&_ul]:space-y-0.5
+      [&_ol]:my-1.5 [&_ol]:pl-4 [&_ol]:list-decimal [&_ol]:space-y-0.5
+      [&_li]:pl-0.5
+      [&_code]:bg-background/60 [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-xs [&_code]:font-mono
+      [&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2
+      [&_h1]:text-base [&_h1]:font-semibold [&_h1]:mt-2 [&_h1]:mb-1
+      [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:mt-2 [&_h2]:mb-1
+      [&_h3]:text-sm [&_h3]:font-medium [&_h3]:mt-1.5 [&_h3]:mb-0.5">
+      <ReactMarkdown>{text}</ReactMarkdown>
+    </div>
+  )
+}
+
 function ChatBubble({ msg }) {
   const isUser = msg.role === 'user'
   const isBot = msg.role === 'bot'
@@ -668,7 +695,7 @@ function ChatBubble({ msg }) {
             ? 'bg-blue-500/10 text-foreground border border-blue-500/20 rounded-bl-sm'
             : 'bg-muted text-foreground rounded-bl-sm'
         }`}>
-          {msg.text}
+          {isUser ? msg.text : <ChatMarkdown text={msg.text} />}
         </div>
       </div>
       {isUser && (

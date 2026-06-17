@@ -1,28 +1,28 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
-  AlertCircle, AlertTriangle, ArrowUpCircle, Bell, Bot, CheckCircle,
-  ChevronRight, ClipboardList, Home, Hotel, Key,
-  Mic, Settings, Users, Wifi, WifiOff,
+  AlertCircle, ArrowUpCircle, Bell, Bot, CheckCircle,
+  ChevronRight, Hotel, Key, Settings, Sparkles, Users, Wifi, WifiOff,
 } from 'lucide-react'
 import { api } from '../utils/api'
 import { useHotel } from '../HotelContext'
 import { HabboFigure } from '../components/HabboFigure'
+import { UpgradeRequestModal } from './UpgradeRequests'
 
 // ── Home Tab ──────────────────────────────────────────────────────────────
 
 const QUICK_LINKS = [
-  { label: 'My Agents',    description: 'Create and manage your AI agents', icon: Bot,     tab: 'agents'   },
-  { label: 'Voice Chat',   description: 'Talk to your agents using voice',  icon: Mic,     tab: 'voice'   },
-  { label: 'Active Bots',  description: 'See bots working in the hotel',    icon: Hotel,   tab: 'online'   },
-  { label: 'Settings',     description: 'Account and API key settings',     icon: Settings, tab: 'settings' },
+  { label: 'Hotel',    description: 'View active bots and hotel status',  icon: Hotel,   tab: 'hotel'   },
+  { label: 'Settings', description: 'Account and API key settings',       icon: Settings, tab: 'settings' },
 ]
 
 export function HomeTab({ me, onNavigate }) {
   const { hotelStatus, habboConnected } = useHotel()
+  const navigate = useNavigate()
   const activeTier = me?.ai_tier || 'basic'
+  const isPro = activeTier !== 'basic'
   const [upgradeRequest, setUpgradeRequest] = useState(null)
   const [showUpgradeModal, setShowUpgradeModal] = useState(false)
-  const [teamWarning, setTeamWarning] = useState(null) // { teamName } | null
 
   useEffect(() => {
     if (activeTier !== 'basic') return
@@ -30,22 +30,6 @@ export function HomeTab({ me, onNavigate }) {
       .then(d => setUpgradeRequest(d.request || null))
       .catch(() => {})
   }, [activeTier])
-
-  useEffect(() => {
-    if (activeTier === 'basic' || !habboConnected) {
-      setTeamWarning(null)
-      return
-    }
-    Promise.all([api('/api/my/teams'), api('/api/agents/bots?mine=true')])
-      .then(([td, bd]) => {
-        const botNames = new Set((bd.bots || []).map(b => b.name?.toLowerCase()).filter(Boolean))
-        const bad = (td.teams || []).find(t =>
-          (t.members || []).some(m => !m.bot_name?.trim() || !botNames.has(m.bot_name.toLowerCase()))
-        )
-        setTeamWarning(bad ? { teamName: bad.name } : null)
-      })
-      .catch(() => {})
-  }, [activeTier, habboConnected])
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
@@ -97,10 +81,10 @@ export function HomeTab({ me, onNavigate }) {
       {/* Welcome card — clickable → Settings */}
       {(() => {
         const setupSteps = activeTier === 'basic'
-          ? [{ done: false, label: 'Upgrade to Pro to deploy agents', sub: 'Basic is read-only', tab: 'tiers' }]
+          ? []
           : [
               !me.has_anthropic_key && { done: false, label: 'Add your Anthropic API key', sub: 'Required for AI processing', tab: 'settings' },
-              !me.has_mcp_token    && { done: false, label: 'Connect your Habbo MCP key',  sub: 'Required to deploy teams',    tab: 'settings' },
+              !me.has_mcp_token    && { done: false, label: 'Create your MCP token',        sub: 'Required to deploy teams',  specialNav: () => navigate('/orchestration/mcp') },
             ].filter(Boolean)
 
         const allDone = setupSteps.length === 0
@@ -120,7 +104,7 @@ export function HomeTab({ me, onNavigate }) {
               <div className="flex-1 min-w-0">
                 <h2 className="text-lg sm:text-2xl font-semibold tracking-tight text-foreground truncate">Welcome back, {me.username}</h2>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Manage your hotel bots, agent teams, and MCP connections.
+                  Manage your hotel bots and integrations. Launch orchestration to run agent teams.
                 </p>
                 {me.habbo_username && (
                   <p className="text-xs text-muted-foreground mt-2 flex items-center gap-1.5">
@@ -139,7 +123,7 @@ export function HomeTab({ me, onNavigate }) {
                 {setupSteps.map((step, i) => (
                   <button
                     key={i}
-                    onClick={() => onNavigate(step.tab)}
+                    onClick={step.specialNav ? (e) => { e.stopPropagation(); step.specialNav() } : () => onNavigate(step.tab)}
                     className="w-full flex items-center gap-3 rounded-lg px-3 py-2.5 bg-secondary/50 hover:bg-secondary transition-colors text-left"
                   >
                     <div className="w-5 h-5 rounded-full border-2 border-primary/40 flex items-center justify-center flex-shrink-0">
@@ -155,28 +139,12 @@ export function HomeTab({ me, onNavigate }) {
               </div>
             )}
 
-            {allDone && activeTier !== 'basic' && (
+            {allDone && isPro && (
               <div className="mt-4 pt-4 border-t border-border" onClick={e => e.stopPropagation()}>
-                {teamWarning ? (
-                  <button
-                    onClick={() => onNavigate('agents')}
-                    className="w-full flex items-center gap-3 rounded-lg px-3 py-2.5 bg-warning/10 border border-warning/20 hover:bg-warning/15 transition-colors text-left"
-                  >
-                    <AlertTriangle className="w-4 h-4 text-warning flex-shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium text-warning">Team needs attention</p>
-                      <p className="text-xs text-warning/70 truncate">
-                        <span className="font-medium">"{teamWarning.teamName}"</span> has agents missing a linked bot
-                      </p>
-                    </div>
-                    <ChevronRight className="w-3.5 h-3.5 text-warning/60 flex-shrink-0" />
-                  </button>
-                ) : (
-                  <div className="flex items-center gap-2">
-                    <CheckCircle className="w-4 h-4 text-success flex-shrink-0" />
-                    <p className="text-xs text-success font-medium">All set — your agents are ready to deploy.</p>
-                  </div>
-                )}
+                <div className="flex items-center gap-2">
+                  <CheckCircle className="w-4 h-4 text-success flex-shrink-0" />
+                  <p className="text-xs text-success font-medium">All set — your agents are ready to deploy.</p>
+                </div>
               </div>
             )}
           </button>
@@ -194,18 +162,56 @@ export function HomeTab({ me, onNavigate }) {
           label="AI Tier"
           value={activeTier.charAt(0).toUpperCase() + activeTier.slice(1)}
           icon={Key}
-          onClick={() => onNavigate('tiers')}
-          hint="View all plans →"
+          onClick={() => onNavigate('settings')}
+          hint="View account →"
         />
         <StatusCard
           label="Hotel"
           value={hotelStatus.loading ? 'Checking…' : hotelStatus.socket_online ? 'Online' : 'Offline'}
           icon={hotelStatus.socket_online ? Wifi : WifiOff}
           valueClassName={hotelStatus.socket_online ? 'text-success' : 'text-muted-foreground'}
-          onClick={() => onNavigate('online')}
-          hint="View online agents →"
+          onClick={habboConnected ? () => onNavigate('hotel') : undefined}
+          hint={habboConnected ? 'View online agents →' : undefined}
         />
       </div>
+
+      {/* Orchestration CTA */}
+      {isPro ? (
+        <button
+          type="button"
+          onClick={() => navigate('/orchestration/teams')}
+          className="w-full text-left bg-card border border-primary/20 rounded-xl p-4 hover:border-primary/40 hover:bg-primary/5 transition-colors"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
+              <Bot className="w-4.5 h-4.5 text-primary" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-foreground">Agent Orchestration</p>
+              <p className="text-xs text-muted-foreground mt-0.5">Manage teams, personas, skills, and live agent runs.</p>
+            </div>
+            <ChevronRight className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+          </div>
+        </button>
+      ) : (
+        <div className="bg-card border border-border rounded-xl p-4">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-secondary flex items-center justify-center flex-shrink-0">
+              <Sparkles className="w-4 h-4 text-muted-foreground" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-foreground">Agent Orchestration</p>
+              <p className="text-xs text-muted-foreground mt-0.5">Deploy teams of AI agents to the hotel. Available on Pro tier.</p>
+            </div>
+            <button
+              onClick={() => setShowUpgradeModal(true)}
+              className="shrink-0 text-xs h-8 px-3 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+            >
+              Request Pro
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Quick Links */}
       <div className="space-y-3">

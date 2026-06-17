@@ -17,10 +17,11 @@ const TYPE_OPTIONS = [
 
 const PAGE_OPTIONS = [
   { label: 'Home', value: 'home' },
-  { label: 'Agents', value: 'agents' },
-  { label: 'Marketplace', value: 'marketplace' },
-  { label: 'Reports', value: 'reports' },
-  { label: 'Integrations', value: 'integrations' },
+  { label: 'Hotel', value: 'hotel' },
+  { label: 'Orchestration – Teams', value: 'orchestration-teams' },
+  { label: 'Orchestration – Personas', value: 'orchestration-personas' },
+  { label: 'Orchestration – Marketplace', value: 'orchestration-marketplace' },
+  { label: 'Orchestration – MCP', value: 'orchestration-mcp' },
   { label: 'Settings', value: 'settings' },
   { label: 'Other', value: 'other' },
 ]

@@ -20,6 +20,15 @@ apply_config_overrides() {
   if [ -n "${RCON_ALLOWED:-}" ]; then
     sed -i "s#^rcon.allowed=.*#rcon.allowed=${RCON_ALLOWED}#g" "$cfg"
   fi
+
+  # Portal internal API: the shared service secret MUST match the portal's
+  # PORTAL_INTERNAL_SECRET, so drive it from env rather than the baked default.
+  if [ -n "${PORTAL_INTERNAL_URL:-}" ]; then
+    sed -i "s#^portal.internal.url=.*#portal.internal.url=${PORTAL_INTERNAL_URL}#g" "$cfg"
+  fi
+  if [ -n "${PORTAL_INTERNAL_SECRET:-}" ]; then
+    sed -i "s#^portal.internal.secret=.*#portal.internal.secret=${PORTAL_INTERNAL_SECRET}#g" "$cfg"
+  fi
 }
 
 seed_database_if_needed() {

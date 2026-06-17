@@ -2,35 +2,29 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, useParams, useOutletContext } from 'react-router-dom'
 import { Provider as TooltipProvider } from '@radix-ui/react-tooltip'
 import {
-  Bot, ChevronDown, ChevronLeft, ChevronRight, ClipboardList,
-  Home, Hotel, Loader2, LogOut, MessageSquarePlus, Mic, Moon,
-  Settings, Square, Sun, Wifi, WifiOff, Wrench,
+  ChevronDown, ChevronLeft, ChevronRight, ClipboardList,
+  Home, Hotel, LogOut, MessageSquarePlus, Moon,
+  Settings, Sun, Users,
 } from 'lucide-react'
 import { api } from '../utils/api'
 import { useTheme } from '../ThemeContext'
 import { useHotel } from '../HotelContext'
 import { can } from '../utils/permissions'
 import { HabboFigure } from '../components/HabboFigure'
-import { AgentDashboard, OnlineView } from '../components/AgentDashboard'
 import { SettingsView } from '../components/settings/SettingsView'
 import { FeedbackWidget, FeedbackView } from '../components/FeedbackWidget'
-import VoiceChat from '../components/VoiceChat'
-import { BotsTab } from '../tabs/BotsTab'
 import { UpgradeRequestsTab } from '../tabs/UpgradeRequests'
-import { DevToolsView } from '../tabs/DevToolsView'
 import { HomeTab } from '../tabs/HomeTab'
-import { TiersTab } from '../tabs/TiersTab'
+import { HotelTab } from '../tabs/HotelTab'
 import { UiBuildFooter } from '../UiBuildFooter'
 
 const DASHBOARD_TAB_IDS = new Set([
-  'home', 'agents', 'settings', 'requests',
-  'tiers', 'online', 'devtools', 'feedback', 'voice',
+  'home', 'hotel', 'settings', 'requests', 'feedback',
 ])
 
 function resolveDashboardTab(tab, me) {
   if (!tab || !DASHBOARD_TAB_IDS.has(tab)) return 'home'
   if (tab === 'requests' && !can(me, 'admin.requests')) return 'home'
-  if (tab === 'devtools' && !can(me, 'devtools.access')) return 'home'
   if (tab === 'feedback' && !can(me, 'admin.feedback')) return 'home'
   return tab
 }
@@ -50,8 +44,8 @@ export function DashboardInner() {
   const { me, setMe } = useOutletContext()
   const { tab: tabParam } = useParams()
   const navigate = useNavigate()
-  const { theme, toggleTheme, cycleTheme, setThemeByName } = useTheme()
-  const { habboConnected, hotelStatus } = useHotel()
+  const { theme, setThemeByName } = useTheme()
+  const { hotelStatus } = useHotel()
   const activeTab = resolveDashboardTab(tabParam, me)
   const setActiveTab = useCallback((id) => {
     navigate(`/app/${id}`)
@@ -62,8 +56,6 @@ export function DashboardInner() {
       navigate(`/app/${resolveDashboardTab(tabParam, me)}`, { replace: true })
     }
   }, [tabParam, me, navigate])
-  const [activeTeam, setActiveTeam] = useState(null)
-  const [stopping, setStopping] = useState(false)
   const [busy, setBusy] = useState(false)
   const [pendingRequestCount, setPendingRequestCount] = useState(0)
 
@@ -73,9 +65,20 @@ export function DashboardInner() {
       .catch(() => {})
   }, [setMe])
 
-  // Bumped when a MCP token is created/revoked in SettingsView, so IntegratedView re-fetches hasMcpToken
-  const [mcpTokenVersion, setMcpTokenVersion] = useState(0)
-  const handleTokenChange = useCallback(() => { setMcpTokenVersion(v => v + 1); refreshMe() }, [refreshMe])
+  // Poll active orchestration run to show pulsing dot on the Orchestration pill
+  const [hasActiveRun, setHasActiveRun] = useState(false)
+  useEffect(() => {
+    async function poll() {
+      try {
+        const d = await api('/api/agents/status')
+        const runs = d.trigger?.activeRuns ?? []
+        setHasActiveRun(runs.some(r => r.from === me?.username))
+      } catch { /* ignore */ }
+    }
+    poll()
+    const id = setInterval(poll, 10000)
+    return () => clearInterval(id)
+  }, [me?.username])
 
   // Sidebar collapsed state (persisted)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -115,20 +118,7 @@ export function DashboardInner() {
     return () => clearInterval(id)
   }, [me])
 
-  async function stopTeam() {
-    setStopping(true)
-    try {
-      await api('/api/agents/stop', {
-        method: 'POST',
-        body: JSON.stringify({ room_id: activeTeam?.roomId }),
-      })
-    }
-    catch { /* ignore */ }
-    finally { setStopping(false) }
-  }
   const [figureTypes, setFigureTypes] = useState(FALLBACK_FIGURE_TYPES)
-
-  // Load figure types on mount
   useEffect(() => {
     api('/api/figure-types')
       .then(d => { if (d.figureTypes) setFigureTypes(d.figureTypes) })
@@ -144,22 +134,10 @@ export function DashboardInner() {
     } catch { setBusy(false) }
   }
 
-  async function handleJoinHotel() {
-    if (!hotelStatus.socket_online) return
-    setBusy(true)
-    try {
-      const data = await api('/api/hotel/join', { method: 'POST' })
-      window.open(data.login_url, '_blank')
-    } catch {}
-    finally { setBusy(false) }
-  }
-
   const tabs = [
-    { id: 'home', label: 'Dashboard', icon: Home },
-    { id: 'agents', label: 'My Agents', icon: Bot },
-    { id: 'voice', label: 'Voice Chat', icon: Mic },
-    { id: 'online', label: 'Active Bots', icon: Hotel },
-    { id: 'settings', label: 'Settings', icon: Settings },
+    { id: 'home',     label: 'Dashboard', icon: Home },
+    { id: 'hotel',    label: 'Hotel',     icon: Hotel },
+    { id: 'settings', label: 'Settings',  icon: Settings },
     ...(can(me, 'admin.requests') ? [{ id: 'requests', label: 'Requests', icon: ClipboardList, badge: pendingRequestCount }] : []),
   ]
 
@@ -228,62 +206,36 @@ export function DashboardInner() {
             {/* Mobile: logo + hamburger */}
             <button
               onClick={() => setActiveTab('home')}
-              className="md:hidden flex items-center gap-2 mr-auto hover:opacity-70 transition-opacity"
+              className="md:hidden flex items-center gap-2.5 mr-auto hover:opacity-70 transition-opacity"
             >
-              <div className="w-7 h-7 rounded-lg bg-primary flex items-center justify-center">
+              <div className="w-7 h-7 rounded-lg bg-primary flex items-center justify-center flex-shrink-0">
                 <Hotel className="w-3.5 h-3.5 text-primary-foreground" />
               </div>
-              <span className="text-sm font-semibold text-foreground">AgentHotel</span>
+              <span className="text-sm font-semibold tracking-tight text-foreground whitespace-nowrap">AgentHotel</span>
             </button>
 
             {/* Spacer — pushes right-side controls to the right on desktop */}
             <div className="hidden md:block flex-1" />
 
-            {/* Active team indicator */}
-            {activeTeam && (
-              <div className="flex items-center gap-2 bg-success/10 border border-success/30 rounded-lg px-2.5 py-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse flex-shrink-0" />
-                <span className="text-xs text-success font-medium">Room {activeTeam.roomId}</span>
-                <button
-                  onClick={stopTeam}
-                  disabled={stopping}
-                  className="flex items-center gap-1 text-xs text-destructive hover:text-destructive/70 ml-1 transition-colors disabled:opacity-50"
-                  title="Stop team"
-                >
-                  <Square className="w-3 h-3" />
-                </button>
-              </div>
-            )}
-
-            {/* Hotel status — only shown when hotel integration is active */}
-            {habboConnected && (
+            {/* Mode switcher pill */}
+            <div className="hidden md:flex rounded-lg border border-border bg-secondary p-0.5 gap-0.5">
               <button
-                onClick={() => setActiveTab('online')}
-                className={`flex items-center gap-1.5 text-xs transition-colors hover:text-foreground ${activeTab === 'online' ? 'text-foreground' : 'text-muted-foreground'}`}
-                title="View online agents"
-              >
-                {hotelStatus.loading ? (
-                  <Loader2 className="w-3 h-3 animate-spin" />
-                ) : hotelStatus.socket_online ? (
-                  <Wifi className="w-3 h-3 text-success" />
-                ) : (
-                  <WifiOff className="w-3 h-3 text-muted-foreground" />
-                )}
-                <span className="hidden sm:inline">{hotelStatus.loading ? 'Checking...' : hotelStatus.socket_online ? 'Online' : 'Offline'}</span>
-              </button>
-            )}
-
-            {/* Join hotel button — only when hotel integration is active */}
-            {habboConnected && (
-              <button
-                onClick={handleJoinHotel}
-                disabled={busy || !hotelStatus.socket_online}
-                className="flex items-center gap-1.5 h-8 px-3 text-xs font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50 transition-colors"
+                className="flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium bg-background text-foreground shadow-sm border border-border/50"
               >
                 <Hotel className="w-3 h-3" />
-                <span className="hidden sm:inline">Join Hotel</span>
+                Hotel
               </button>
-            )}
+              <button
+                onClick={() => navigate('/orchestration/teams')}
+                className="flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-background transition-colors"
+              >
+                <Users className="w-3 h-3" />
+                Orchestration
+                {hasActiveRun && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse flex-shrink-0" />
+                )}
+              </button>
+            </div>
 
             {/* User figure */}
             {me.figure && <HabboFigure figure={me.figure} size="sm" animate={false} className="hidden sm:block flex-shrink-0" />}
@@ -308,15 +260,6 @@ export function DashboardInner() {
                     <Settings className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
                     Settings
                   </button>
-                  {can(me, 'devtools.access') && (
-                    <button
-                      onClick={() => { setActiveTab('devtools'); setShowUserMenu(false) }}
-                      className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-foreground hover:bg-secondary transition-colors"
-                    >
-                      <Wrench className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
-                      Dev Tools
-                    </button>
-                  )}
                   {can(me, 'admin.feedback') && (
                     <button
                       onClick={() => { setActiveTab('feedback'); setShowUserMenu(false) }}
@@ -397,31 +340,22 @@ export function DashboardInner() {
           {activeTab === 'home' && (
             <HomeTab me={me} onNavigate={setActiveTab} />
           )}
-          {activeTab === 'tiers' && (
-            <TiersTab me={me} onNavigate={setActiveTab} />
+          {activeTab === 'hotel' && (
+            <HotelTab
+              me={me}
+              hotelStatus={hotelStatus}
+              onHotelToggle={refreshMe}
+              figureTypes={figureTypes}
+            />
           )}
           {activeTab === 'requests' && can(me, 'admin.requests') && (
             <UpgradeRequestsTab onCountChange={setPendingRequestCount} />
           )}
-          {activeTab === 'agents' && (
-            <AgentDashboard me={me} onActiveTeamChange={setActiveTeam} mcpTokenVersion={mcpTokenVersion} />
-          )}
           {activeTab === 'settings' && (
-            <SettingsView me={me} onTokenChange={handleTokenChange} onKeyUpdated={refreshMe} />
-          )}
-          {activeTab === 'online' && (
-            <div className="max-w-5xl mx-auto px-4 py-6">
-              <OnlineView />
-            </div>
-          )}
-          {activeTab === 'devtools' && can(me, 'devtools.access') && (
-            <DevToolsView me={me} />
+            <SettingsView me={me} onKeyUpdated={refreshMe} />
           )}
           {activeTab === 'feedback' && can(me, 'admin.feedback') && (
             <FeedbackView />
-          )}
-          {activeTab === 'voice' && (
-            <VoiceChat me={me} />
           )}
           </div>
         </main>
