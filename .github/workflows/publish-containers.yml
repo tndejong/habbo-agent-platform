@@ -195,11 +195,25 @@ jobs:
 
       - name: Trigger Coolify redeploy
         if: success()
+        env:
+          COOLIFY_DEPLOY_WEBHOOK_URL: ${{ secrets.COOLIFY_DEPLOY_WEBHOOK_URL }}
+          COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
         run: |
-          HTTP=$(curl -s -o /dev/null -w "%{http_code}" -X GET "${{ secrets.COOLIFY_DEPLOY_WEBHOOK_URL }}")
+          if [ -z "$COOLIFY_DEPLOY_WEBHOOK_URL" ]; then
+            echo "::warning::COOLIFY_DEPLOY_WEBHOOK_URL not set — skipping redeploy"
+            exit 0
+          fi
+          if [ -z "$COOLIFY_API_TOKEN" ]; then
+            echo "::error::COOLIFY_API_TOKEN not set. Create an API token in Coolify (Keys & Tokens) with deploy permissions (not read-only) and add it as a GitHub Actions secret."
+            exit 1
+          fi
+          HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
+            -X GET "${COOLIFY_DEPLOY_WEBHOOK_URL}")
           echo "Coolify webhook HTTP $HTTP"
           if [ "$HTTP" != "200" ] && [ "$HTTP" != "204" ]; then
-            echo "::warning::Coolify webhook returned HTTP $HTTP"
+            echo "::error::Coolify webhook returned HTTP $HTTP — check COOLIFY_API_TOKEN has deploy permissions and COOLIFY_DEPLOY_WEBHOOK_URL is correct"
+            exit 1
           fi
 
       - name: Notify Discord (success)
