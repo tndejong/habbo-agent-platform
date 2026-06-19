@@ -295,9 +295,9 @@ export function IntegrationsTab({ me }) {
   return (
     <div className="space-y-8">
       <div>
-        <h2 className="font-semibold text-foreground">MCP Integration Browser</h2>
+        <h2 className="font-semibold text-foreground">Curated integrations</h2>
         <p className="text-xs text-muted-foreground mt-1">
-          Connect tools and services. Configured integrations are saved to your account and injected into agent runs automatically.
+          Pick from our curated list of MCP servers. Configured integrations are saved to your account and injected into agent runs automatically.
         </p>
       </div>
 

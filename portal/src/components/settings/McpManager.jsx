@@ -204,7 +204,7 @@ function HabboMcpPanel({
   )
 }
 
-function ConfiguredMcpRow({ integration, expanded, onToggle, onRemove, removing }) {
+function ConfiguredMcpRow({ integration, expanded, onToggle, onRemove, removing, onBrowseIntegrations }) {
   const isStdio = integration.type === 'stdio'
   return (
     <div className="border-b border-border last:border-b-0">
@@ -234,10 +234,17 @@ function ConfiguredMcpRow({ integration, expanded, onToggle, onRemove, removing 
             This integration is injected into your agent runs automatically.
           </p>
           <div className="flex flex-wrap gap-2">
-            <Link to="/orchestration/mcp"
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium border border-border rounded-lg hover:bg-secondary transition-colors">
-              <ExternalLink className="w-3.5 h-3.5" /> Manage in browser
-            </Link>
+            {onBrowseIntegrations ? (
+              <button type="button" onClick={onBrowseIntegrations}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium border border-border rounded-lg hover:bg-secondary transition-colors">
+                <ExternalLink className="w-3.5 h-3.5" /> View in catalog
+              </button>
+            ) : (
+              <Link to="/orchestration/mcp#curated-integrations"
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium border border-border rounded-lg hover:bg-secondary transition-colors">
+                <ExternalLink className="w-3.5 h-3.5" /> View in catalog
+              </Link>
+            )}
             <button type="button" onClick={() => onRemove(integration.id)} disabled={removing}
               className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium border border-destructive/30 text-destructive rounded-lg hover:bg-destructive/10 disabled:opacity-50 transition-colors">
               {removing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
@@ -250,7 +257,7 @@ function ConfiguredMcpRow({ integration, expanded, onToggle, onRemove, removing 
   )
 }
 
-export function McpManager({ me, onTokenChange }) {
+export function McpManager({ me, onTokenChange, onBrowseIntegrations }) {
   const canUseMcp = me && ['pro', 'enterprise'].includes(me.ai_tier)
 
   const [expandedId, setExpandedId] = useState('habbo-mcp')
@@ -415,7 +422,7 @@ export function McpManager({ me, onTokenChange }) {
         <McpHealthBadge health={mcpHealth} />
       </h2>
       <p className="text-xs text-muted-foreground">
-        MCP servers your agents can call. Habbo Hotel is built in; add third-party servers from the integration browser.
+        MCP servers your agents can call. Habbo Hotel is built in; add curated third-party integrations below.
         All integrations are tied to your account.
       </p>
 
@@ -483,23 +490,32 @@ export function McpManager({ me, onTokenChange }) {
             onToggle={() => setExpandedId(id => id === `int-${integration.id}` ? null : `int-${integration.id}`)}
             onRemove={handleRemoveIntegration}
             removing={removingId === integration.id}
+            onBrowseIntegrations={onBrowseIntegrations}
           />
         ))}
       </div>
 
-      {/* Discover more */}
+      {/* Curated integrations CTA */}
       <div className="bg-card border border-dashed border-border rounded-xl p-4 flex flex-col sm:flex-row sm:items-center gap-3">
         <div className="flex-1">
-          <p className="text-sm font-medium text-foreground">Discover MCP integrations</p>
+          <p className="text-sm font-medium text-foreground">Add curated integrations</p>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Browse Atlassian, Notion, Linear, and 800+ servers from the official MCP registry. Each connection is saved to your account.
+            Connect Atlassian, Notion, Resend, Airtable, and other popular MCP servers. Each connection is saved to your account.
           </p>
         </div>
-        <Link to="/orchestration/mcp"
-          className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors flex-shrink-0">
-          <Plus className="w-4 h-4" />
-          Browse integrations
-        </Link>
+        {onBrowseIntegrations ? (
+          <button type="button" onClick={onBrowseIntegrations}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors flex-shrink-0">
+            <Plus className="w-4 h-4" />
+            Browse integrations
+          </button>
+        ) : (
+          <Link to="/orchestration/mcp#curated-integrations"
+            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors flex-shrink-0">
+            <Plus className="w-4 h-4" />
+            Browse integrations
+          </Link>
+        )}
       </div>
     </section>
   )

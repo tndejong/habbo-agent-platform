@@ -155,6 +155,16 @@ export function OrchestrationLayout() {
   const activeTab = resolveOrchTab(tabParam)
   const setActiveTab = useCallback((id) => navigate(`/orchestration/${id}`), [navigate])
 
+  const scrollToCuratedIntegrations = useCallback(() => {
+    document.getElementById('curated-integrations')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [])
+
+  useEffect(() => {
+    if (activeTab !== 'mcp' || window.location.hash !== '#curated-integrations') return
+    const t = setTimeout(scrollToCuratedIntegrations, 150)
+    return () => clearTimeout(t)
+  }, [activeTab, tabParam, scrollToCuratedIntegrations])
+
   // Pro gate — redirect basic users back to home
   useEffect(() => {
     if (me && !can(me, 'teams.view')) {
@@ -447,8 +457,8 @@ export function OrchestrationLayout() {
               )}
               {activeTab === 'mcp' && (
                 <div className="max-w-5xl mx-auto px-4 py-6 space-y-8">
-                  <McpManager me={me} onTokenChange={handleTokenChange} />
-                  <div className="border-t border-border pt-6">
+                  <McpManager me={me} onTokenChange={handleTokenChange} onBrowseIntegrations={scrollToCuratedIntegrations} />
+                  <div id="curated-integrations" className="border-t border-border pt-6 scroll-mt-6">
                     <IntegrationsTab me={me} />
                   </div>
                 </div>
