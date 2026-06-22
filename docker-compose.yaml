@@ -35,6 +35,8 @@ services:
     build:
       context: nitro
     entrypoint: ["/bin/sh","/app/scripts/build.sh"]
+    environment:
+      - HABBO_PORTAL_PUBLIC_URL=${HABBO_PORTAL_PUBLIC_URL:-http://127.0.0.1:3090}
     volumes:
       - ./nitro/:/app/
       - volume-nitro-converter-node-modules:/app/nitro-converter/node_modules

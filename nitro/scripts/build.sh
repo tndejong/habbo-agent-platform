@@ -63,10 +63,13 @@ const wsProto = process.env.HABBO_WS_PUBLIC_PROTOCOL || (wsPort === '443' ? 'wss
 const defaultWsPort = wsProto === 'wss' ? '443' : '80';
 const wsPortSuffix = wsPort === defaultWsPort ? '' : `:${wsPort}`;
 
+const portalPublicUrl = process.env.HABBO_PORTAL_PUBLIC_URL || 'http://127.0.0.1:3090';
+
 c['asset.url'] = assetUrl;
 c['socket.url'] = `${wsProto}://${wsHost}${wsPortSuffix}`;
 c['image.library.url'] = `${swfBase}/c_images/`;
 c['hof.furni.url'] = `${swfBase}/dcr/hof_furni`;
+c['portal.public.url'] = portalPublicUrl;
 
 fs.writeFileSync(p, JSON.stringify(c, null, 4));
 NODE

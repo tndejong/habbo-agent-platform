@@ -56,6 +56,7 @@ services:
     volumes:
       - volume-nitro-assets:/app/nitro-assets
     environment:
+      - HABBO_PORTAL_PUBLIC_URL=${HABBO_PORTAL_PUBLIC_URL:-http://127.0.0.1:3090}
       - HABBO_WS_PUBLIC_HOST=${HABBO_WS_PUBLIC_HOST:-}
       - HABBO_WS_PUBLIC_PORT=${HABBO_WS_PUBLIC_PORT:-}
       - HABBO_WS_PUBLIC_PROTOCOL=${HABBO_WS_PUBLIC_PROTOCOL:-}
