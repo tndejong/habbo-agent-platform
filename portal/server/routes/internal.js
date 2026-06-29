@@ -10,6 +10,7 @@ export function registerInternalRoutes(app, ctx) {
     decryptApiKey,
     resolvePersonaSkills,
     collectRequiredIntegrations,
+    mcpClient,
   } = ctx;
 
   app.get('/api/internal/user/:portalUserId/api-key/:provider', requireInternalSecret, async (req, res) => {
@@ -81,16 +82,53 @@ export function registerInternalRoutes(app, ctx) {
     }
   });
 
+  // ── MCP tool endpoints ────────────────────────────────────────────────────
+  // Two parallel mount points: by portalUserId (direct) and by habboUserId
+  // (resolved via portal_users). Same body / response shape on both.
+
+  async function resolveHabboUser(habboUserId) {
+    const [[user]] = await db.execute(
+      'SELECT id FROM portal_users WHERE habbo_user_id = ? LIMIT 1',
+      [Number(habboUserId)]
+    );
+    if (!user) throw new Error('No portal user for this habbo_user_id');
+    return user.id;
+  }
+
+  function mountMcpRoutes(prefix, resolveUserId) {
+    app.get(`${prefix}/mcp-tools`, requireInternalSecret, async (req, res) => {
+      try {
+        const portalUserId = await resolveUserId(req);
+        const tools = await mcpClient.listTools(portalUserId);
+        res.json({ ok: true, tools });
+      } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.post(`${prefix}/mcp-call`, requireInternalSecret, async (req, res) => {
+      try {
+        const { tool_name, args } = req.body;
+        if (!tool_name) return res.status(400).json({ error: 'tool_name required' });
+        const portalUserId = await resolveUserId(req);
+        const result = await mcpClient.callTool(portalUserId, tool_name, args || {});
+        res.json({ ok: true, result });
+      } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+  }
+
+  mountMcpRoutes('/api/internal/user/:portalUserId', req => Number(req.params.portalUserId));
+  mountMcpRoutes('/api/internal/hotel-user/:habboUserId', req => resolveHabboUser(req.params.habboUserId));
+
   app.get('/api/internal/user/:portalUserId/integrations', requireInternalSecret, async (req, res) => {
     try {
       const [rows] = await db.execute(
-        'SELECT id, name, url, api_key_encrypted, stdio_config_encrypted FROM portal_user_integrations WHERE portal_user_id = ? ORDER BY created_at ASC',
+        'SELECT id, name, url, api_key_encrypted, stdio_config_encrypted, enabled FROM portal_user_integrations WHERE portal_user_id = ? ORDER BY created_at ASC',
         [req.params.portalUserId]
       );
       const integrations = rows.map(row => {
+        const enabled = !!row.enabled;
         if (row.stdio_config_encrypted) {
           const stdio_config = decryptApiKey(row.stdio_config_encrypted);
-          return { id: row.id, name: row.name, url: null, api_key: null, stdio_config };
+          return { id: row.id, name: row.name, url: null, api_key: null, stdio_config, enabled };
         }
         return {
           id: row.id,
@@ -98,6 +136,7 @@ export function registerInternalRoutes(app, ctx) {
           url: row.url,
           api_key: row.api_key_encrypted ? decryptApiKey(row.api_key_encrypted) : null,
           stdio_config: null,
+          enabled,
         };
       });
       res.json({ ok: true, integrations });

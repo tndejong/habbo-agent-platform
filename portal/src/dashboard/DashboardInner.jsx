@@ -13,6 +13,7 @@ import { can } from '../utils/permissions'
 import { HabboFigure } from '../components/HabboFigure'
 import { SettingsView } from '../components/settings/SettingsView'
 import { FeedbackWidget, FeedbackView } from '../components/FeedbackWidget'
+import { JoinHotelMenuItem } from '../components/JoinHotelMenuItem'
 import { UpgradeRequestsTab } from '../tabs/UpgradeRequests'
 import { HomeTab } from '../tabs/HomeTab'
 import { HotelTab } from '../tabs/HotelTab'
@@ -269,6 +270,7 @@ export function DashboardInner() {
                       Feedback
                     </button>
                   )}
+                  <JoinHotelMenuItem onClose={() => setShowUserMenu(false)} />
 
                   <div className="border-t border-border my-0.5" />
 

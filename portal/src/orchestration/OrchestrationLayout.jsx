@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { useNavigate, useParams, useOutletContext } from 'react-router-dom'
+import { Link, useNavigate, useParams, useOutletContext } from 'react-router-dom'
 import { Provider as TooltipProvider } from '@radix-ui/react-tooltip'
 import {
   Bot, ChevronLeft, ChevronRight, FileText, Hotel, LayoutGrid,
@@ -13,12 +13,12 @@ import { HabboFigure } from '../components/HabboFigure'
 import { IntegratedView } from '../components/dashboard/IntegratedView'
 import { SkillBrowser, SkillDetailModal } from '../components/dashboard/SkillBrowser'
 import { RunReportsSection } from '../components/dashboard/RunReports'
-import { McpManager } from '../components/settings/McpManager'
 import { MarketplaceView } from '../components/MarketplaceView'
 import { IntegrationsTab } from '../tabs/IntegrationsTab'
 import { DevToolsView } from '../tabs/DevToolsView'
 import VoiceChat from '../components/VoiceChat'
 import { FeedbackWidget } from '../components/FeedbackWidget'
+import { JoinHotelMenuItem } from '../components/JoinHotelMenuItem'
 import { UiBuildFooter } from '../UiBuildFooter'
 
 // ── Log panel (reused from AgentDashboard) ────────────────────────────────
@@ -361,6 +361,7 @@ export function OrchestrationLayout() {
                   <Settings className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
                   Settings
                 </button>
+                <JoinHotelMenuItem onClose={() => setShowUserMenu(false)} />
 
                 <div className="border-t border-border my-0.5" />
 
@@ -457,7 +458,25 @@ export function OrchestrationLayout() {
               )}
               {activeTab === 'mcp' && (
                 <div className="max-w-5xl mx-auto px-4 py-6 space-y-8">
-                  <McpManager me={me} onTokenChange={handleTokenChange} onBrowseIntegrations={scrollToCuratedIntegrations} />
+                  <section className="space-y-3">
+                    <h2 className="text-sm font-semibold text-foreground flex items-center gap-2.5">
+                      <span className="w-6 h-6 rounded-md bg-secondary flex items-center justify-center flex-shrink-0"><Settings className="w-3.5 h-3.5" /></span>
+                      MCP Settings
+                    </h2>
+                    <div className="bg-card border border-border rounded-xl p-4 flex items-center justify-between gap-4">
+                      <div>
+                        <p className="text-sm font-medium text-foreground">Manage your MCP connections</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          Enable or disable integrations, generate MCP tokens, and configure connection settings.
+                        </p>
+                      </div>
+                      <Link to="/app/settings?subtab=mcp"
+                        className="inline-flex items-center gap-1.5 px-3 py-2 bg-primary text-primary-foreground rounded-lg text-xs font-medium hover:bg-primary/90 transition-colors flex-shrink-0">
+                        <Settings className="w-3.5 h-3.5" />
+                        Open Settings
+                      </Link>
+                    </div>
+                  </section>
                   <div id="curated-integrations" className="border-t border-border pt-6 scroll-mt-6">
                     <IntegrationsTab me={me} />
                   </div>

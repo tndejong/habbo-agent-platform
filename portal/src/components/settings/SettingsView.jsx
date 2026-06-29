@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
-  AlertCircle, Check, CreditCard, Eye, EyeOff, Hotel, Loader2, Phone,
-  Plug, Shield, Trash2, User,
+  AlertCircle, Check, CreditCard, Eye, EyeOff, Hotel, Loader2, Network,
+  Phone, Plug, Shield, Trash2, User,
 } from 'lucide-react'
 import { api } from '../../utils/api'
 import { HabboFigure } from '../HabboFigure'
 import { IntegrationsManager } from './IntegrationsManager'
+import { McpSettingsView } from './McpSettingsView'
 import { TiersSection } from '../../tabs/TiersTab'
 
 const SETTINGS_TABS = [
@@ -15,6 +16,7 @@ const SETTINGS_TABS = [
   { id: 'hotel', label: 'Hotel', icon: Hotel },
   { id: 'plan', label: 'Plan', icon: CreditCard },
   { id: 'integrations', label: 'Integrations', icon: Plug },
+  { id: 'mcp', label: 'MCP', icon: Network },
 ]
 
 const VALID_TABS = SETTINGS_TABS.map(t => t.id)
@@ -440,6 +442,11 @@ export function SettingsView({ me, onKeyUpdated }) {
       {/* API provider keys */}
       {settingsTab === 'integrations' && (
         <IntegrationsManager keys={keys} loading={keysLoading} onChanged={handleKeysChanged} />
+      )}
+
+      {/* MCP integrations */}
+      {settingsTab === 'mcp' && (
+        <McpSettingsView me={me} onTokenChange={handleKeysChanged} />
       )}
 
     </div>

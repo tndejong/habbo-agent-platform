@@ -8,7 +8,7 @@ export async function chatMessageHandler(req: Request, res: Response): Promise<v
     message: string;
   };
 
-  if (!bot_id || !username || !message) {
+  if (bot_id === undefined || bot_id === null || !username || !message) {
     res.status(400).json({ ok: false, error: 'bot_id, username, and message are required' });
     return;
   }

@@ -29,7 +29,7 @@ async function restoreSessionsOnStartup(): Promise<void> {
       try {
         const apiKey = await resolveAnthropicKey(row.user_id);
         const provider = createProvider('anthropic', apiKey);
-        initSession(row.bot_id, provider, row.persona);
+        initSession(row.bot_id, provider, row.persona, row.user_id);
         console.log(`[startup] Restored session for bot_id ${row.bot_id}`);
       } catch (e) {
         console.warn(`[startup] Failed to restore session for bot_id ${row.bot_id}:`, (e as Error).message);

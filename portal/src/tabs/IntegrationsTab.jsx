@@ -1,9 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import {
-  Check, CheckCircle, Edit, ExternalLink, LayoutGrid,
-  Loader2, Lock, Network, Sparkles, Terminal, Trash2,
-  Wifi, WifiOff, Wrench, X,
+  Check, ExternalLink, LayoutGrid,
+  Loader2, Lock, Network, Sparkles, Terminal, Wrench, X,
 } from 'lucide-react'
 import { api } from '../utils/api'
 import { useToast } from '../ToastContext'
@@ -15,14 +14,20 @@ import { useEscapeKey } from '../utils/useEscapeKey'
 // Skill-linked integrations (referenced by requires_integration in SKILL.md files)
 const CURATED_INTEGRATIONS = [
   {
-    slug: 'atlassian',
-    name: 'Atlassian',
-    title: 'Atlassian (Jira & Confluence)',
-    description: 'Connect Jira for sprint planning, issue tracking, and Confluence knowledge bases.',
-    icon: '/integrations/atlassian.svg',
-    defaultUrl: 'https://mcp.atlassian.com/v1/mcp',
-    headers: [{ name: 'Authorization', description: 'Service account API key (Bearer) — ask your Atlassian admin to create one at admin.atlassian.com. Personal API tokens use Basic auth and are not compatible here.', isRequired: true, isSecret: true }],
-    docsUrl: 'https://support.atlassian.com/atlassian-rovo-mcp-server/docs/configuring-authentication-via-api-token/',
+    slug: 'jira',
+    name: 'Jira',
+    title: 'Jira (by @aashari)',
+    description: 'Full Jira access: issues, sprints, projects, comments, and development info (branches, commits, PRs linked to tickets).',
+    icon: 'https://www.google.com/s2/favicons?domain=atlassian.com&sz=64',
+    type: 'stdio',
+    command: 'npx',
+    args: ['-y', '@aashari/mcp-server-atlassian-jira'],
+    envFields: [
+      { key: 'ATLASSIAN_SITE_NAME', description: 'Your Jira site name (e.g. "mycompany" if your URL is mycompany.atlassian.net)', isRequired: true },
+      { key: 'ATLASSIAN_USER_EMAIL', description: 'Your Atlassian account email', isRequired: true },
+      { key: 'ATLASSIAN_API_TOKEN', description: 'Create one at https://id.atlassian.com/manage-profile/security/api-tokens', isRequired: true, isSecret: true },
+    ],
+    docsUrl: 'https://github.com/aashari/mcp-server-atlassian-jira',
   },
   {
     slug: 'notion',
@@ -35,6 +40,16 @@ const CURATED_INTEGRATIONS = [
     args: ['-y', '@notionhq/notion-mcp-server'],
     envFields: [{ key: 'NOTION_TOKEN', description: 'Your internal integration token (starts with ntn_) — create one at notion.so/profile/integrations, then share target pages under the Access tab', isRequired: true, isSecret: true }],
     docsUrl: 'https://developers.notion.com/docs/mcp',
+  },
+  {
+    slug: 'twenty-crm',
+    name: 'Twenty CRM',
+    title: 'Twenty CRM',
+    description: 'Manage contacts, companies, opportunities, tasks, and notes in your Twenty CRM.',
+    icon: 'https://www.google.com/s2/favicons?domain=twenty.com&sz=64',
+    defaultUrl: 'https://crm.thepixeloffice.ai/mcp',
+    headers: [{ name: 'Authorization', description: 'Your Twenty API key — create one at Settings → API & Webhooks in your Twenty workspace', isRequired: true, isSecret: true }],
+    docsUrl: 'https://docs.twenty.com/user-guide/ai/capabilities/mcp',
   },
   {
     slug: 'resend',
@@ -190,38 +205,23 @@ const POPULAR_INTEGRATIONS = [
   },
 ]
 
-const ALL_CURATED = [...CURATED_INTEGRATIONS, ...POPULAR_INTEGRATIONS]
-
 export function IntegrationsTab({ me }) {
   const { showToast } = useToast()
   const [myIntegrations, setMyIntegrations] = useState([])
-  const [loadingMy, setLoadingMy] = useState(true)
   const [setupTarget, setSetupTarget] = useState(null)
-  const [pingStatus, setPingStatus] = useState({})
-  const [integrationTools, setIntegrationTools] = useState({})
-  const [confirmDelete, setConfirmDelete] = useState(null)
-  const [busy, setBusy] = useState(false)
 
   useEscapeKey(() => {
-    if (confirmDelete) setConfirmDelete(null)
-    else if (setupTarget) setSetupTarget(null)
-  }, !!(confirmDelete || setupTarget))
+    if (setupTarget) setSetupTarget(null)
+  }, !!setupTarget)
 
   const loadMy = useCallback(async () => {
-    setLoadingMy(true)
     try {
       const data = await api('/api/my/integrations')
       setMyIntegrations(data.integrations || [])
     } catch (err) { showToast(err.message, 'error') }
-    finally { setLoadingMy(false) }
   }, [showToast])
 
   useEffect(() => { loadMy() }, [loadMy])
-
-  function findCuratedMatch(integration) {
-    const n = integration.name.toLowerCase()
-    return ALL_CURATED.find(c => n.includes(c.slug) || c.slug.includes(n.split(/\s/)[0])) || null
-  }
 
   function getCuratedStatus(curated) {
     return myIntegrations.find(i => {
@@ -246,52 +246,6 @@ export function IntegrationsTab({ me }) {
     })
   }
 
-  function openEditSetup(integration) {
-    const curated = findCuratedMatch(integration)
-    if (curated) { openCuratedSetup(curated, integration); return }
-    if (integration.type === 'stdio') {
-      setSetupTarget({
-        name: integration.name, title: integration.name,
-        icon: null, docsUrl: null, existingId: integration.id,
-        type: 'stdio',
-        command: integration.command ?? null,
-        args: integration.args ?? [],
-        envFields: [],
-      })
-      return
-    }
-    setSetupTarget({
-      name: integration.name, title: integration.name,
-      icon: null, defaultUrl: integration.url,
-      headers: [], docsUrl: null, existingId: integration.id,
-    })
-  }
-
-  async function pingIntegration(id) {
-    setPingStatus(s => ({ ...s, [id]: 'checking' }))
-    try {
-      const data = await api(`/api/my/integrations/${id}/test`, { method: 'POST' })
-      if (data.authenticated) {
-        setPingStatus(s => ({ ...s, [id]: 'online' }))
-        if (data.tools?.length) setIntegrationTools(s => ({ ...s, [id]: data.tools }))
-      } else {
-        setPingStatus(s => ({ ...s, [id]: data.online ? 'auth_fail' : 'offline' }))
-      }
-    } catch { setPingStatus(s => ({ ...s, [id]: 'offline' })) }
-  }
-
-  async function handleDelete(id) {
-    if (confirmDelete !== id) { setConfirmDelete(id); return }
-    setConfirmDelete(null)
-    setBusy(true)
-    try {
-      await api(`/api/my/integrations/${id}`, { method: 'DELETE' })
-      setMyIntegrations(prev => prev.filter(i => i.id !== id))
-      showToast('Integration removed.')
-    } catch (err) { showToast(err.message, 'error') }
-    finally { setBusy(false) }
-  }
-
   return (
     <div className="space-y-8">
       <div>
@@ -300,99 +254,6 @@ export function IntegrationsTab({ me }) {
           Pick from our curated list of MCP servers. Configured integrations are saved to your account and injected into agent runs automatically.
         </p>
       </div>
-
-      {/* My Configured Integrations */}
-      {!loadingMy && myIntegrations.length > 0 && (
-        <section className="space-y-3">
-          <IntSectionHeading icon={CheckCircle} label="Configured" />
-          <div className="space-y-2">
-            {myIntegrations.map(integration => {
-              const ping = pingStatus[integration.id]
-              const tools = integrationTools[integration.id] ?? []
-              const curated = findCuratedMatch(integration)
-              const isStdioInt = integration.type === 'stdio'
-              const borderColor = isStdioInt ? 'border-success/20'
-                : ping === 'auth_fail' ? 'border-amber-500/30'
-                : ping === 'offline' ? 'border-destructive/20'
-                : 'border-success/20'
-              return (
-                <div key={integration.id} className={`bg-card border rounded-xl p-3 transition-colors ${borderColor}`}>
-                  <div className="flex items-center gap-3">
-                    <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-secondary flex items-center justify-center overflow-hidden">
-                      {curated
-                        ? <img src={curated.icon} alt={curated.name} className="w-5 h-5 object-contain" onError={e => { e.currentTarget.style.display = 'none' }} />
-                        : <Network className="w-4 h-4 text-muted-foreground" />}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-foreground">{integration.name}</p>
-                      {isStdioInt
-                        ? <p className="text-xs text-muted-foreground">Local process (stdio)</p>
-                        : <p className="text-xs text-muted-foreground truncate">{integration.url}</p>}
-                    </div>
-                    {isStdioInt && (
-                      <span className="flex items-center gap-1 text-[10px] text-success font-medium flex-shrink-0">
-                        <Terminal className="w-3 h-3" /> Configured
-                      </span>
-                    )}
-                    {!isStdioInt && ping !== 'checking' && ping !== 'auth_fail' && ping !== 'offline' && (
-                      <span className="flex items-center gap-1 text-[10px] text-success font-medium flex-shrink-0">
-                        <Check className="w-3 h-3" /> {ping === 'online' ? 'Verified' : 'Saved'}
-                      </span>
-                    )}
-                    {!isStdioInt && ping === 'auth_fail' && (
-                      <span className="flex items-center gap-1 text-[10px] text-amber-500 font-medium flex-shrink-0">
-                        <Lock className="w-3 h-3" /> Auth failed
-                      </span>
-                    )}
-                    {!isStdioInt && ping === 'offline' && (
-                      <span className="flex items-center gap-1 text-[10px] text-destructive font-medium flex-shrink-0">
-                        <WifiOff className="w-3 h-3" /> Offline
-                      </span>
-                    )}
-                    <div className="flex items-center gap-1.5 flex-shrink-0">
-                      {!isStdioInt && (
-                        <button onClick={() => pingIntegration(integration.id)} disabled={ping === 'checking'}
-                          title="Test connection"
-                          className="h-7 w-7 flex items-center justify-center rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40">
-                          {ping === 'checking'
-                            ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            : ping === 'online' ? <Wifi className="w-3.5 h-3.5 text-success" />
-                            : ping === 'auth_fail' ? <Lock className="w-3.5 h-3.5 text-amber-500" />
-                            : ping === 'offline' ? <WifiOff className="w-3.5 h-3.5 text-destructive" />
-                            : <Wifi className="w-3.5 h-3.5" />}
-                        </button>
-                      )}
-                      <button onClick={() => openEditSetup(integration)} title="Edit"
-                        className="h-7 w-7 flex items-center justify-center rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
-                        <Edit className="w-3.5 h-3.5" />
-                      </button>
-                      <button onClick={() => handleDelete(integration.id)} disabled={busy}
-                        title={confirmDelete === integration.id ? 'Click again to confirm' : 'Remove'}
-                        className={`h-7 px-2 text-xs rounded-md border transition-colors disabled:opacity-40 flex items-center gap-1 ${
-                          confirmDelete === integration.id
-                            ? 'border-destructive bg-destructive text-white'
-                            : 'border-destructive/30 text-destructive hover:bg-destructive/10'
-                        }`}>
-                        {confirmDelete === integration.id ? 'Sure?' : <Trash2 className="w-3.5 h-3.5" />}
-                      </button>
-                    </div>
-                  </div>
-                  {tools.length > 0 && (
-                    <div className="mt-2 pt-2 border-t border-border/50 flex flex-wrap gap-1">
-                      {tools.map(t => (
-                        <span key={t.name} title={t.description}
-                          className="inline-flex items-center gap-1 text-[10px] bg-secondary text-muted-foreground rounded px-1.5 py-0.5 font-mono">
-                          <Wrench className="w-2.5 h-2.5 flex-shrink-0" />{t.name}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        </section>
-      )}
 
       {/* Skill-linked integrations */}
       <section className="space-y-3">

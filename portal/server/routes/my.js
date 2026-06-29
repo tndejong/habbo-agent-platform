@@ -19,6 +19,7 @@ export function registerMyRoutes(app, ctx) {
     portalUserHasAnthropicApiKey,
     forwardToAgentTrigger,
     detectRequiredIntegrations,
+    mcpClient,
     AGENT_TRIGGER_URL,
   } = ctx;
 
@@ -28,10 +29,11 @@ export function registerMyRoutes(app, ctx) {
       const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
       if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
       const [rows] = await db.execute(
-        'SELECT id, name, url, stdio_config_encrypted, created_at, updated_at FROM portal_user_integrations WHERE portal_user_id = ? ORDER BY created_at ASC',
+        'SELECT id, name, url, stdio_config_encrypted, enabled, created_at, updated_at FROM portal_user_integrations WHERE portal_user_id = ? ORDER BY created_at ASC',
         [portalUser.id]
       );
       const integrations = rows.map(row => {
+        const enabled = !!row.enabled;
         if (row.stdio_config_encrypted) {
           let command = null, args = [];
           try {
@@ -39,9 +41,9 @@ export function registerMyRoutes(app, ctx) {
             command = cfg.command ?? null;
             args = Array.isArray(cfg.args) ? cfg.args : [];
           } catch {}
-          return { id: row.id, name: row.name, url: null, type: 'stdio', command, args, created_at: row.created_at, updated_at: row.updated_at };
+          return { id: row.id, name: row.name, url: null, type: 'stdio', command, args, enabled, created_at: row.created_at, updated_at: row.updated_at };
         }
-        return { id: row.id, name: row.name, url: row.url, type: 'http', created_at: row.created_at, updated_at: row.updated_at };
+        return { id: row.id, name: row.name, url: row.url, type: 'http', enabled, created_at: row.created_at, updated_at: row.updated_at };
       });
       res.json({ ok: true, integrations });
     } catch (err) { res.status(500).json({ error: err.message }); }
@@ -130,6 +132,22 @@ export function registerMyRoutes(app, ctx) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  app.patch('/api/my/integrations/:id', authRequired, apiKeysRequired, async (req, res) => {
+    try {
+      const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
+      if (!portalUser) return res.status(404).json({ error: 'Portal user not found' });
+      if (req.body.enabled === undefined) return res.status(400).json({ error: 'enabled is required' });
+      const enabled = req.body.enabled ? 1 : 0;
+      const [result] = await db.execute(
+        'UPDATE portal_user_integrations SET enabled = ? WHERE id = ? AND portal_user_id = ?',
+        [enabled, req.params.id, portalUser.id]
+      );
+      if (result.affectedRows === 0) return res.status(404).json({ error: 'Integration not found' });
+      mcpClient.invalidateCache(portalUser.id);
+      res.json({ ok: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   app.delete('/api/my/integrations/:id', authRequired, apiKeysRequired, async (req, res) => {
     try {
       const portalUser = await getPortalUserByHabboUserId(req.user.habbo_user_id);
@@ -139,6 +157,7 @@ export function registerMyRoutes(app, ctx) {
         [req.params.id, portalUser.id]
       );
       if (result.affectedRows === 0) return res.status(404).json({ error: 'Integration not found' });
+      mcpClient.invalidateCache(portalUser.id);
       res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });

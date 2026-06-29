@@ -83,9 +83,9 @@ function findTeamByName(teams, name) {
 
 async function fetchActiveRuns(agentTriggerUrl, username) {
   try {
-    const r = await fetch(`${agentTriggerUrl}/health`, { signal: AbortSignal.timeout(4000) });
+    const r = await fetch(`${agentTriggerUrl}/active-runs`, { signal: AbortSignal.timeout(4000) });
     const data = await r.json().catch(() => ({}));
-    return (data.activeRuns || []).filter(run => run.from === username);
+    return (data.runs || []).filter(run => run.from === username);
   } catch {
     return [];
   }

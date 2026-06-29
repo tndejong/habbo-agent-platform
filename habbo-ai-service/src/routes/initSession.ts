@@ -11,7 +11,7 @@ export async function initSessionHandler(req: Request, res: Response): Promise<v
     provider?: string;
   };
 
-  if (!bot_id || !persona || !user_id) {
+  if (bot_id === undefined || bot_id === null || !persona || !user_id) {
     res.status(400).json({ ok: false, error: 'bot_id, persona, and user_id are required' });
     return;
   }
@@ -19,7 +19,7 @@ export async function initSessionHandler(req: Request, res: Response): Promise<v
   try {
     const apiKey = await resolveAnthropicKey(user_id);
     const aiProvider = createProvider(provider, apiKey);
-    initSession(bot_id, aiProvider, persona);
+    initSession(bot_id, aiProvider, persona, user_id);
     res.json({ ok: true });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);

@@ -11,6 +11,10 @@ export const pool = mysql.createPool({
   waitForConnections: true,
 });
 
+(pool as any).on('error', (err: unknown) => {
+  console.error('[db] MySQL pool error:', err);
+});
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 export async function queryOne<T>(sql: string, params: any[]): Promise<T | null> {

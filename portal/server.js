@@ -35,6 +35,7 @@ import {
 import { createMailer } from './server/lib/mail.js';
 import { createAuth } from './server/lib/auth.js';
 import { createApiKeys } from './server/lib/apiKeys.js';
+import { createMcpClient } from './server/lib/mcpClient.js';
 import {
   loadSkillsCatalog, collectRequiredIntegrations, resolvePersonaSkills,
 } from './server/lib/skills.js';
@@ -76,6 +77,8 @@ const IMAGER_URL     = (process.env.IMAGER_URL     || 'http://nitro-imager:3005'
 const AI_SERVICE_URL = (process.env.AI_SERVICE_URL || 'http://habbo-ai-service:3002').replace(/\/$/, '');
 const AGENT_TRIGGER_URL = (process.env.AGENT_TRIGGER_URL || 'http://agent-trigger:3004').replace(/\/$/, '');
 const PORTAL_INTERNAL_SECRET = process.env.PORTAL_INTERNAL_SECRET || '';
+const HABBO_MCP_URL     = (process.env.HABBO_MCP_URL     || 'http://habbo-mcp:3003/mcp').replace(/\/+$/, '');
+const HABBO_MCP_API_KEY = process.env.HABBO_MCP_API_KEY || process.env.PORTAL_INTERNAL_SECRET || '';
 const RCON_HOST      = (process.env.RCON_HOST      || 'arcturus');
 const RCON_PORT      = Number.parseInt(process.env.RCON_PORT || '3001', 10);
 const PORTAL_SMTP_HOST = (process.env.PORTAL_SMTP_HOST || '').trim();
@@ -173,6 +176,13 @@ const {
 
 // Credential access (decrypt + lookup of portal_user_api_keys). Shared by routes via ctx.
 const apiKeys = createApiKeys({ db, decryptApiKey });
+
+// MCP tool resolution — shared by internal + my routes.
+const mcpClient = createMcpClient({
+  db, decryptApiKey,
+  MCP_ENDPOINT: HABBO_MCP_URL,
+  MCP_API_KEY: HABBO_MCP_API_KEY,
+});
 
 /**
  * Middleware that checks if user has at least one API key configured (Anthropic or OpenAI).
@@ -737,7 +747,7 @@ registerAccountRoutes(app, {
 
 registerInternalRoutes(app, {
   db, requireInternalSecret, mintHotelToken, apiKeys, decryptApiKey,
-  resolvePersonaSkills, collectRequiredIntegrations,
+  resolvePersonaSkills, collectRequiredIntegrations, mcpClient,
 });
 
 
@@ -946,7 +956,7 @@ registerMyRoutes(app, {
   parseAndEncryptStdioConfig, probeMcpConnection, checkSocketOnline,
   setDefaultUserTeamIfUnset, clearDefaultUserTeamIfPointsTo,
   deleteOrphanedForkedPersonas, portalUserHasAnthropicApiKey,
-  forwardToAgentTrigger, detectRequiredIntegrations, AGENT_TRIGGER_URL,
+  forwardToAgentTrigger, detectRequiredIntegrations, mcpClient, AGENT_TRIGGER_URL,
 });
 
 // ── Voice Chat ───────────────────────────────────────────────────────────────

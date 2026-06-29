@@ -154,6 +154,7 @@ interface IntegrationRow {
   url: string | null;
   api_key: string | null;
   stdio_config: string | null; // JSON: { command, args, env }
+  enabled?: boolean;
 }
 
 async function fetchUserIntegrations(portalUserId: number): Promise<IntegrationRow[]> {
@@ -164,7 +165,8 @@ async function fetchUserIntegrations(portalUserId: number): Promise<IntegrationR
     });
     if (!res.ok) return [];
     const data = await res.json() as { ok: boolean; integrations: IntegrationRow[] };
-    return data.integrations ?? [];
+    const all = data.integrations ?? [];
+    return all.filter(i => i.enabled !== false);
   } catch {
     return [];
   }
@@ -990,6 +992,15 @@ const server = Bun.serve({
         runningForMs: Date.now() - r.startTime.getTime(),
       }));
       return Response.json({ ok: true, activeRuns: runs, count: runs.length });
+    }
+
+    if (url.pathname === "/active-runs") {
+      const runs = [...activeRuns.values()].map(r => ({
+        roomId: r.roomId, from: r.from,
+        startTime: r.startTime,
+        runningForMs: Date.now() - r.startTime.getTime(),
+      }));
+      return Response.json({ ok: true, runs, count: runs.length });
     }
 
     // ── Log tail ──────────────────────────────────────────────────────────────
