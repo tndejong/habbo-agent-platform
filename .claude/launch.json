@@ -9,6 +9,12 @@
       "envFile": "${workspaceFolder}/.env"
     },
     {
+      "name": "portal-vite",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "portal", "run", "dev"],
+      "port": 5173
+    },
+    {
       "name": "agent-trigger",
       "runtimeExecutable": "${userHome}/.bun/bin/bun",
       "runtimeArgs": ["run", "agent-trigger/src/server.ts"],

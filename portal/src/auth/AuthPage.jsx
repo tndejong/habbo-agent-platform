@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useEscapeKey } from '../utils/useEscapeKey'
 import { api } from '../utils/api'
-import { AlertCircle, CheckCircle, Eye, EyeOff, Loader2 } from 'lucide-react'
+import { AlertCircle, CheckCircle, Eye, EyeOff, Loader2, QrCode } from 'lucide-react'
+import { QrLoginModal } from '../components/QrLoginModal'
 
 function AuthInput({ type, placeholder, value, onChange, required, minLength, showToggle, onToggle, showingPassword }) {
   return (
@@ -45,8 +46,9 @@ export function AuthPage({ onLogin, UiBuildFooter }) {
   const [authTab, setAuthTab] = useState('login')
   const [showReset, setShowReset] = useState(hasResetParams)
   const [showForgot, setShowForgot] = useState(false)
+  const [showQr, setShowQr] = useState(false)
   const [busy, setBusy] = useState(false)
-  useEscapeKey(() => { setShowForgot(false); setShowReset(false) }, !!(showForgot || showReset))
+  useEscapeKey(() => { setShowForgot(false); setShowReset(false); setShowQr(false) }, !!(showForgot || showReset || showQr))
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -207,6 +209,11 @@ export function AuthPage({ onLogin, UiBuildFooter }) {
                     showToggle onToggle={() => setShowPassword(p => !p)} showingPassword={showPassword}
                   />
                   <AuthButton busy={busy} label="Sign In" busyLabel="Signing in..." />
+                  <button type="button" onClick={() => { setShowQr(true); setError('') }}
+                    className="w-full h-10 rounded-lg border border-border text-sm font-medium hover:bg-secondary transition-colors flex items-center justify-center gap-2">
+                    <QrCode className="w-4 h-4" />
+                    Log in with QR code
+                  </button>
                   <div className="text-center pt-1">
                     <button type="button" onClick={() => { setShowForgot(true); setError('') }}
                       className="text-xs text-muted-foreground hover:text-primary transition-colors underline underline-offset-2">
@@ -304,6 +311,10 @@ export function AuthPage({ onLogin, UiBuildFooter }) {
             </form>
           </div>
         </div>
+      )}
+
+      {showQr && (
+        <QrLoginModal onClose={() => setShowQr(false)} onLogin={onLogin} />
       )}
       </div>
       {UiBuildFooter && <UiBuildFooter />}

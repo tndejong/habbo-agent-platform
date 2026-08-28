@@ -8,6 +8,7 @@ import { DashboardInner } from './dashboard/DashboardInner'
 import { OrchestrationLayout } from './orchestration/OrchestrationLayout'
 import { UiBuildFooter } from './UiBuildFooter'
 import { ProtectedRoute } from './components/ProtectedRoute'
+import { ScanLoginPage } from './auth/ScanLoginPage'
 
 export default function App() {
   const [me, setMe] = useState(null)
@@ -35,11 +36,27 @@ export default function App() {
   const params = new URLSearchParams(window.location.search)
   const hasResetParams = params.get('reset') === '1'
 
+  // Optional post-login redirect target (e.g. back to /scan-login?ticket=...).
+  // Only accept a same-app relative path — never an absolute/protocol-relative URL.
+  const nextParam = params.get('next')
+  const safeNext = nextParam && nextParam.startsWith('/') && !nextParam.startsWith('//') ? nextParam : null
+
   return (
     <Routes>
       <Route
         path="/login"
-        element={me && !hasResetParams ? <Navigate to={needsOnboarding ? '/onboarding' : '/app/home'} replace /> : <AuthPage onLogin={setMe} UiBuildFooter={UiBuildFooter} />}
+        element={me && !hasResetParams ? <Navigate to={safeNext || (needsOnboarding ? '/onboarding' : '/app/home')} replace /> : <AuthPage onLogin={setMe} UiBuildFooter={UiBuildFooter} />}
+      />
+
+      <Route
+        path="/scan-login"
+        element={
+          me ? (
+            <ScanLoginPage />
+          ) : (
+            <Navigate to={`/login?next=${encodeURIComponent('/scan-login' + window.location.search)}`} replace />
+          )
+        }
       />
       <Route path="/" element={<Navigate to={me && !hasResetParams ? (needsOnboarding ? '/onboarding' : '/app/home') : (hasResetParams ? '/login' + window.location.search : '/login')} replace />} />
       

@@ -19,6 +19,7 @@ import { registerFeedbackRoutes } from './server/routes/feedback.js';
 import { registerSkillsRoutes } from './server/routes/skills.js';
 import { registerTierRequestRoutes } from './server/routes/tierRequests.js';
 import { registerAuthRoutes } from './server/routes/auth.js';
+import { registerQrLoginRoutes } from './server/routes/qrLogin.js';
 import { registerAccountRoutes } from './server/routes/account.js';
 import { registerChatRoutes } from './server/routes/chat.js';
 import { registerHotelRoutes } from './server/routes/hotel.js';
@@ -724,6 +725,8 @@ registerAuthRoutes(app, {
   PORTAL_RESET_TOKEN_TTL_MINUTES, PORTAL_PUBLIC_URL,
 });
 
+registerQrLoginRoutes(app, { db, authRequired, issueAuthCookie, sha256 });
+
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true });
 });
@@ -978,7 +981,9 @@ app.get('/', (req, res) => {
 app.get('/login', (req, res) => {
   const sessionUser = getSessionUser(req);
   if (sessionUser) {
-    return res.redirect('/app/home');
+    const nextParam = typeof req.query.next === 'string' ? req.query.next : '';
+    const safeNext = nextParam.startsWith('/') && !nextParam.startsWith('//') ? nextParam : '/app/home';
+    return res.redirect(safeNext);
   }
   res.setHeader('Cache-Control', 'no-store');
   return res.sendFile(indexPath);
@@ -995,6 +1000,20 @@ function sendAppSpa(req, res) {
 }
 app.get(/^\/app(\/.*)?$/, sendAppSpa);
 app.get(/^\/orchestration(\/.*)?$/, sendAppSpa);
+
+// /scan-login is reached by a phone camera scanning the QR shown on another
+// device — it must survive a full (non-SPA) page load, so unlike sendAppSpa
+// the not-logged-in redirect preserves the original querystring (the ticket)
+// via ?next=, so the user lands back here after logging in.
+app.get(/^\/scan-login(\/.*)?$/, (req, res) => {
+  const sessionUser = getSessionUser(req);
+  if (!sessionUser) {
+    const suffix = req.originalUrl.includes('?') ? req.originalUrl.slice(req.originalUrl.indexOf('?')) : '';
+    return res.redirect(`/login?next=${encodeURIComponent('/scan-login' + suffix)}`);
+  }
+  res.setHeader('Cache-Control', 'no-store');
+  return res.sendFile(indexPath);
+});
 
 app.use(express.static(path.join(__dirname, 'dist'), {
   setHeaders(res, filePath) {
